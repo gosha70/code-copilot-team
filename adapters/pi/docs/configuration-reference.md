@@ -1,5 +1,9 @@
 # Pi Configuration Reference
 
+> Pi's own configuration. For the settings shared across the harness —
+> `automation.json`, the provider profile, and session analytics — see the
+> [cross-tool Configuration Reference](../../../docs/configuration-reference.md).
+
 CCT configuration is TOML, layered, and **source-of-truth is the runtime**: this
 page describes the key *groups* and how layering works, but the authoritative
 list of valid keys is the linter (`adapters/pi/runtime/config/lint.ts`), and the

@@ -1,0 +1,48 @@
+# Deliberately broken provider profile for tests/test-config-reference.sh.
+# Each defect is named in the comment above it.
+
+[copyright]
+company = "EGOGE"
+
+[defaults]
+# peer names a provider that is never declared, AND carries a trailing
+# comment inside a quoted value
+peer_for.claude = "ghost" # the reviewer that is not there
+# fallback chain names one too
+fallback_chain.claude = ["spark", "phantom"]
+
+# unknown key in a provider table
+[providers.spark]
+type = "openai-compatible"
+base_url = "http://192.168.1.23:8001/v1"
+modle = "qwen38-27b"
+
+# wrong types, an inline comment on a value, and a key-shaped api_key_env
+[providers.hosted]
+type = "openai-compatible"
+base_url = "https://api.example.com/v1"
+api_key_env = "sk-not-a-variable-name"
+timeout_sec = "600"
+disable_thinking = true # turns thinking off
+temperature = "cold"
+
+# a cli provider with no command template
+[providers.broken-cli]
+type = "cli"
+healthcheck = "broken --version"
+
+# an evaluator whose conformance_command lacks the placeholder
+[providers.evaluator]
+type = "cli"
+command = "run - < {review_request}"
+conformance_command = "run --conformance"
+
+# a type outside the enum
+[providers.weird]
+type = "telepathy"
+
+# a quoted value with a trailing comment — TOML-legal, but the shell reader
+# keeps the comment as part of the value
+[providers.quoted-comment]
+type = "cli"
+command = "run - < {review_request}" # why this flag

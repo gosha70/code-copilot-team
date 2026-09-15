@@ -1382,6 +1382,7 @@ Rule content is written once in `shared/` and adapted per tool via `scripts/gene
 - **[Recommended MCP Servers](adapters/claude-code/docs/recommended-mcp-servers.md)** — Context7, PostgreSQL, Filesystem, and Playwright MCP setup
 
 **Shared (all tools):**
+- **[Configuration Reference](docs/configuration-reference.md)** — every setting the harness reads, by the file it lives in (generated)
 - **[Developer Cookbook](docs/developer-cookbook.md)** — the project SDLC end to end, in self-development and AI-harness modes
 - **[Session Analytics Cookbook](docs/session-analytics-cookbook.md)** — configure, start, load sessions, read a session, run and validate the judge, troubleshoot
 - **[Alignment Maintenance Checklist](shared/docs/alignment-maintenance.md)** — recurring governance checks to keep framework alignment healthy

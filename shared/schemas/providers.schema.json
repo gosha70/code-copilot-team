@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gosha70/code-copilot-team/shared/schemas/providers.schema.json",
+  "title": "Provider profile (~/.code-copilot-team/providers.toml)",
+  "description": "The peer-review and evaluator providers available on this machine, their default pairings, and the copyright name for generated files. Expressed as JSON Schema over the TOML document's structure: the readers are shell (scripts/review-round-runner.sh's toml_get, scripts/auto-build-loop.sh, adapters/claude-code/setup.sh), so this file is the contract of record and scripts/validate-providers-profile.sh enforces it. Only keys some reader actually consults appear here; the file holds the NAME of a key's environment variable, never the key itself.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "copyright": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Written by setup.sh; read when a generated source file needs a copyright header.",
+      "properties": {
+        "company": {
+          "type": "string",
+          "description": "Company name stamped into the copyright header of generated source files. Empty until setup.sh prompts for it on an interactive install."
+        }
+      }
+    },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Subject-to-peer pairings. A subject is the provider whose work is reviewed. TOML parses `peer_for.claude = \"x\"` into a nested table, so these are objects keyed by subject name.",
+      "properties": {
+        "peer_for": {
+          "type": "object",
+          "description": "Subject name to the provider that reviews it when --peer-review names none. Every value must be a declared provider.",
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "fallback_chain": {
+          "type": "object",
+          "description": "Subject name to the providers tried in order when the peer fails its healthcheck, or (since #190 D1) ran and produced no review. Never consulted after a verdict.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "providers": {
+      "type": "object",
+      "description": "One entry per provider; the table name is the provider's id.",
+      "additionalProperties": {
+        "$ref": "#/$defs/provider"
+      }
+    }
+  },
+  "$defs": {
+    "provider_type": {
+      "enum": [
+        "cli",
+        "openai-compatible",
+        "ollama",
+        "custom"
+      ],
+      "description": "Dispatch topology. 'openai-compatible' and 'ollama' are served by scripts/provider-adapters/; 'cli' and 'custom' run the command template."
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/provider_type"
+        },
+        "command": {
+          "type": "string",
+          "description": "Command template for cli/custom providers. {review_request} is replaced with the request file's path and {model} with the model name. Send the tool's own chatter to stderr or /dev/null: stdout is parsed."
+        },
+        "conformance_command": {
+          "type": "string",
+          "description": "Command template for a runtime conformance evaluator (auto-build). Must carry the {review_request} placeholder."
+        },
+        "timeout_sec": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Max seconds for one invocation (default 300)."
+        },
+        "healthcheck": {
+          "type": "string",
+          "description": "Command that exits 0 when the provider is reachable. Quoting note: the profile parser keeps TOML escapes literally, so pass a bearer token with `curl --oauth2-bearer $VAR`, not an escaped -H header."
+        },
+        "model": {
+          "type": "string",
+          "description": "Model name sent with the request, or substituted into {model}."
+        },
+        "base_url": {
+          "type": "string",
+          "description": "API base for openai-compatible providers, including the version path (…/v1)."
+        },
+        "api_key_env": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$",
+          "description": "NAME of the environment variable holding the key. Never the key. Export it where non-interactive shells see it (~/.zshenv)."
+        },
+        "host": {
+          "type": "string",
+          "description": "host:port for ollama providers (default localhost:11434)."
+        },
+        "max_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Response token budget (default 4096). A reasoning model needs headroom beyond its hidden reasoning, or disable_thinking."
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Sampling temperature (default 0.1)."
+        },
+        "disable_thinking": {
+          "type": "boolean",
+          "description": "Turn the model's hidden reasoning off. Sends BOTH chat_template_kwargs.enable_thinking=false (vLLM) and thinking.type=disabled (DeepSeek); a server that rejects one with a 400 is asked again without it. Compared exactly, so the value must be bare `true` with no trailing comment."
+        },
+        "price_usd_per_mtok_input": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Peak, cache-miss input rate per million tokens. Set both rates to make the provider metered; the ledger then debits measured cost instead of the run's per-invocation estimate."
+        },
+        "price_usd_per_mtok_output": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Peak, cache-miss output rate per million tokens."
+        },
+        "version": {
+          "type": "string",
+          "description": "Free-text note about the server or CLI build; recorded with the provider fingerprint."
+        }
+      }
+    }
+  }
+}
