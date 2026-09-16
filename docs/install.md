@@ -26,6 +26,16 @@ cd code-copilot-team
 git pull && ./scripts/setup.sh --sync --claude-code
 ```
 
+## Reading the docs on the web
+
+The same documentation is published as a site from the default branch. Its
+address is the repository's homepage link once GitHub Pages is switched on
+(Settings → Pages → Source: **GitHub Actions**). Until that setting exists the
+publish workflow stops at its first step and nothing is deployed; the site is
+still built and checked on every pull request, and the guides are readable
+here in the repository and in the Studio's Learn tab, which serve the same
+files.
+
 ## What each adapter writes
 
 | Tool | Adapter output | Install location |
