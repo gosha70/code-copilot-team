@@ -264,9 +264,16 @@ def title_of(rel: str) -> str:
 def lead_of(rel: str) -> str:
     """First prose sentence of a page, or a note that it is generated.
 
-    Fenced code has to be tracked, not merely skipped line by line: a shell
-    comment inside a fence reads exactly like a markdown heading, and the
-    README's first fence opens with `# 1. Clone the latest stable release`.
+    Three things are not prose and must be stepped over, each found the hard
+    way: YAML frontmatter (a wiki page's first line is `page_type: overview`),
+    fenced code (a shell comment inside a fence reads exactly like a markdown
+    heading, and the README's first fence opens with `# 1. Clone the latest
+    stable release`), and a multi-line HTML element whose text content is
+    markup rather than prose (the README's <h1>).
+
+    The paragraph is joined BEFORE the sentence is cut: markdown wraps prose
+    at the source line, so cutting at the first line ends a description on
+    "which" or "in two".
     """
     path = repo / rel
     if not path.is_file():
@@ -274,9 +281,18 @@ def lead_of(rel: str) -> str:
     body = path.read_text(encoding="utf-8").split("\n")
     if any("GENERATED — do not edit" in line for line in body[:10]):
         return "generated from its sources; edit the source, not the page"
+
+    start = 0
+    if body and body[0].strip() == "---":
+        for i in range(1, len(body)):
+            if body[i].strip() == "---":
+                start = i + 1
+                break
+
     in_fence = in_comment = False
     open_tags = 0
-    for line in body:
+    paragraph: list[str] = []
+    for line in body[start:]:
         stripped = line.strip()
         if stripped.startswith("```"):
             in_fence = not in_fence
@@ -289,10 +305,6 @@ def lead_of(rel: str) -> str:
         if in_comment:
             in_comment = "-->" not in stripped
             continue
-        # An HTML element can span lines, and its text content is markup, not
-        # the page's lead: the README's title is an <h1> block whose middle
-        # lines are attributes and whose text is the project name. Track open
-        # elements by name and skip everything until they close.
         opened = len([t for t in re.findall(r"<([a-zA-Z][a-zA-Z0-9]*)(?=[\s/>])[^>]*>", line)
                       if not re.search(rf"<{t}[^>]*/>", line)])
         closed = len(re.findall(r"</[a-zA-Z][a-zA-Z0-9]*>", line))
@@ -300,11 +312,28 @@ def lead_of(rel: str) -> str:
         open_tags = max(0, open_tags + opened - closed)
         if was_open or opened or closed:
             continue
-        if not stripped or stripped.startswith((">", "#", "|", "<", "!", "-", "*", "_", "=")):
+        if not stripped:
+            if paragraph:
+                break          # the paragraph ended
             continue
-        sentence = re.split(r"(?<=[.;])\s", re.sub(r"\s+", " ", stripped))[0]
-        return sentence.rstrip(".")
-    return ""
+        # A marker only counts as one in marker position: "**Learn** tab …" is
+        # prose that happens to start with an asterisk, and cutting there ended
+        # this page's own description at "the Studio's".
+        if re.match(r"^([-*+]\s|#{1,6}\s|>|\||!\[|<|={3,}$|-{3,}$)", stripped):
+            if paragraph:
+                break          # prose ran into a list or a heading
+            continue
+        paragraph.append(stripped)
+
+    if not paragraph:
+        return ""
+    text = re.sub(r"\s+", " ", " ".join(paragraph)).strip()
+    # Split on sentence ends, not on every period: "e.g." and "3.11" are not
+    # sentence boundaries.
+    match = re.search(r"(?<=[.;])\s+(?=[A-Z(`\[])", text)
+    sentence = text[:match.start()] if match else text
+    return sentence.rstrip(".").strip()
+
 
 out = []
 for section in sections:

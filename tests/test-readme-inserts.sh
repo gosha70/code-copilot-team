@@ -151,6 +151,17 @@ assert "the landing page groups by the registry's section titles" \
 assert "a lead sentence is prose, not markup" "! grep -qE '— (src=|<|\\|)' <<<\"\$INDEX\""
 assert "a generated page says so instead of quoting its banner" \
   "grep -q 'generated from its sources' <<<\"\$INDEX\""
+# The lead is a sentence, not a source line: markdown wraps prose, so cutting
+# at the first physical line ended descriptions on "which" and "in two"
+# (#356 review). A dangling conjunction is the symptom to guard.
+assert "no lead ends on a dangling word" \
+  "! grep -qE '— .*( which| that| and| in two| the| a| of| to| with)\$' <<<\"\$INDEX\""
+assert "no lead is a frontmatter key" "! grep -qE '— [a-z_]+: ' <<<\"\$INDEX\""
+# A wiki page opens with YAML frontmatter; its lead must be the prose beneath.
+assert "a frontmatter page gets its prose" \
+  "grep -q 'Short canonical definitions of terms' <<<\"\$INDEX\""
+assert "bold at the start of a line is prose, not a list marker" \
+  "grep -q 'the way the Studio.s \*\*Learn\*\* tab' <<<\"\$INDEX\""
 
 # A registry entry pointing at a file that does not exist must fail the
 # render rather than emit a dead link onto the landing page.
