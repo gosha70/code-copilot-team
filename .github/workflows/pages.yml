@@ -1,0 +1,88 @@
+name: Docs Site Deploy
+
+# Publishes the documentation site to GitHub Pages (#214 Phase 4.2).
+#
+# The content is not stored here: site/build-content.mjs stages the files the
+# Learn registry lists, and site/check-site.mjs refuses a build that drops a
+# registered document, loses search, or carries a dead link or fragment. The
+# same check runs on pull requests (site-build.yml); this workflow is the one
+# that publishes, and only from the default branch.
+#
+# REQUIRES a one-time repository setting: Settings → Pages → Source:
+# "GitHub Actions". Until that is set, the deploy step fails with
+# "Get Pages site failed" and nothing is published — the build and the checks
+# still run and still tell you whether the site is sound.
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'site/**'
+      - 'docs/**'
+      - 'README.md'
+      - 'shared/docs/**'
+      - 'adapters/*/docs/**'
+      - 'knowledge/README.md'
+      - 'benchmarks/README.md'
+      - 'scripts/session_analytics/README.md'
+      - 'shared/capabilities/COMPATIBILITY.md'
+      - 'scripts/session_analytics/config_data/learn-sections.json'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+# The default workflow token on this repository is read-only; Pages deployment
+# needs these two scopes, requested here rather than widened repository-wide.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time, and let a newer commit supersede a queued one —
+# but never cancel a deployment already in flight.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - name: Install
+        working-directory: site
+        run: npm ci
+
+      # Reads the base path Pages will serve from, so a link written into the
+      # staged markdown matches where the page actually lands.
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Build and check the site
+        working-directory: site
+        env:
+          SITE_BASE: ${{ steps.pages.outputs.base_path }}
+          SITE_URL: ${{ steps.pages.outputs.origin }}
+        run: npm run check
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

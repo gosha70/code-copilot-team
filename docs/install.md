@@ -26,6 +26,14 @@ cd code-copilot-team
 git pull && ./scripts/setup.sh --sync --claude-code
 ```
 
+## Reading the docs on the web
+
+The same documentation is published as a site from the default branch. Its
+address is the repository's homepage link once GitHub Pages is switched on
+(Settings → Pages → Source: **GitHub Actions**); until then, read the guides
+here in the repository or in the Studio's Learn tab, which serve the same
+files.
+
 ## What each adapter writes
 
 | Tool | Adapter output | Install location |
