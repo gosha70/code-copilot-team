@@ -40,7 +40,7 @@ The two coexist by nesting: `specs/pitches/<id>/` holds `pitch.md` (Shape-Up)
   next round of pitches. During shaping AND cooldown, run
   `./scripts/wiki query "<your design question>"` to consult prior decisions
   and incidents in the project wiki before re-deriving them — wiki-first,
-  raw-source fallback. See the [LLM Wiki Maintainer](../README.md#llm-wiki-maintainer)
+  raw-source fallback. See the [LLM Wiki Maintainer](../knowledge/README.md)
   section of the top-level README for the full CLI surface.
 - **Scope** — self-contained slice of a pitch. 3–7 per pitch. Tracked on
   the hill chart.

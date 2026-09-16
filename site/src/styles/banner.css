@@ -1,0 +1,9 @@
+/* The unreleased banner has to read as a caveat, not decoration: the site
+   builds from the default branch while the Quick Start installs the tag. */
+:root {
+  --sl-banner-text: var(--sl-color-black);
+}
+.sl-banner a {
+  color: inherit;
+  text-decoration: underline;
+}
