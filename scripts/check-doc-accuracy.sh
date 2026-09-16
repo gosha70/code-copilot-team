@@ -101,8 +101,7 @@ check "codex skills (install guide)"            "$r_codex"         "$CODEX_SKILL
 # rendered from the Learn registry — so an unregistered guide is invisible in
 # both the docs tree and the Studio (#214 Phase 3.3).
 echo "check-doc-accuracy: docs landing page"
-for doc in docs/*.md; do
-    [[ -e "$doc" ]] || continue
+while IFS= read -r doc; do
     [[ "$doc" == "docs/README.md" ]] && continue
     name="${doc#docs/}"
     if grep -qF "($name)" docs/README.md; then
@@ -110,7 +109,24 @@ for doc in docs/*.md; do
     else
         fail "$doc ships but the docs landing page does not list it — add it to the Learn registry"
     fi
-done
+done < <(find docs -type f -name '*.md' | sort)
+
+# Every documentation file the repository ships must reach the published site
+# (#214 Phase 4.3). The site stages what the Learn registry lists, so a guide
+# outside the registry is invisible on the site, on the landing page and in
+# the Studio at once — three surfaces, one omission.
+echo "check-doc-accuracy: published site coverage"
+site_registry="scripts/session_analytics/config_data/learn-sections.json"
+# find, not a shell glob: a glob matches immediate children only, and the three
+# guides under docs/dgx-spark/ sat outside this check entirely.
+while IFS= read -r doc; do
+    dir="${doc%/*}"
+    if grep -qF "\"$doc\"" "$site_registry" || grep -qF "\"$dir/*.md\"" "$site_registry"; then
+        ok "reaches the site: $doc"
+    else
+        fail "$doc ships but the Learn registry does not list it, so the site, the landing page and the Studio all omit it"
+    fi
+done < <(find docs shared/docs adapters/*/docs -type f -name '*.md' 2>/dev/null | sort)
 
 echo "check-doc-accuracy: documentation index"
 for doc in adapters/claude-code/docs/*.md shared/docs/*.md; do
@@ -131,9 +147,11 @@ else
     echo "check-doc-accuracy: links (lychee)"
     # 429 is accepted: a site throttling the checker (docs.vllm.ai does,
     # PR #317) is not a broken link, and it fails only in CI where the
-    # run is fast enough to trip the limit.
+    # run is fast enough to trip the limit. Retries cover a host that is
+    # briefly down — an NVIDIA URL answered 502 during #359 and was fine
+    # minutes later; an outage upstream is not drift in this repository.
     if ! lychee --no-progress --exclude-all-private --root-dir "$ROOT" \
-            --accept '200..299,429' \
+            --accept '200..299,429' --max-retries 3 --retry-wait-time 5 \
             --exclude 'linkedin\.com' --exclude 'openai\.com' README.md 'docs/**/*.md'; then
         fail "broken links (see lychee output above)"
     fi

@@ -37,3 +37,8 @@ jobs:
           "$RUNNER_TEMP/bin/lychee" --version
       - name: Doc accuracy drift gate
         run: bash scripts/check-doc-accuracy.sh
+
+      # The gates themselves: a planted guide no registry lists must be named
+      # by each of them, including one in a subdirectory (#359 review).
+      - name: Documentation gate tests
+        run: bash tests/test-doc-gates.sh
