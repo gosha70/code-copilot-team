@@ -1,0 +1,16 @@
+---
+// The site builds from the default branch, while the README's Quick Start
+// installs the latest tag. #355's review caught the README promising commands
+// that tag does not carry; a site with no version signal would reintroduce it.
+//
+// The values are imported from a generated file rather than read at render
+// time: a readFileSync here resolved against the bundle, not the source.
+import data from "../../site-data.generated.json";
+---
+
+<p>
+  These pages document <strong>{data.branch}</strong>, which is unreleased and in
+  development. The Quick Start installs the latest{" "}
+  <a href={data.releasesUrl}>stable release</a>; anything newer than that tag is
+  marked in the text.
+</p>

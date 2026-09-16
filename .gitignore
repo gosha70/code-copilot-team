@@ -74,3 +74,13 @@ README.html
 # auto-build ledger). Machine-local; never committed.
 /.cct/
 .playwright-cli/
+
+# Documentation site (#214 Phase 4): the content is STAGED from the
+# repository's own markdown at build time, never stored twice.
+/site/src/content/docs/
+/site/sidebar.generated.json
+/site/site-data.generated.json
+/site/public/images/
+/site/dist/
+/site/node_modules/
+/site/.astro/
