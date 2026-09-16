@@ -14,6 +14,7 @@ GEN="$REPO_DIR/scripts/generate-readme-inserts.sh"
 README="$REPO_DIR/README.md"
 LAYERS="$REPO_DIR/docs/configuration-layers.md"
 MATURITY="$REPO_DIR/docs/maturity.md"
+LANDING="$REPO_DIR/docs/README.md"
 SETUP="$REPO_DIR/adapters/claude-code/setup.sh"
 PASS=0
 FAIL=0
@@ -40,12 +41,13 @@ assert "README carries the choose-adapter block" "grep -qF '<!-- generated:begin
 assert "README carries the feature-summary block" "grep -qF '<!-- generated:begin feature-summary -->' '$README'"
 assert "the configuration-layers guide carries its block" "grep -qF '<!-- generated:begin config-layers -->' '$LAYERS'"
 assert "the maturity guide carries the enforcement tiers" "grep -qF '<!-- generated:begin enforcement-tiers -->' '$MATURITY'"
-for f in "$README" "$LAYERS" "$MATURITY"; do
+assert "the landing page carries the docs index" "grep -qF '<!-- generated:begin docs-index -->' '$LANDING'"
+for f in "$README" "$LAYERS" "$MATURITY" "$LANDING"; do
   b=$(grep -c '<!-- generated:begin' "$f"); e=$(grep -c '<!-- generated:end' "$f")
   assert "$(basename "$f"): every block is closed" "[[ '$b' == '$e' ]]"
 done
 assert "no block name appears in two files" \
-  "[[ \$(cat '$README' '$LAYERS' '$MATURITY' | grep -o '<!-- generated:begin [a-z-]*' | sort | uniq -d | wc -l) -eq 0 ]]"
+  "[[ \$(cat '$README' '$LAYERS' '$MATURITY' '$LANDING' | grep -o '<!-- generated:begin [a-z-]*' | sort | uniq -d | wc -l) -eq 0 ]]"
 
 OUT="$(bash "$GEN" --stdout)"
 
@@ -129,6 +131,54 @@ PY
 RC=0; bash "$GEN" --stdout >/dev/null 2>&1 || RC=$?
 cp "$TMP/setup.bak" "$REPO_DIR/scripts/setup.sh"
 assert "an adapter with no installer flag fails the render" "[[ '$RC' == '1' ]]"
+
+# ── the docs landing page ────────────────────────────────────
+INDEX="$(awk '/generated:begin docs-index/,/generated:end docs-index/' "$LANDING")"
+REGISTRY="$REPO_DIR/scripts/session_analytics/config_data/learn-sections.json"
+missing_docs=0
+for rel in $(python3 -c "
+import json
+d = json.load(open('$REGISTRY'))
+print(' '.join(p for s in d['sections'] for p in (s.get('paths') or [])))"); do
+  name="${rel#docs/}"
+  case "$rel" in docs/README.md) continue ;; esac
+  grep -qF "($name)" <<<"$INDEX" || grep -qF "(../$rel)" <<<"$INDEX" \
+    || { echo "    not on the landing page: $rel"; missing_docs=$((missing_docs + 1)); }
+done
+assert "every registry path is on the landing page" "[[ $missing_docs -eq 0 ]]"
+assert "the landing page groups by the registry's section titles" \
+  "grep -q '^### Feature guides' <<<\"\$INDEX\""
+assert "a lead sentence is prose, not markup" "! grep -qE '— (src=|<|\\|)' <<<\"\$INDEX\""
+assert "a generated page says so instead of quoting its banner" \
+  "grep -q 'generated from its sources' <<<\"\$INDEX\""
+# The lead is a sentence, not a source line: markdown wraps prose, so cutting
+# at the first physical line ended descriptions on "which" and "in two"
+# (#356 review). A dangling conjunction is the symptom to guard.
+assert "no lead ends on a dangling word" \
+  "! grep -qE '— .*( which| that| and| in two| the| a| of| to| with)\$' <<<\"\$INDEX\""
+assert "no lead is a frontmatter key" "! grep -qE '— [a-z_]+: ' <<<\"\$INDEX\""
+# A wiki page opens with YAML frontmatter; its lead must be the prose beneath.
+assert "a frontmatter page gets its prose" \
+  "grep -q 'Short canonical definitions of terms' <<<\"\$INDEX\""
+assert "bold at the start of a line is prose, not a list marker" \
+  "grep -q 'the way the Studio.s \*\*Learn\*\* tab' <<<\"\$INDEX\""
+
+# A registry entry pointing at a file that does not exist must fail the
+# render rather than emit a dead link onto the landing page.
+cp "$REGISTRY" "$TMP/registry.bak"
+python3 - "$REGISTRY" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+for s in d["sections"]:
+    if s.get("paths"):
+        s["paths"].append("docs/no-such-guide.md")
+        break
+json.dump(d, open(p, "w"), indent=2, ensure_ascii=False)
+PY
+RC=0; bash "$GEN" --stdout >/dev/null 2>&1 || RC=$?
+cp "$TMP/registry.bak" "$REGISTRY"
+assert "a registry entry with no file fails the render" "[[ '$RC' == '1' ]]"
 
 # ── one source for the always-rules list ─────────────────────
 assert "ALWAYS_RULES is assigned once in setup.sh" "[[ \$(grep -c '^ALWAYS_RULES=' '$SETUP') -eq 1 ]]"
