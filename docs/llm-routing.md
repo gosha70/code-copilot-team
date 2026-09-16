@@ -253,7 +253,7 @@ cct routing enable <profile-id>
 Increment E is delivered in three parts. E1 (#260) ships the hybrid
 routing benchmark scenario, control arms, outcome matrix, and the
 `quality_fn: v1` routing-quality report — see the
-[Benchmark Harness](../README.md#benchmark-harness) section's routing-quality
+[Benchmark Harness](../benchmarks/README.md)'s routing-quality
 evaluation docs. E2 (#261) consumes those evidence sets read-only and
 derives per-task shadow recommendations. E3 (#266) makes the §12
 promotion conditions executable as five calibration gates and adds a

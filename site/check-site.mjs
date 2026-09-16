@@ -25,14 +25,30 @@ if (!existsSync(DIST)) {
   process.exit(1);
 }
 
-// 1. Every registered document has a page.
-const expected = [...new Set((registry.sections || []).flatMap((s) => s.paths || []))];
-for (const rel of expected) {
-  const slug = rel === "README.md" ? "index"
-    : rel === "docs/README.md" ? "documentation"
-    : rel.replace(/\.md$/, "").replace(/^docs\//, "").replace(/\//g, "-").toLowerCase();
+// 1. Every staged document has a page. The manifest is the builder's own
+//    record — recomputing slugs here is what let the checker inherit the
+//    builder's blind spot and call an incomplete site clean (#357 review).
+const expected = data.documents ?? [];
+if (!expected.length) fail("site-data.generated.json lists no documents — did the build run?");
+for (const { path: rel, slug } of expected) {
   const page = join(DIST, slug === "index" ? "index.html" : join(slug, "index.html"));
-  existsSync(page) ? ok(`published: ${rel}`) : fail(`registered but not published: ${rel} (expected ${slug}/)`);
+  existsSync(page) ? ok(`published: ${rel}`) : fail(`staged but not published: ${rel} (expected ${slug}/)`);
+}
+
+// 1b. Every documentation section in the registry reaches the site. A section
+//     declared as a glob was silently dropped before; an excluded kind has to
+//     be excluded on purpose, and the manifest says which.
+const registrySections = registry.sections ?? [];
+const excluded = new Set((data.excludedKinds ?? []).map((s) => s.id));
+for (const section of registrySections) {
+  if (excluded.has(section.id)) {
+    ok(`deliberately not on the site: ${section.id} (${section.kind})`);
+    continue;
+  }
+  const staged = expected.filter((d) => d.section === section.title).length;
+  staged > 0
+    ? ok(`section published: ${section.title} (${staged} documents)`)
+    : fail(`registry section "${section.title}" reached the site with no documents`);
 }
 
 // 2. Search is built (Starlight ships Pagefind; a silent miss loses search).
@@ -60,21 +76,43 @@ missingBanner.length === 0
   ? ok(`release banner on all ${pages.length} pages`)
   : fail(`${missingBanner.length} page(s) without the unreleased banner, e.g. ${missingBanner[0]}`);
 
-// 4. No internal link points at a page the build did not produce.
+// 4. No internal link points at a page the build did not produce — and no
+//    fragment points at an anchor that page does not have. Discarding the
+//    fragment hid four links into README sections that Phase 3 had moved out.
+const anchors = new Map(); // page path -> Set of ids
+for (const page of pages) {
+  const html = await readFile(page, "utf8");
+  const ids = new Set();
+  for (const [, id] of html.matchAll(/\sid="([^"]+)"/g)) ids.add(id);
+  for (const [, name] of html.matchAll(/<a[^>]+name="([^"]+)"/g)) ids.add(name);
+  anchors.set(page, ids);
+}
+
 const dead = new Set();
 for (const page of pages) {
   const html = await readFile(page, "utf8");
   for (const [, href] of html.matchAll(/href="([^"]+)"/g)) {
     if (!href.startsWith(base + "/") || href.startsWith(base + "/pagefind")) continue;
-    const clean = href.split("#")[0].split("?")[0].slice(base.length);
-    if (!clean || clean === "/") continue;
-    const target = join(DIST, clean.endsWith("/") ? join(clean, "index.html") : clean);
-    if (!existsSync(target) && !existsSync(join(DIST, clean))) dead.add(`${href} (from ${page.slice(DIST.length)})`);
+    const [pathPart, fragment = ""] = href.split("#");
+    const clean = pathPart.split("?")[0].slice(base.length);
+    const target = clean === "" || clean === "/"
+      ? join(DIST, "index.html")
+      : join(DIST, clean.endsWith("/") ? join(clean, "index.html") : clean);
+    const asset = join(DIST, clean);
+    if (!existsSync(target) && !existsSync(asset)) {
+      dead.add(`${href} (from ${page.slice(DIST.length)})`);
+      continue;
+    }
+    if (fragment && existsSync(target) && anchors.has(target) && !anchors.get(target).has(fragment)) {
+      dead.add(`${href} — no #${fragment} on that page (from ${page.slice(DIST.length)})`);
+    }
   }
 }
-dead.size === 0 ? ok("no dead internal links") : [...dead].forEach((d) => fail(`dead link: ${d}`));
+dead.size === 0
+  ? ok("no dead internal links or fragments")
+  : [...dead].forEach((d) => fail(`dead link: ${d}`));
 
 console.log("=".repeat(41));
-console.log(`  Site: ${pages.length} pages, ${expected.length} registered documents, ${failures} failed`);
+console.log(`  Site: ${pages.length} pages, ${expected.length} staged documents, ${failures} failed`);
 console.log("=".repeat(41));
 process.exit(failures ? 1 : 0);

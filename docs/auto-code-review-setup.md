@@ -6,7 +6,7 @@ before it gates a run, how to turn it on per session and per
 unattended build, and where to read the result. Everything here was
 done and verified on real runs (2026-09-09 → 12); nothing is planned.
 
-The README's [Peer Review (Multi-Copilot)](../README.md#peer-review-multi-copilot)
+The [Peer Review](peer-review.md)
 section describes the mechanism; this page is the ordered setup.
 
 ## 1. What "auto code review" is here

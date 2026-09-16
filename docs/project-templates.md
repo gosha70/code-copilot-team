@@ -18,7 +18,7 @@ The eleven stack templates, what each one's agent team looks like, and the CI wo
 | `gradle-plugin` | Kotlin · Gradle 8 · `Plugin<Project>` · TestKit matrix · Plugin Portal | Team Lead, Plugin Eng, Functional Test Eng, Build & Release |
 | `domain-pack` | Versioned content (TBX/JSON-LD/CSV) · Maven Central + PyPI dual publish | Team Lead, Content Curator, JVM Wrapper Eng, Python Wrapper Eng, Release & CI |
 
-> **`ui-harness`** — an add-on bundle (not a stack) that layers the [UI Design Harness](../README.md#ui-design-harness) onto any web project: `DESIGN.md` + DTCG tokens + the `harness/` visual-review runner.
+> **`ui-harness`** — an add-on bundle (not a stack) that layers the [UI design harness](../shared/templates/ui-harness/DESIGN.md) onto any web project: `DESIGN.md` + DTCG tokens + the `harness/` visual-review runner.
 
 ### Bundled CI Workflows
 

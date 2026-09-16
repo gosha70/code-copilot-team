@@ -28,13 +28,25 @@ const BLOB = `${registry.repo_url}/blob/${registry.repo_branch}`;
 // into markdown must carry that prefix — Astro does not add it to link
 // targets inside content. SITE_BASE lets a fork or custom domain build at /.
 const BASE = (process.env.SITE_BASE ?? `/${registry.repo_url.split("/").pop()}`).replace(/\/$/, "");
-const RAW_DIRS = ["skills", "agents", "wiki"]; // served by Learn, not by the site
+// The registry marks each section's kind. "doc" sections are documentation and
+// belong on the site — including the three that are declared as globs
+// (adapters/claude-code/docs, adapters/pi/docs, shared/docs), which an earlier
+// version silently dropped. Skills, agents and wiki pages are instruction files
+// the Studio serves; they stay off the site, and site-data records that choice
+// rather than leaving it implicit.
+const SITE_KINDS = ["doc"];
 
 /** Registry path -> site slug. docs/foo.md -> foo; README.md -> index. */
 function slugFor(rel) {
   if (rel === "README.md") return "index";
   const withoutExt = rel.replace(/\.md$/, "");
   if (withoutExt === "docs/README") return "documentation";
+  // Keep the adapter and shared guides in named folders rather than flattening
+  // them into adapters-claude-code-docs-hooks-guide.
+  const adapter = withoutExt.match(/^adapters\/([^/]+)\/docs\/(.+)$/);
+  if (adapter) return `${adapter[1]}/${adapter[2]}`.toLowerCase();
+  const shared = withoutExt.match(/^shared\/docs\/(.+)$/);
+  if (shared) return `shared/${shared[1]}`.toLowerCase();
   return withoutExt.replace(/^docs\//, "").replace(/\//g, "-").toLowerCase();
 }
 
@@ -46,9 +58,41 @@ function titleFrom(rel, body) {
   return h1 ? h1.slice(2).trim() : basename(rel, ".md");
 }
 
-const sections = (registry.sections || []).filter((s) => (s.paths || []).length);
+/** Expand a registry glob. Only "<dir>/*.<ext>" is supported — an unknown
+ *  shape is an error, never a silently empty section. */
+async function expand(pattern) {
+  const match = pattern.match(/^(.*)\/\*\.([A-Za-z0-9]+)$/);
+  if (!match) {
+    console.error(`[ERROR] unsupported glob in the Learn registry: ${pattern}`);
+    process.exit(1);
+  }
+  const [, dir, ext] = match;
+  if (!existsSync(join(REPO, dir))) {
+    console.error(`[ERROR] the registry globs a directory that does not exist: ${dir}`);
+    process.exit(1);
+  }
+  const deny = registry.deny_prefixes || [];
+  const found = (await readdir(join(REPO, dir)))
+    .filter((f) => f.endsWith(`.${ext}`))
+    .map((f) => `${dir}/${f}`)
+    .filter((rel) => !deny.some((p) => rel.startsWith(p)))
+    .sort();
+  if (!found.length) {
+    console.error(`[ERROR] the registry glob ${pattern} matched nothing`);
+    process.exit(1);
+  }
+  return found;
+}
+
+const sections = [];
+for (const section of registry.sections || []) {
+  if (!SITE_KINDS.includes(section.kind)) continue;
+  const paths = [...(section.paths || [])];
+  for (const pattern of section.globs || []) paths.push(...(await expand(pattern)));
+  if (paths.length) sections.push({ ...section, paths });
+}
 if (!sections.length) {
-  console.error("[ERROR] the Learn registry lists no explicit paths — nothing to stage");
+  console.error("[ERROR] the Learn registry yielded no documents — nothing to stage");
   process.exit(1);
 }
 
@@ -126,9 +170,23 @@ for (const [rel, meta] of staged) {
 // source file.
 await writeFile(
   join(SITE, "site-data.generated.json"),
-  JSON.stringify({ branch: registry.repo_branch, repoUrl: registry.repo_url,
-                   releasesUrl: `${registry.repo_url}/releases`,
-                   documentCount: staged.size }, null, 2) + "\n",
+  JSON.stringify(
+    {
+      branch: registry.repo_branch,
+      repoUrl: registry.repo_url,
+      releasesUrl: `${registry.repo_url}/releases`,
+      documentCount: staged.size,
+      // The manifest is the contract between the builder and check-site.mjs.
+      // Recomputing slugs there let the checker inherit the builder's blind
+      // spot: both skipped the glob sections and both called it clean.
+      documents: [...staged].map(([rel, meta]) => ({ path: rel, slug: meta.slug, section: meta.section })),
+      excludedKinds: (registry.sections || [])
+        .filter((s) => !SITE_KINDS.includes(s.kind))
+        .map((s) => ({ id: s.id, kind: s.kind, title: s.title })),
+    },
+    null,
+    2,
+  ) + "\n",
   "utf8",
 );
 
