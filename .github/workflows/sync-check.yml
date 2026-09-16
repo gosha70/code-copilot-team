@@ -148,6 +148,12 @@ jobs:
       - name: Configuration reference tests
         run: bash tests/test-config-reference.sh
 
+      # The cct front door composes the registries; these assertions check the
+      # composing, including that its no-PyYAML catalog reader agrees with a
+      # real parser field for field (#214 Phase 5.1).
+      - name: cct CLI tests
+        run: bash tests/test-cct-cli.sh
+
       # shared/capabilities/COMPATIBILITY.md is a deterministic render of the
       # capability registry. Until #214 Phase 2.0 this check ran only on
       # release tags, so a PR could land a stale matrix; it gates PRs now.
