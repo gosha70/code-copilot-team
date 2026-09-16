@@ -9,9 +9,10 @@ name: Docs Site Deploy
 # that publishes, and only from the default branch.
 #
 # REQUIRES a one-time repository setting: Settings → Pages → Source:
-# "GitHub Actions". Until that is set, the deploy step fails with
-# "Get Pages site failed" and nothing is published — the build and the checks
-# still run and still tell you whether the site is sound.
+# "GitHub Actions". Until that is set, this workflow fails at its first step,
+# Configure Pages, with "Get Pages site failed", and every later step —
+# including the build and its checks — is skipped. The site is still verified
+# on every pull request by site-build.yml, which needs no Pages setting.
 on:
   push:
     branches: [master]
@@ -45,10 +46,19 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # workflow_dispatch can be started from any branch — the push filter above
+    # does not constrain it — so the publishing boundary is enforced here.
+    if: github.ref == 'refs/heads/master'
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+
+      # First, so a repository without Pages enabled fails immediately and
+      # says why, rather than after an install and a build.
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v5
 
       - uses: actions/setup-node@v4
         with:
@@ -59,12 +69,6 @@ jobs:
       - name: Install
         working-directory: site
         run: npm ci
-
-      # Reads the base path Pages will serve from, so a link written into the
-      # staged markdown matches where the page actually lands.
-      - name: Configure Pages
-        id: pages
-        uses: actions/configure-pages@v5
 
       - name: Build and check the site
         working-directory: site
@@ -80,6 +84,7 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
