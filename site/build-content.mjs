@@ -50,12 +50,25 @@ function slugFor(rel) {
   return withoutExt.replace(/^docs\//, "").replace(/\//g, "-").toLowerCase();
 }
 
+/** A page title is text, not markup: an H1 may carry bold, code spans or
+ *  links, and the sidebar showed one as "**🎛️ Claude Code Setup Cookbook**".
+ *  Emphasis and backticks are stripped; a link keeps its text. */
+function plainText(text) {
+  return text
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/(\*\*|__)(.+?)\1/g, "$2")
+    .replace(/(^|\s)([*_])(\S(?:.*?\S)?)\2(?=\s|$)/g, "$1$3")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function titleFrom(rel, body) {
   // The home page is the site, not a document called "README".
   if (rel === "README.md") return "Code Copilot Team";
-  if (registry.titles?.[rel]) return registry.titles[rel];
+  if (registry.titles?.[rel]) return plainText(registry.titles[rel]);
   const h1 = body.split("\n").find((l) => l.startsWith("# "));
-  return h1 ? h1.slice(2).trim() : basename(rel, ".md");
+  return h1 ? plainText(h1.slice(2)) : basename(rel, ".md");
 }
 
 /** Expand a registry glob. Only "<dir>/*.<ext>" is supported — an unknown

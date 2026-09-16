@@ -112,6 +112,22 @@ for doc in docs/*.md; do
     fi
 done
 
+# Every documentation file the repository ships must reach the published site
+# (#214 Phase 4.3). The site stages what the Learn registry lists, so a guide
+# outside the registry is invisible on the site, on the landing page and in
+# the Studio at once — three surfaces, one omission.
+echo "check-doc-accuracy: published site coverage"
+site_registry="scripts/session_analytics/config_data/learn-sections.json"
+for doc in docs/*.md shared/docs/*.md adapters/*/docs/*.md; do
+    [[ -e "$doc" ]] || continue
+    dir="${doc%/*}"
+    if grep -qF "\"$doc\"" "$site_registry" || grep -qF "\"$dir/*.md\"" "$site_registry"; then
+        ok "reaches the site: $doc"
+    else
+        fail "$doc ships but the Learn registry does not list it, so the site, the landing page and the Studio all omit it"
+    fi
+done
+
 echo "check-doc-accuracy: documentation index"
 for doc in adapters/claude-code/docs/*.md shared/docs/*.md; do
     [[ -e "$doc" ]] || continue

@@ -4,6 +4,10 @@ Everything written down about Code Copilot Team, grouped the way the Studio's
 **Learn** tab groups it — this page and that tab read the same registry, so
 they cannot disagree about what exists.
 
+These pages are also published as a searchable site at
+**<https://gosha70.github.io/code-copilot-team/>**, built from `master` by
+`.github/workflows/pages.yml`.
+
 New here? The [Quick Start](../README.md#quick-start) installs the harness in
 about five minutes, and the [five-minute paths](../README.md#five-minutes-each)
 prove each major piece works.
