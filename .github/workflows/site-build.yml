@@ -1,0 +1,56 @@
+name: Docs Site Build
+
+# The site is a render of the repository's own documentation (#214 Phase 4):
+# site/build-content.mjs stages the files the Learn registry lists, rewrites
+# their links, and fails on one that does not resolve. This job proves a
+# change to the docs still produces a complete, link-clean site — it does not
+# deploy anything.
+on:
+  pull_request:
+    paths:
+      - 'site/**'
+      - 'docs/**'
+      - 'README.md'
+      - 'shared/docs/**'
+      - 'adapters/*/docs/**'
+      - 'knowledge/README.md'
+      - 'benchmarks/README.md'
+      - 'scripts/session_analytics/README.md'
+      - 'shared/capabilities/COMPATIBILITY.md'
+      - 'scripts/session_analytics/config_data/learn-sections.json'
+      - '.github/workflows/site-build.yml'
+  push:
+    branches: [master, main]
+    paths:
+      - 'site/**'
+      - 'docs/**'
+      - 'README.md'
+      - 'scripts/session_analytics/config_data/learn-sections.json'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - name: Install
+        working-directory: site
+        run: npm ci
+
+      # Builds the site and asserts every registered document is published,
+      # search exists, the unreleased banner is on every page, and no internal
+      # link points at a page the build did not produce.
+      - name: Build and check the site
+        working-directory: site
+        run: npm run check
