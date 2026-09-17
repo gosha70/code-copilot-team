@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -90,9 +91,13 @@ def check_tools(report: Report) -> None:
             report.add("Tools", tool, BAD if required else WARN, f"not installed — {why}")
 
 
+def profile_path() -> Path:
+    return Path(os.environ.get("CCT_PROVIDER_PROFILE", Path.home() / ".code-copilot-team/providers.toml"))
+
+
 def check_profile(repo: Path, report: Report) -> dict:
     """The provider profile: schema-valid, and are the named keys exported?"""
-    profile = Path(os.environ.get("CCT_PROVIDER_PROFILE", Path.home() / ".code-copilot-team/providers.toml"))
+    profile = profile_path()
     if not profile.is_file():
         report.add("Providers", "provider profile", WARN,
                    f"none at {profile} — peer review is off until one exists")
@@ -128,31 +133,54 @@ def check_profile(repo: Path, report: Report) -> dict:
         env_name = body.get("api_key_env")
         if not env_name:
             continue
-        # The NAME and whether it is set. Never the value.
+        # A variable NAME is safe to print; anything else may be the key
+        # itself, pasted into the wrong field. Printing it would leak the
+        # credential into a terminal and into CI logs — the exact failure
+        # #353 fixed in the validator, reachable here through invalid input.
+        if not isinstance(env_name, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", env_name):
+            report.add("Providers", f"{name}: api_key_env", BAD,
+                       f"not a variable name — {len(str(env_name))} characters, redacted; "
+                       "if a key was pasted here, rotate it and store the NAME instead")
+            continue
         present = bool(os.environ.get(env_name))
         report.add("Providers", f"{name}: ${env_name}", OK if present else WARN,
                    "set" if present else "not set in this shell — export it in ~/.zshenv")
     return providers
 
 
-def check_health(repo: Path, report: Report, providers: dict) -> None:
+def check_health(repo: Path, report: Report, providers: dict, profile: Path) -> None:
+    """Run the provider healthchecks — against the profile we just validated."""
     script = repo / "scripts/providers-health.sh"
     if not providers:
         return
     if not script.is_file():
         report.add("Providers", "healthchecks", SKIP, "providers-health.sh not found")
         return
-    code, out = run(["bash", str(script)], timeout=90)
+    # Without --profile the checks ran the DEFAULT profile's commands while
+    # the validation above read a different file (#361 review).
+    code, out = run(["bash", str(script), "--profile", str(profile)], timeout=90)
+
+    # The script prints a fixed three-column table: PROVIDER STATUS HEALTHCHECK.
+    # Matching "fail" anywhere in the output turned its own summary line,
+    # "Result: 1 passed, 0 failed", into a failure.
+    status_of = {"OK": OK, "FAIL": BAD, "SKIP": SKIP}
+    # "  deepseek (openai-compatible) OK   curl …" — the provider column holds
+    # a name AND a parenthesised type, so the status is not a fixed field.
+    row = re.compile(r"^\s+(?P<name>\S+)(?:\s+\((?P<type>[^)]*)\))?\s+(?P<status>OK|FAIL|SKIP)\b")
+    seen = 0
     for line in out.split("\n"):
-        stripped = line.strip()
-        if not stripped or stripped.startswith("="):
+        match = row.match(line)
+        if not match or match.group("name") in ("PROVIDER", "--------"):
             continue
-        low = stripped.lower()
-        if "healthy" in low or "ok" in low or "unhealthy" in low or "fail" in low:
-            status = BAD if ("unhealthy" in low or "fail" in low) else OK
-            report.add("Providers", stripped[:70], status)
-    if code not in (0, 1):
-        report.add("Providers", "healthcheck run", BAD, f"exit {code}")
+        seen += 1
+        status = match.group("status")
+        detail = {"OK": "reachable", "FAIL": "healthcheck failed",
+                  "SKIP": "no healthcheck defined"}[status]
+        report.add("Providers", f"{match.group('name')} healthcheck", status_of[status], detail)
+    if seen == 0:
+        # No table means the script did not get as far as checking anything.
+        report.add("Providers", "healthchecks", BAD if code not in (0, 1) else WARN,
+                   f"no provider rows in the output (exit {code})")
 
 
 def check_repo(repo: Path, report: Report) -> None:
@@ -210,7 +238,7 @@ def main() -> None:
         check_tools(report)
         providers = check_profile(repo, report)
         if not args.no_network:
-            check_health(repo, report, providers)
+            check_health(repo, report, providers, profile_path())
         else:
             report.add("Providers", "healthchecks", SKIP, "--no-network")
         check_repo(repo, report)
