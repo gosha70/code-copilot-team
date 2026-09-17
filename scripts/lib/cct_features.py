@@ -137,16 +137,35 @@ def color(enabled: bool, code: str, text: str) -> str:
     return f"\033[{code}m{text}\033[0m" if enabled else text
 
 
-def print_table(features: list[dict], adapters: list[str], tty: bool) -> None:
+def support_column(f: dict, adapters: list[str], focus: str | None) -> str:
+    """The last column answers the question the invocation asked.
+
+    Unfiltered, that question is "who can block this?" — so the column lists
+    the enforcing adapters. Under --adapter it is "what does MY tool do with
+    this?", and printing the global enforcers there told an Aider user
+    "claude-code, pi" while saying nothing about Aider (#360 review).
+    """
+    if focus:
+        level = (f.get("adapters") or {}).get(focus, "")
+        return {
+            "enforced": f"enforced by {focus}",
+            "advisory": f"advisory in {focus}",
+            "unsupported": f"not delivered to {focus}",
+            "neutral": "runs outside any adapter",
+        }.get(level, f"unknown support in {focus}")
+    enforced = [a for a in adapters if (f.get("adapters") or {}).get(a) == "enforced"]
+    return ", ".join(enforced) if enforced else "no runtime gate"
+
+
+def print_table(features: list[dict], adapters: list[str], tty: bool, focus: str | None = None) -> None:
     width = max((len(f.get("title", f["id"])) for f in features), default=20)
     for f in features:
         title = f.get("title", f["id"])
         maturity = f.get("maturity", "?")
         since = f.get("since", "?")
         badge = {"stable": "32", "beta": "33", "experimental": "35", "deprecated": "31"}.get(maturity, "0")
-        enforced = [a for a in adapters if (f.get("adapters") or {}).get(a) == "enforced"]
-        where = ", ".join(enforced) if enforced else "no runtime gate"
-        print(f"{title.ljust(width)}  {color(tty, badge, maturity.ljust(12))} {since.ljust(11)} {where}")
+        print(f"{title.ljust(width)}  {color(tty, badge, maturity.ljust(12))} {since.ljust(11)} "
+              f"{support_column(f, adapters, focus)}")
 
 
 def print_detail(f: dict, adapters: list[str]) -> None:
@@ -213,9 +232,10 @@ def main() -> None:
         return
 
     tty = sys.stdout.isatty()
-    print_table(features, adapters, tty)
+    print_table(features, adapters, tty, args.adapter)
     print()
-    print(f"{len(features)} features · maturity defined in docs/maturity.md · "
+    scope = f" delivered by {args.adapter}" if args.adapter else ""
+    print(f"{len(features)} features{scope} · maturity defined in docs/maturity.md · "
           f"`cct features --feature <id>` for one in full")
 
 

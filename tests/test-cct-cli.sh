@@ -89,6 +89,25 @@ import json, sys
 d = json.load(sys.stdin)
 print(len({f['maturity'] for f in d}))\") -eq 1 ]]"
 
+# Under --adapter the last column must answer "what does MY tool do with
+# this?" — it printed the globally enforcing adapters, so an Aider user was
+# told "claude-code, pi" and nothing about Aider (#360 review).
+PI_OUT=$(bash "$CCT" features --adapter pi)
+AIDER_OUT=$(bash "$CCT" features --adapter aider)
+assert "--adapter pi marks an enforced feature as enforced by pi" \
+  "grep -q 'Spec-driven development.*enforced by pi' <<<\"\$PI_OUT\""
+assert "--adapter pi marks an advisory feature as advisory in pi" \
+  "grep -q 'Shape-Up product bets.*advisory in pi' <<<\"\$PI_OUT\""
+assert "--adapter aider never claims another adapter's enforcement" \
+  "! grep -qE 'claude-code|enforced by' <<<\"\$AIDER_OUT\""
+assert "--adapter aider marks its features advisory" \
+  "grep -q 'advisory in aider' <<<\"\$AIDER_OUT\""
+assert "the filtered footer names the adapter" \
+  "grep -q 'features delivered by aider' <<<\"\$AIDER_OUT\""
+UNFILTERED=$(bash "$CCT" features)
+assert "unfiltered output still lists the enforcing adapters" \
+  "grep -q 'Spec-driven development.*claude-code, pi' <<<\"\$UNFILTERED\""
+
 RC=0; bash "$CCT" features --adapter no-such-adapter >/dev/null 2>&1 || RC=$?
 assert "an unknown adapter exits 2 and names the known ones" "[[ '$RC' == '2' ]]"
 ADAPTER_ERR=$(bash "$CCT" features --adapter no-such-adapter 2>&1 || true)
