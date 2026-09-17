@@ -23,6 +23,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import analytics_layers  # noqa: E402 — a sibling module, not a package
+
 LAYERS_DOC = "docs/configuration-reference.md"
 
 
@@ -176,40 +179,15 @@ def schema_entries(repo: Path) -> dict[str, dict]:
     return entries
 
 
-def effective_analytics(key: str) -> tuple[object, str] | None:
-    """The value in effect for an analytics key, and the layer that set it."""
-    leaf = key[len("analytics."):]
-    repo = repo_dir()
-    sys.path.insert(0, str(repo / "scripts"))
-    try:
-        from session_analytics import config as sa_config  # type: ignore
-    except Exception:  # noqa: BLE001 — explain still works without it
-        return None
-    defaults = load_json(repo / "scripts/session_analytics/config_data/defaults.json")
-    node: object = defaults
-    for part in leaf.split("."):
-        if not isinstance(node, dict) or part not in node:
-            return None
-        node = node[part]
-    user = Path.home() / ".cct/session-analytics.json"
-    layer = "defaults.json"
-    if user.is_file():
-        try:
-            data = json.loads(user.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            data = {}
-        cursor: object = data
-        found = True
-        for part in leaf.split("."):
-            if isinstance(cursor, dict) and part in cursor:
-                cursor = cursor[part]
-            else:
-                found = False
-                break
-        if found:
-            return cursor, str(user)
-    _ = sa_config  # imported to prove the module loads where it is expected
-    return node, layer
+def effective_analytics(key: str) -> dict | None:
+    """The value in effect for an analytics key, and the layer that set it.
+
+    Delegates to scripts/lib/analytics_layers.py, which mirrors the runtime's
+    precedence — environment, then .env, then the user's JSON, then defaults.
+    Reading only the defaults and the user file reported 2 from defaults.json
+    for a key a .env or an exported variable had already changed (#362 review).
+    """
+    return analytics_layers.resolve(key[len("analytics."):], repo_dir())
 
 
 def cmd_explain(args: argparse.Namespace) -> int:
@@ -228,12 +206,24 @@ def cmd_explain(args: argparse.Namespace) -> int:
             return 2
         entry = entries[matches[0]]
 
+    # A value may be a credential; the key's own name says so. Redaction
+    # happens here, once, for every output path — printing `judge.api_key`
+    # verbatim is exactly what this command must never do (#362 review).
+    leaf = entry["key"].split(".", 1)[-1] if entry["key"].startswith("analytics.") else entry["key"]
+    sensitive = analytics_layers.is_sensitive(leaf)
+
     if args.json:
         payload = dict(entry)
+        if "default" in payload:
+            payload["default"] = analytics_layers.redact(leaf, payload["default"])
         if entry["key"].startswith("analytics."):
             effective = effective_analytics(entry["key"])
             if effective:
-                payload["effective"], payload["set_by"] = effective
+                payload["effective"] = analytics_layers.redact(leaf, effective["value"])
+                payload["set_by"] = effective["layer"]
+                if effective.get("variable"):
+                    payload["environment_variable"] = effective["variable"]
+        payload["sensitive"] = sensitive
         print(json.dumps(payload, indent=2))
         return 0
 
@@ -248,7 +238,8 @@ def cmd_explain(args: argparse.Namespace) -> int:
     if entry.get("required"):
         print("  required  yes")
     if "default" in entry:
-        shown = json.dumps(entry["default"])
+        value = analytics_layers.redact(leaf, entry["default"])
+        shown = json.dumps(value)
         print(f"  default   {shown if shown != '\"\"' else '(empty)'}")
     if entry["owner"] == "provider":
         print("  owner     the provider — cct records the choice and passes it through;")
@@ -256,8 +247,12 @@ def cmd_explain(args: argparse.Namespace) -> int:
     if entry["key"].startswith("analytics."):
         effective = effective_analytics(entry["key"])
         if effective:
-            value, layer = effective
-            print(f"  in effect {json.dumps(value)}  (set by {layer})")
+            shown = json.dumps(analytics_layers.redact(leaf, effective["value"]))
+            print(f"  in effect {shown}  (set by {effective['layer']})")
+            if effective.get("variable"):
+                print(f"  variable  ${effective['variable']}")
+    if sensitive:
+        print("  note      this value is a credential; cct prints whether it is set, never the value")
     print()
     print(f"  Layering and every other key: {LAYERS_DOC}")
     return 0

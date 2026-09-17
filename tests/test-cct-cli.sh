@@ -277,6 +277,73 @@ rm -rf "$(dirname "$BROKEN")"
 RC=0; bash "$CCT" config validate --config /nonexistent/automation.json >/dev/null 2>&1 || RC=$?
 assert "a missing automation config exits 2" "[[ '$RC' == '2' ]]"
 
+# ── explain must never print a credential (#362 review) ──────
+SA_CONFIG="$(mktemp -d)/session-analytics.json"
+printf '{"judge": {"api_key": "sk-SENTINELdoNOTprintTHIS"}}' > "$SA_CONFIG"
+KEY_OUT=$(CCT_SA_USER_CONFIG="$SA_CONFIG" bash "$CCT" config explain analytics.judge.api_key 2>&1 || true)
+KEY_JSON=$(CCT_SA_USER_CONFIG="$SA_CONFIG" bash "$CCT" config explain analytics.judge.api_key --json 2>&1 || true)
+assert "explain never prints a credential (human)" "! grep -q 'SENTINELdoNOTprint' <<<\"\$KEY_OUT\""
+assert "explain never prints a credential (json)" "! grep -q 'SENTINELdoNOTprint' <<<\"\$KEY_JSON\""
+assert "explain says the value is redacted" "grep -q '(redacted)' <<<\"\$KEY_OUT\""
+assert "explain marks the key as a credential" "grep -q 'never the value' <<<\"\$KEY_OUT\""
+assert "the json marks it sensitive" "grep -q '\"sensitive\": true' <<<\"\$KEY_JSON\""
+assert "a dsn is treated as a credential too" \
+  "bash '$CCT' config explain analytics.dsn --json | grep -q '\"sensitive\": true'"
+assert "an ordinary key is not redacted" \
+  "! bash '$CCT' config explain analytics.judge.workers --json | grep -q 'redacted'"
+rm -rf "$(dirname "$SA_CONFIG")"
+
+# ── the value in effect must respect every layer ─────────────
+# Reading only defaults and the user file reported the default for a key an
+# exported variable or a .env had already changed.
+ENV_OUT=$(CCT_SA_JUDGE_WORKERS=7 bash "$CCT" config explain analytics.judge.workers 2>&1 || true)
+assert "an exported variable is the value in effect" "grep -q 'in effect \"7\"' <<<\"\$ENV_OUT\""
+assert "and the environment is named as the layer" "grep -q 'set by the environment' <<<\"\$ENV_OUT\""
+assert "the controlling variable is shown" "grep -q 'CCT_SA_JUDGE_WORKERS' <<<\"\$ENV_OUT\""
+
+# .env precedence, against a fixture repository so the developer's own .env
+# cannot decide whether this passes.
+FIXTURE=$(mktemp -d)
+mkdir -p "$FIXTURE/scripts/session_analytics/config_data" "$FIXTURE/shared/schemas"
+for f in config.py constants.py; do
+  ln -s "$REPO_DIR/scripts/session_analytics/$f" "$FIXTURE/scripts/session_analytics/$f"
+done
+ln -s "$REPO_DIR/scripts/session_analytics/config_data/defaults.json" \
+      "$FIXTURE/scripts/session_analytics/config_data/defaults.json"
+printf 'CCT_SA_JUDGE_WORKERS=5\n' > "$FIXTURE/.env"
+DOTENV=$(python3 -c "
+import sys
+sys.path.insert(0, '$REPO_DIR/scripts/lib')
+import analytics_layers
+from pathlib import Path
+print(analytics_layers.resolve('judge.workers', Path('$FIXTURE'), environ={}))
+")
+assert ".env sets the value when nothing is exported" "grep -q \"'value': '5'\" <<<\"\$DOTENV\""
+assert "and .env is named as the layer" "grep -q '.env (\$CCT_SA_JUDGE_WORKERS)' <<<\"\$DOTENV\""
+EXPORTED=$(python3 -c "
+import sys
+sys.path.insert(0, '$REPO_DIR/scripts/lib')
+import analytics_layers
+from pathlib import Path
+print(analytics_layers.resolve('judge.workers', Path('$FIXTURE'), environ={'CCT_SA_JUDGE_WORKERS': '9'}))
+")
+assert "an exported variable beats .env" "grep -q \"'value': '9'\" <<<\"\$EXPORTED\""
+DEFAULTED=$(python3 -c "
+import sys
+sys.path.insert(0, '$REPO_DIR/scripts/lib')
+import analytics_layers
+from pathlib import Path
+import os
+os.remove('$FIXTURE/.env')
+print(analytics_layers.resolve('judge.workers', Path('$FIXTURE'), environ={}))
+")
+assert "with no override the default is reported as such" "grep -q \"'layer': 'defaults.json'\" <<<\"\$DEFAULTED\""
+rm -rf "$FIXTURE"
+
+# One pairing rule for the CLI and the generated reference.
+assert "the reference and the CLI share the pairing module" \
+  "grep -q 'analytics_layers' '$REPO_DIR/scripts/lib/config_reference.py'"
+
 echo ""
 echo "========================================="
 printf "  Results: %d passed, %d failed\n" "$PASS" "$FAIL"
