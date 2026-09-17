@@ -99,8 +99,10 @@ claude-code ~/projects/my-app
 line, and the global rules load without being asked for.
 **Verify:** ask the agent "which rules are loaded?" — it should name the four
 global rules.
-**If not:** run `./scripts/setup.sh --sync --claude-code`, then check
-`~/.claude/rules/` has four files. Full layout: [configuration layers](docs/configuration-layers.md).
+**If not:** run `./scripts/cct doctor` **(master)** — it checks the tools, the
+provider profile and each installed adapter, and says which is missing. Then
+`./scripts/setup.sh --sync --claude-code`. Full layout:
+[configuration layers](docs/configuration-layers.md).
 
 ### Your first peer review
 

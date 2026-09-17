@@ -123,6 +123,101 @@ for field in maturity since guide adapters; do
 done
 assert "detail marks an unsupported adapter, not a blank" "grep -qE 'cursor +—' <<<\"\$DETAIL\""
 
+# ── doctor (#214 Phase 5.2) ──────────────────────────────────
+# --no-network everywhere: a test must not depend on a provider being up.
+DOCTOR=$(bash "$CCT" doctor --no-network 2>&1 || true)
+assert "doctor reports the tool checks" "grep -q 'Tools' <<<\"\$DOCTOR\""
+assert "doctor reports the repository registries" "grep -q 'feature catalog' <<<\"\$DOCTOR\""
+assert "doctor reports adapters" "grep -q 'Adapters' <<<\"\$DOCTOR\""
+assert "doctor skips healthchecks when asked" "grep -q 'no-network' <<<\"\$DOCTOR\""
+
+# The rule this command must never break: a key's NAME and whether it is set,
+# never the value. A sentinel value must not appear anywhere in the output.
+SENTINEL_PROFILE="$(mktemp -d)/providers.toml"
+cat > "$SENTINEL_PROFILE" <<'TOML'
+[providers.hosted]
+type = "openai-compatible"
+base_url = "https://api.example.com/v1"
+api_key_env = "CCT_DOCTOR_TEST_KEY"
+healthcheck = "true"
+TOML
+SECRET_OUT=$(CCT_PROVIDER_PROFILE="$SENTINEL_PROFILE" CCT_DOCTOR_TEST_KEY="sk-SENTINELdoNOTprint" \
+  bash "$CCT" doctor --no-network 2>&1 || true)
+assert "doctor names the key variable" "grep -q 'CCT_DOCTOR_TEST_KEY' <<<\"\$SECRET_OUT\""
+assert "doctor says the variable is set" "grep -qE 'CCT_DOCTOR_TEST_KEY.*set' <<<\"\$SECRET_OUT\""
+assert "doctor never prints the key itself" "! grep -q 'SENTINELdoNOTprint' <<<\"\$SECRET_OUT\""
+UNSET_OUT=$(CCT_PROVIDER_PROFILE="$SENTINEL_PROFILE" bash -c "unset CCT_DOCTOR_TEST_KEY; bash '$CCT' doctor --no-network" 2>&1 || true)
+assert "doctor flags an unset key variable" "grep -qE 'CCT_DOCTOR_TEST_KEY.*not set' <<<\"\$UNSET_OUT\""
+rm -rf "$(dirname "$SENTINEL_PROFILE")"
+
+# A key pasted into api_key_env must never be echoed. The valid-name case
+# above was the only one tested, and an INVALID one printed the field verbatim
+# — a credential in the terminal and in CI logs (#361 review).
+BAD_PROFILE="$(mktemp -d)/providers.toml"
+cat > "$BAD_PROFILE" <<'TOML'
+[providers.hosted]
+type = "openai-compatible"
+base_url = "https://api.example.com/v1"
+api_key_env = "sk-SENTINELpastedKEYnotAname"
+healthcheck = "true"
+TOML
+BAD_OUT=$(CCT_PROVIDER_PROFILE="$BAD_PROFILE" bash "$CCT" doctor --no-network 2>&1 || true)
+assert "an api_key_env holding a key is never echoed" "! grep -q 'SENTINELpastedKEY' <<<\"\$BAD_OUT\""
+assert "it is reported as not a variable name" "grep -q 'not a variable name' <<<\"\$BAD_OUT\""
+assert "it says how many characters were redacted" "grep -qE '[0-9]+ characters, redacted' <<<\"\$BAD_OUT\""
+assert "it tells the user to rotate the key" "grep -q 'rotate it' <<<\"\$BAD_OUT\""
+BAD_JSON=$(CCT_PROVIDER_PROFILE="$BAD_PROFILE" bash "$CCT" doctor --no-network --json 2>&1 || true)
+assert "the JSON output does not leak it either" "! grep -q 'SENTINELpastedKEY' <<<\"\$BAD_JSON\""
+rm -rf "$(dirname "$BAD_PROFILE")"
+
+# Healthchecks must run against the profile doctor validated, and a healthy
+# provider must not read as a failure: the summary line "0 failed" did.
+HEALTH_PROFILE="$(mktemp -d)/providers.toml"
+cat > "$HEALTH_PROFILE" <<'TOML'
+[providers.alive]
+type = "cli"
+command = "true < {review_request}"
+healthcheck = "true"
+
+[providers.dead]
+type = "cli"
+command = "true < {review_request}"
+healthcheck = "false"
+TOML
+HEALTH_OUT=$(CCT_PROVIDER_PROFILE="$HEALTH_PROFILE" bash "$CCT" doctor 2>&1 || true)
+assert "a healthy provider from the given profile is reported reachable" \
+  "grep -q 'alive healthcheck.*reachable' <<<\"\$HEALTH_OUT\""
+assert "a failing provider from the given profile is reported failed" \
+  "grep -q 'dead healthcheck.*healthcheck failed' <<<\"\$HEALTH_OUT\""
+assert "healthchecks use the profile given, not the default" \
+  "! grep -qE '(deepseek|spark) healthcheck' <<<\"\$HEALTH_OUT\""
+ONLY_OK_PROFILE="$(mktemp -d)/providers.toml"
+printf '[providers.alive]\ntype = "cli"\ncommand = "true < {review_request}"\nhealthcheck = "true"\n' > "$ONLY_OK_PROFILE"
+OK_OUT=$(CCT_PROVIDER_PROFILE="$ONLY_OK_PROFILE" bash "$CCT" doctor 2>&1 || true)
+OK_RC=0; CCT_PROVIDER_PROFILE="$ONLY_OK_PROFILE" bash "$CCT" doctor >/dev/null 2>&1 || OK_RC=$?
+assert "an all-healthy profile does not make doctor fail" "[[ '$OK_RC' == '0' ]]"
+assert "the health summary line is not read as a failure" "! grep -q '0 failed healthcheck' <<<\"\$OK_OUT\""
+rm -rf "$(dirname "$HEALTH_PROFILE")" "$(dirname "$ONLY_OK_PROFILE")"
+
+# A missing profile is a warning, not a failure: peer review is optional.
+ABSENT=$(CCT_PROVIDER_PROFILE="/nonexistent/providers.toml" bash "$CCT" doctor --no-network 2>&1 || true)
+assert "a missing provider profile warns rather than fails" "grep -q 'peer review is off' <<<\"\$ABSENT\""
+
+# An adapter that is not installed is absent, not broken — cct assumes nothing.
+assert "an advisory adapter is reported as nothing to probe" \
+  "grep -qE 'cursor.*nothing to probe' <<<\"\$DOCTOR\""
+RC=0; bash "$CCT" doctor --adapter no-such-adapter >/dev/null 2>&1 || RC=$?
+assert "an unknown adapter exits 2" "[[ '$RC' == '2' ]]"
+ONLY=$(bash "$CCT" doctor --adapter pi 2>&1 || true)
+assert "--adapter runs only that adapter's section" "! grep -q 'Tools' <<<\"\$ONLY\""
+
+DOCTOR_JSON=$(bash "$CCT" doctor --no-network --json 2>&1 || true)
+assert "doctor --json is valid and carries a status" \
+  "python3 -c \"
+import json, sys
+d = json.loads(sys.stdin.read())
+sys.exit(0 if d['status'] in ('ok', 'warn', 'fail') and d['checks'] else 1)\" <<<\"\$DOCTOR_JSON\""
+
 echo ""
 echo "========================================="
 printf "  Results: %d passed, %d failed\n" "$PASS" "$FAIL"
