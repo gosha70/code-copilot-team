@@ -64,6 +64,32 @@ def env_pairs(repo: Path) -> tuple[dict[str, str], list[str]]:
     return pairs, sorted(set(env_names.values()))
 
 
+def aliases_for(key: str, repo: Path) -> list[str]:
+    """Every variable that sets a key, in the order the runtime tries them.
+
+    Most keys have one. The database key has two: config.py reads ENV_DB and
+    then the legacy ENV_DSN_LEGACY *within each layer*, deliberately, so that a
+    process-level legacy variable still beats a .env of the new name. Treating
+    it as a single unpaired key made explain report an empty default while the
+    runtime was using an exported CCT_SA_DB (#362 review).
+    """
+    config_py = repo / "scripts/session_analytics/config.py"
+    if key != "dsn" or not config_py.is_file():
+        return []
+    src = config_py.read_text(encoding="utf-8")
+    names = dict(re.findall(r'^(ENV_[A-Z0-9_]+)\s*=\s*"([^"]+)"', src, re.M))
+    # The order inside env_db()'s inner loop is the precedence within a layer.
+    body = re.search(r"def env_db\(\).*?\n\n", src, re.S)
+    if not body:
+        return []
+    ordered = [names[c] for c in re.findall(r"\b(ENV_[A-Z0-9_]+)\b", body.group(0)) if c in names]
+    seen: list[str] = []
+    for name in ordered:
+        if name not in seen:
+            seen.append(name)
+    return seen
+
+
 def variable_for(key: str, pairs: dict[str, str], all_vars: list[str]) -> str:
     """The environment variable controlling a dotted configuration key.
 
@@ -81,6 +107,20 @@ def variable_for(key: str, pairs: dict[str, str], all_vars: list[str]) -> str:
     leaf, parent = segments[-1].upper(), segments[-2].upper()[:4]
     found = [v for v in all_vars if v.endswith("_" + leaf) and parent and parent in v]
     return found[0] if len(found) == 1 else ""
+
+
+def _read_dotenv(repo: Path) -> dict[str, str]:
+    path = repo / ".env"
+    if not path.is_file():
+        return {}
+    values: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").split("\n"):
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, _, raw = line.partition("=")
+        values[name.strip()] = raw.strip().strip('"').strip("'")
+    return values
 
 
 def _dig(data: object, key: str) -> tuple[bool, object]:
@@ -107,25 +147,21 @@ def resolve(key: str, repo: Path, *, environ: dict[str, str] | None = None) -> d
         return None
 
     pairs, all_vars = env_pairs(repo)
-    variable = variable_for(key, pairs, all_vars)
+    aliases = aliases_for(key, repo) or [v for v in [variable_for(key, pairs, all_vars)] if v]
+    variable = aliases[0] if aliases else ""
 
+    dotenv = _read_dotenv(repo)
     # Highest layer first, exactly as config.py resolves: the process
-    # environment beats the repository .env, which beats the user's JSON.
-    if variable and environ.get(variable):
-        return {"value": environ[variable], "layer": f"the environment (${variable})", "variable": variable}
-
-    if variable:
-        env_file = repo / ".env"
-        if env_file.is_file():
-            for line in env_file.read_text(encoding="utf-8").split("\n"):
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                name, _, raw = line.partition("=")
-                if name.strip() == variable:
-                    value = raw.strip().strip('"').strip("'")
-                    if value:
-                        return {"value": value, "layer": f".env (${variable})", "variable": variable}
+    # environment beats the repository .env, which beats the user's JSON. A
+    # key with aliases tries all of them WITHIN a layer before moving down,
+    # which is why a process-level legacy name beats a .env of the new one.
+    for layer, source, label in ((environ, "environment", "the environment"),
+                                 (dotenv, "dotenv", ".env")):
+        for name in aliases:
+            value = layer.get(name)
+            if value:
+                return {"value": value, "layer": f"{label} (${name})",
+                        "variable": name, "source": source}
 
     user_config = Path(environ.get("CCT_SA_USER_CONFIG", Path.home() / ".cct/session-analytics.json"))
     if user_config.is_file():

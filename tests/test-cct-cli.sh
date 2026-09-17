@@ -340,6 +340,46 @@ print(analytics_layers.resolve('judge.workers', Path('$FIXTURE'), environ={}))
 assert "with no override the default is reported as such" "grep -q \"'layer': 'defaults.json'\" <<<\"\$DEFAULTED\""
 rm -rf "$FIXTURE"
 
+# ── the database key has two names (#362 review) ─────────────
+# config.py reads CCT_SA_DB then the legacy CCT_SA_DSN *within each layer*, so
+# a process-level legacy name beats a .env of the new one. Treating dsn as
+# unpaired made explain report an empty default while the runtime used the
+# exported value.
+DB_ENV=$(CCT_SA_DB=sqlite:///synthetic.db bash "$CCT" config explain analytics.dsn 2>&1 || true)
+assert "an exported CCT_SA_DB is the layer in effect" "grep -q 'set by the environment' <<<\"\$DB_ENV\""
+assert "and the variable is named" "grep -q 'CCT_SA_DB' <<<\"\$DB_ENV\""
+assert "a dsn value stays redacted even when overridden" "! grep -q 'synthetic.db' <<<\"\$DB_ENV\""
+LEGACY_ENV=$(CCT_SA_DSN=sqlite:///legacy.db bash "$CCT" config explain analytics.dsn 2>&1 || true)
+assert "the legacy CCT_SA_DSN is honoured too" "grep -q 'CCT_SA_DSN' <<<\"\$LEGACY_ENV\""
+
+ALIAS_FIXTURE=$(mktemp -d)
+mkdir -p "$ALIAS_FIXTURE/scripts/session_analytics/config_data"
+for f in config.py constants.py; do
+  ln -s "$REPO_DIR/scripts/session_analytics/$f" "$ALIAS_FIXTURE/scripts/session_analytics/$f"
+done
+ln -s "$REPO_DIR/scripts/session_analytics/config_data/defaults.json" \
+      "$ALIAS_FIXTURE/scripts/session_analytics/config_data/defaults.json"
+printf 'CCT_SA_DB=dotenv-new.db\n' > "$ALIAS_FIXTURE/.env"
+
+# The resolver reads the real environment when none is passed, so each case is
+# one variable in front of the command.
+{
+  echo "import sys"
+  echo "sys.path.insert(0, '$REPO_DIR/scripts/lib')"
+  echo "import analytics_layers"
+  echo "from pathlib import Path"
+  echo "print(analytics_layers.resolve('dsn', Path('$ALIAS_FIXTURE')))"
+} > "$ALIAS_FIXTURE/resolve.py"
+
+PROCESS_LEGACY=$(CCT_SA_DSN=process-legacy.db python3 "$ALIAS_FIXTURE/resolve.py")
+DOTENV_ONLY=$(env -u CCT_SA_DB -u CCT_SA_DSN python3 "$ALIAS_FIXTURE/resolve.py")
+BOTH_EXPORTED=$(CCT_SA_DB=new.db CCT_SA_DSN=legacy.db python3 "$ALIAS_FIXTURE/resolve.py")
+assert "a process legacy name beats a .env of the new name" "grep -q 'process-legacy.db' <<<\"\$PROCESS_LEGACY\""
+assert "with nothing exported the .env value wins" "grep -q 'dotenv-new.db' <<<\"\$DOTENV_ONLY\""
+assert "the new name wins over the legacy one in the same layer" "grep -q \"'value': 'new.db'\" <<<\"\$BOTH_EXPORTED\""
+assert "the alias order comes from config.py, not a list typed here" "grep -q 'env_db' '$REPO_DIR/scripts/lib/analytics_layers.py'"
+rm -rf "$ALIAS_FIXTURE"
+
 # One pairing rule for the CLI and the generated reference.
 assert "the reference and the CLI share the pairing module" \
   "grep -q 'analytics_layers' '$REPO_DIR/scripts/lib/config_reference.py'"
