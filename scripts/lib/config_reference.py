@@ -22,8 +22,12 @@ HEADER = """# Configuration Reference
 > names in `scripts/session_analytics/config.py`. To change an entry, edit
 > the source — a drift guard (`--check`) fails the build if this file is stale.
 
-Every setting the harness reads, by the file it lives in. Three rules hold
-across all of them:
+Every setting the harness reads, by the file it lives in. On a machine with
+the harness installed, `cct config explain <key>` answers the same questions
+for one key — including the value in effect and which layer set it — and
+`cct config validate` runs every validator below.
+
+Three rules hold across all of them:
 
 - **A key's default lives with its schema or defaults file, never in prose.**
 - **Secrets are named, not stored:** a profile or config holds the *name* of

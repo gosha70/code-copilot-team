@@ -218,6 +218,65 @@ import json, sys
 d = json.loads(sys.stdin.read())
 sys.exit(0 if d['status'] in ('ok', 'warn', 'fail') and d['checks'] else 1)\" <<<\"\$DOCTOR_JSON\""
 
+# ── config (#214 Phase 5.3) ──────────────────────────────────
+KEYS=$(bash "$CCT" config explain --list)
+assert "explain --list names the automation keys" "grep -q '^caps.cost_usd$' <<<\"\$KEYS\""
+assert "explain --list names the provider keys" "grep -q 'providers.<name>.model' <<<\"\$KEYS\""
+assert "explain --list names the analytics keys" "grep -q '^analytics.judge.workers$' <<<\"\$KEYS\""
+assert "explain --list --json is a JSON array" \
+  "bash '$CCT' config explain --list --json | python3 -c \"
+import json, sys
+d = json.load(sys.stdin)
+sys.exit(0 if isinstance(d, list) and len(d) > 50 else 1)\""
+
+# Descriptions come from the schemas; nothing is retyped in the CLI.
+CAP=$(bash "$CCT" config explain providers.\<name\>.disable_thinking)
+assert "explain uses the schema's own description" "grep -q 'hidden reasoning' <<<\"\$CAP\""
+assert "explain names the file the key lives in" "grep -q 'providers.toml' <<<\"\$CAP\""
+
+# §7: a provider-owned setting is reported as externally resolved.
+MODEL=$(bash "$CCT" config explain providers.\<name\>.model)
+assert "a provider-owned key says who owns it" "grep -q 'owner     the provider' <<<\"\$MODEL\""
+assert "a provider-owned key says it resolves externally" "grep -q 'resolved externally' <<<\"\$MODEL\""
+CCT_OWNED=$(bash "$CCT" config explain caps.cost_usd)
+assert "a cct-owned key does not claim external ownership" "! grep -q 'owner     the provider' <<<\"\$CCT_OWNED\""
+
+# An analytics key shows its default and the layer in effect.
+WORKERS=$(bash "$CCT" config explain analytics.judge.workers)
+assert "an analytics key shows its default" "grep -qE 'default   [0-9]' <<<\"\$WORKERS\""
+assert "an analytics key shows the layer in effect" "grep -q 'set by' <<<\"\$WORKERS\""
+
+# Partial keys help rather than guess; unknown keys fail.
+AMBIG=$(bash "$CCT" config explain cost 2>&1 || true)
+assert "an ambiguous key lists the candidates" "grep -q 'caps.cost_usd' <<<\"\$AMBIG\""
+RC=0; bash "$CCT" config explain cost >/dev/null 2>&1 || RC=$?
+assert "an ambiguous key exits 2" "[[ '$RC' == '2' ]]"
+RC=0; bash "$CCT" config explain no.such.key >/dev/null 2>&1 || RC=$?
+assert "an unknown key exits 2" "[[ '$RC' == '2' ]]"
+UNIQUE=$(bash "$CCT" config explain wall_clock_sec)
+assert "an unambiguous partial key resolves" "grep -q 'caps.wall_clock_sec' <<<\"\$UNIQUE\""
+
+# validate delegates; it must report per validator, and survive a bad profile.
+VALIDATE=$(bash "$CCT" config validate 2>&1 || true)
+assert "validate reports the feature catalog" "grep -q 'feature catalog' <<<\"\$VALIDATE\""
+assert "validate reports the capability registry" "grep -q 'capability registry' <<<\"\$VALIDATE\""
+assert "validate reports the provider profile" "grep -q 'provider profile' <<<\"\$VALIDATE\""
+VALIDATE_JSON=$(bash "$CCT" config validate --json 2>&1 || true)
+assert "validate --json is valid JSON" \
+  "python3 -c \"
+import json, sys
+d = json.loads(sys.stdin.read())
+sys.exit(0 if isinstance(d, list) and d and 'status' in d[0] else 1)\" <<<\"\$VALIDATE_JSON\""
+BROKEN="$(mktemp -d)/providers.toml"
+printf '[providers.x]\ntype = "cli"\n' > "$BROKEN"
+RC=0; CCT_PROVIDER_PROFILE="$BROKEN" bash "$CCT" config validate >/dev/null 2>&1 || RC=$?
+assert "an invalid profile makes validate exit 1" "[[ '$RC' == '1' ]]"
+BROKEN_OUT=$(CCT_PROVIDER_PROFILE="$BROKEN" bash "$CCT" config validate 2>&1 || true)
+assert "the failing validator's first finding is shown" "grep -q 'command' <<<\"\$BROKEN_OUT\""
+rm -rf "$(dirname "$BROKEN")"
+RC=0; bash "$CCT" config validate --config /nonexistent/automation.json >/dev/null 2>&1 || RC=$?
+assert "a missing automation config exits 2" "[[ '$RC' == '2' ]]"
+
 echo ""
 echo "========================================="
 printf "  Results: %d passed, %d failed\n" "$PASS" "$FAIL"
