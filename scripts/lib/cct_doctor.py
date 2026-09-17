@@ -38,6 +38,19 @@ TOOLS = [
 ]
 
 
+#: A variable NAME: what may be printed. Anything else is treated as a value.
+ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
+
+
+def safe_env_label(value: object) -> str | None:
+    """The printable form of an api_key_env field, or None if it is not a name.
+
+    Returning None is the whole point: a field holding a pasted key has no
+    printable form, so no caller can accidentally render it.
+    """
+    return f"${value}" if isinstance(value, str) and ENV_NAME.fullmatch(value) else None
+
+
 class Report:
     def __init__(self, use_color: bool) -> None:
         self.rows: list[dict] = []
@@ -137,13 +150,18 @@ def check_profile(repo: Path, report: Report) -> dict:
         # itself, pasted into the wrong field. Printing it would leak the
         # credential into a terminal and into CI logs — the exact failure
         # #353 fixed in the validator, reachable here through invalid input.
-        if not isinstance(env_name, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", env_name):
+        label = safe_env_label(env_name)
+        if label is None:
             report.add("Providers", f"{name}: api_key_env", BAD,
                        f"not a variable name — {len(str(env_name))} characters, redacted; "
                        "if a key was pasted here, rotate it and store the NAME instead")
             continue
-        present = bool(os.environ.get(env_name))
-        report.add("Providers", f"{name}: ${env_name}", OK if present else WARN,
+        # Membership, not retrieval: doctor needs to know whether the variable
+        # exists, and reading its value would pull a credential into this
+        # process and into every downstream string. `in os.environ` answers the
+        # question without the secret ever being loaded.
+        present = env_name in os.environ
+        report.add("Providers", f"{name}: {label}", OK if present else WARN,
                    "set" if present else "not set in this shell — export it in ~/.zshenv")
     return providers
 
