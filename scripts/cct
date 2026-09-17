@@ -4,6 +4,7 @@
 # One discoverable entry point for finding and validating everything the
 # harness offers. Add it to PATH (or call scripts/cct) and run `cct help`.
 #
+#   cct features [...]     what the harness offers: maturity, adapters, guides
 #   cct list [--write]     browse every feature, slash command, skill, and capability
 #   cct doctor             (planned) environment + config health check
 #   cct config <...>       (planned) inspect/validate/explain resolved config
@@ -20,6 +21,13 @@ USAGE
   cct <command> [options]
 
 COMMANDS
+  features        What the harness offers, from shared/features/catalog.yaml:
+                  maturity, release, which adapters enforce it, and its guide.
+                    cct features                     one line per feature
+                    cct features --feature <id>      one in full
+                    cct features --adapter pi        only what that adapter delivers
+                    cct features --maturity stable   only features at that level
+                    cct features --json              machine-readable
   list            Print the feature index — every feature, slash command, skill, and
                   capability, from their source-of-truth files.
                     cct list            print to the terminal
@@ -40,13 +48,17 @@ COMMANDS
   help            Show this help.
 
 EXAMPLES
-  cct list                     # what can this thing do?
+  cct features                 # what can this thing do?
+  cct features --adapter pi    # …and what does my tool actually enforce?
+  cct list                     # every command, skill and capability
   cct list --write             # refresh docs/features.md before a commit
   scripts/cct list | less      # from the repo root without PATH setup
 
 DOCS
   Quick Start:    README.md#quick-start
   Feature index:  docs/features.md
+  Maturity:       docs/maturity.md
+  Site:           https://gosha70.github.io/code-copilot-team/
 EOF
 }
 
@@ -54,6 +66,9 @@ cmd="${1:-help}"
 [[ $# -gt 0 ]] && shift || true
 
 case "$cmd" in
+  features)
+    exec python3 "$SCRIPT_DIR/lib/cct_features.py" "$@"
+    ;;
   list)
     # Default = print to terminal (discovery); --write regenerates the doc.
     if [[ "${1:-}" == "--write" ]]; then
@@ -76,5 +91,5 @@ case "$cmd" in
     exit 2
     ;;
   help|-h|--help) usage ;;
-  *) echo "cct: unknown command '$cmd'" >&2; echo "Did you mean: list, doctor, config, help?" >&2; usage >&2; exit 2 ;;
+  *) echo "cct: unknown command '$cmd'" >&2; echo "Did you mean: features, list, routing, doctor, config, help?" >&2; usage >&2; exit 2 ;;
 esac

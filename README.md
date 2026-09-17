@@ -185,8 +185,14 @@ Sync updates commands and `.claude/` contents but never overwrites your
 
 Maturity labels are defined in [feature maturity](docs/maturity.md); a feature
 marked `unreleased` is on `master` only. The full index with adapter support
-per feature is [docs/features.md](docs/features.md), or run `scripts/cct list`
-**(master)**.
+per feature is [docs/features.md](docs/features.md), or ask the CLI
+**(master)**:
+
+```bash
+./scripts/cct features                   # one line per feature
+./scripts/cct features --adapter pi      # what your tool actually enforces
+./scripts/cct features --feature auto-build
+```
 
 <!-- GENERATED BLOCK — do not edit between the markers. Run scripts/generate-readme-inserts.sh
      after changing shared/features/catalog.yaml.
