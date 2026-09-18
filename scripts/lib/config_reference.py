@@ -22,8 +22,12 @@ HEADER = """# Configuration Reference
 > names in `scripts/session_analytics/config.py`. To change an entry, edit
 > the source — a drift guard (`--check`) fails the build if this file is stale.
 
-Every setting the harness reads, by the file it lives in. Three rules hold
-across all of them:
+Every setting the harness reads, by the file it lives in. On a machine with
+the harness installed, `cct config explain <key>` answers the same questions
+for one key — including the value in effect and which layer set it — and
+`cct config validate` runs every validator below.
+
+Three rules hold across all of them:
 
 - **A key's default lives with its schema or defaults file, never in prose.**
 - **Secrets are named, not stored:** a profile or config holds the *name* of
@@ -161,20 +165,17 @@ def analytics_section(repo: Path) -> str:
     config_src = config_py.read_text(encoding="utf-8")
     constants_src = constants_py.read_text(encoding="utf-8")
 
-    env_names = dict(re.findall(r'^(ENV_[A-Z0-9_]+)\s*=\s*"([^"]+)"', config_src, re.M))
-    cfg_names = dict(re.findall(r'^(CFG_[A-Z0-9_]+)\s*=\s*"([^"]+)"', constants_src, re.M))
-    if not env_names or not cfg_names:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import analytics_layers  # noqa: E402 — a sibling module, not a package
+
+    # The pairing rule lives in one place now: cct config explain and this
+    # page must not disagree about which variable controls a key.
+    pairs, all_vars = analytics_layers.env_pairs(repo)
+    if not pairs:
         die("could not read the ENV_/CFG_ constants — the reference would be empty")
 
-    # `env(ENV_X) or block.get(C.CFG_Y)` and `helper(C.CFG_Y, ENV_X)` are the
-    # two shapes config.py uses to pair a variable with a key.
-    pairs: dict[str, str] = {}
-    for env_c, cfg_c in re.findall(r"env\((ENV_[A-Z0-9_]+)\)[^\n]*?C\.(CFG_[A-Z0-9_]+)", config_src):
-        if env_c in env_names and cfg_c in cfg_names:
-            pairs.setdefault(cfg_names[cfg_c], env_names[env_c])
-    for cfg_c, env_c in re.findall(r"C\.(CFG_[A-Z0-9_]+),\s*(ENV_[A-Z0-9_]+)", config_src):
-        if env_c in env_names and cfg_c in cfg_names:
-            pairs.setdefault(cfg_names[cfg_c], env_names[env_c])
+    def claim(key: str) -> str:
+        return analytics_layers.variable_for(key, pairs, all_vars)
 
     def flat(node, prefix=""):
         for k, v in node.items():
@@ -186,29 +187,6 @@ def analytics_section(repo: Path) -> str:
             else:
                 yield key, v
 
-    # Pairing rule. An exact path wins. Otherwise a variable may claim a key
-    # only when its NAME carries both halves of that key: it ends in the
-    # leaf, and it mentions the block the leaf sits in (CCT_SA_JUDGE_BASE_URL
-    # for judge.base_url; CCT_SA_EMBED_BACKEND for embedding.backend, whose
-    # block is abbreviated). Matching on the leaf alone paired
-    # judge.by_copilot.<tool>.backend with CCT_SA_EMBED_BACKEND — a variable
-    # that does not control that key — so a leaf with no block evidence, or
-    # with more than one candidate, stays unpaired.
-    all_vars = sorted(set(env_names.values()))
-
-    def claim(key: str) -> str:
-        if key in pairs:
-            return pairs[key]
-        segments = key.split(".")
-        if len(segments) < 2:
-            return ""
-        leaf, parent = segments[-1].upper(), segments[-2].upper()[:4]
-        # The IMMEDIATE parent, not any ancestor: judge.by_copilot.<tool>.backend
-        # would otherwise claim CCT_SA_JUDGE_BACKEND, which sets the default
-        # judge rather than that copilot's override.
-        found = [v for v in all_vars if v.endswith("_" + leaf) and parent and parent in v]
-        return found[0] if len(found) == 1 else ""
-
     rows = []
     for key, value in flat(defaults):
         env = claim(key)
@@ -217,8 +195,8 @@ def analytics_section(repo: Path) -> str:
     if not rows:
         die("defaults.json produced no rows")
 
-    claimed = {claim(k) for k, _ in flat(defaults)} | {pairs[k] for k in pairs}
-    unpaired = sorted(set(env_names.values()) - claimed - {""})
+    claimed = {claim(k) for k, _ in flat(defaults)} | set(pairs.values())
+    unpaired = sorted(set(all_vars) - claimed - {""})
     # A constant whose value ends in "_" is a prefix the code completes per
     # key (CCT_SA_CALIBRATION_<KEY>), not a variable anyone sets by that name.
     prefixes = [v for v in unpaired if v.endswith("_")]

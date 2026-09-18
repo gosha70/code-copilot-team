@@ -218,6 +218,172 @@ import json, sys
 d = json.loads(sys.stdin.read())
 sys.exit(0 if d['status'] in ('ok', 'warn', 'fail') and d['checks'] else 1)\" <<<\"\$DOCTOR_JSON\""
 
+# ── config (#214 Phase 5.3) ──────────────────────────────────
+KEYS=$(bash "$CCT" config explain --list)
+assert "explain --list names the automation keys" "grep -q '^caps.cost_usd$' <<<\"\$KEYS\""
+assert "explain --list names the provider keys" "grep -q 'providers.<name>.model' <<<\"\$KEYS\""
+assert "explain --list names the analytics keys" "grep -q '^analytics.judge.workers$' <<<\"\$KEYS\""
+assert "explain --list --json is a JSON array" \
+  "bash '$CCT' config explain --list --json | python3 -c \"
+import json, sys
+d = json.load(sys.stdin)
+sys.exit(0 if isinstance(d, list) and len(d) > 50 else 1)\""
+
+# Descriptions come from the schemas; nothing is retyped in the CLI.
+CAP=$(bash "$CCT" config explain providers.\<name\>.disable_thinking)
+assert "explain uses the schema's own description" "grep -q 'hidden reasoning' <<<\"\$CAP\""
+assert "explain names the file the key lives in" "grep -q 'providers.toml' <<<\"\$CAP\""
+
+# §7: a provider-owned setting is reported as externally resolved.
+MODEL=$(bash "$CCT" config explain providers.\<name\>.model)
+assert "a provider-owned key says who owns it" "grep -q 'owner     the provider' <<<\"\$MODEL\""
+assert "a provider-owned key says it resolves externally" "grep -q 'resolved externally' <<<\"\$MODEL\""
+CCT_OWNED=$(bash "$CCT" config explain caps.cost_usd)
+assert "a cct-owned key does not claim external ownership" "! grep -q 'owner     the provider' <<<\"\$CCT_OWNED\""
+
+# An analytics key shows its default and the layer in effect.
+WORKERS=$(bash "$CCT" config explain analytics.judge.workers)
+assert "an analytics key shows its default" "grep -qE 'default   [0-9]' <<<\"\$WORKERS\""
+assert "an analytics key shows the layer in effect" "grep -q 'set by' <<<\"\$WORKERS\""
+
+# Partial keys help rather than guess; unknown keys fail.
+AMBIG=$(bash "$CCT" config explain cost 2>&1 || true)
+assert "an ambiguous key lists the candidates" "grep -q 'caps.cost_usd' <<<\"\$AMBIG\""
+RC=0; bash "$CCT" config explain cost >/dev/null 2>&1 || RC=$?
+assert "an ambiguous key exits 2" "[[ '$RC' == '2' ]]"
+RC=0; bash "$CCT" config explain no.such.key >/dev/null 2>&1 || RC=$?
+assert "an unknown key exits 2" "[[ '$RC' == '2' ]]"
+UNIQUE=$(bash "$CCT" config explain wall_clock_sec)
+assert "an unambiguous partial key resolves" "grep -q 'caps.wall_clock_sec' <<<\"\$UNIQUE\""
+
+# validate delegates; it must report per validator, and survive a bad profile.
+VALIDATE=$(bash "$CCT" config validate 2>&1 || true)
+assert "validate reports the feature catalog" "grep -q 'feature catalog' <<<\"\$VALIDATE\""
+assert "validate reports the capability registry" "grep -q 'capability registry' <<<\"\$VALIDATE\""
+assert "validate reports the provider profile" "grep -q 'provider profile' <<<\"\$VALIDATE\""
+VALIDATE_JSON=$(bash "$CCT" config validate --json 2>&1 || true)
+assert "validate --json is valid JSON" \
+  "python3 -c \"
+import json, sys
+d = json.loads(sys.stdin.read())
+sys.exit(0 if isinstance(d, list) and d and 'status' in d[0] else 1)\" <<<\"\$VALIDATE_JSON\""
+BROKEN="$(mktemp -d)/providers.toml"
+printf '[providers.x]\ntype = "cli"\n' > "$BROKEN"
+RC=0; CCT_PROVIDER_PROFILE="$BROKEN" bash "$CCT" config validate >/dev/null 2>&1 || RC=$?
+assert "an invalid profile makes validate exit 1" "[[ '$RC' == '1' ]]"
+BROKEN_OUT=$(CCT_PROVIDER_PROFILE="$BROKEN" bash "$CCT" config validate 2>&1 || true)
+assert "the failing validator's first finding is shown" "grep -q 'command' <<<\"\$BROKEN_OUT\""
+rm -rf "$(dirname "$BROKEN")"
+RC=0; bash "$CCT" config validate --config /nonexistent/automation.json >/dev/null 2>&1 || RC=$?
+assert "a missing automation config exits 2" "[[ '$RC' == '2' ]]"
+
+# ── explain must never print a credential (#362 review) ──────
+SA_CONFIG="$(mktemp -d)/session-analytics.json"
+printf '{"judge": {"api_key": "sk-SENTINELdoNOTprintTHIS"}}' > "$SA_CONFIG"
+KEY_OUT=$(CCT_SA_USER_CONFIG="$SA_CONFIG" bash "$CCT" config explain analytics.judge.api_key 2>&1 || true)
+KEY_JSON=$(CCT_SA_USER_CONFIG="$SA_CONFIG" bash "$CCT" config explain analytics.judge.api_key --json 2>&1 || true)
+assert "explain never prints a credential (human)" "! grep -q 'SENTINELdoNOTprint' <<<\"\$KEY_OUT\""
+assert "explain never prints a credential (json)" "! grep -q 'SENTINELdoNOTprint' <<<\"\$KEY_JSON\""
+assert "explain says the value is redacted" "grep -q '(redacted)' <<<\"\$KEY_OUT\""
+assert "explain marks the key as a credential" "grep -q 'never the value' <<<\"\$KEY_OUT\""
+assert "the json marks it sensitive" "grep -q '\"sensitive\": true' <<<\"\$KEY_JSON\""
+assert "a dsn is treated as a credential too" \
+  "bash '$CCT' config explain analytics.dsn --json | grep -q '\"sensitive\": true'"
+assert "an ordinary key is not redacted" \
+  "! bash '$CCT' config explain analytics.judge.workers --json | grep -q 'redacted'"
+rm -rf "$(dirname "$SA_CONFIG")"
+
+# ── the value in effect must respect every layer ─────────────
+# Reading only defaults and the user file reported the default for a key an
+# exported variable or a .env had already changed.
+ENV_OUT=$(CCT_SA_JUDGE_WORKERS=7 bash "$CCT" config explain analytics.judge.workers 2>&1 || true)
+assert "an exported variable is the value in effect" "grep -q 'in effect \"7\"' <<<\"\$ENV_OUT\""
+assert "and the environment is named as the layer" "grep -q 'set by the environment' <<<\"\$ENV_OUT\""
+assert "the controlling variable is shown" "grep -q 'CCT_SA_JUDGE_WORKERS' <<<\"\$ENV_OUT\""
+
+# .env precedence, against a fixture repository so the developer's own .env
+# cannot decide whether this passes.
+FIXTURE=$(mktemp -d)
+mkdir -p "$FIXTURE/scripts/session_analytics/config_data" "$FIXTURE/shared/schemas"
+for f in config.py constants.py; do
+  ln -s "$REPO_DIR/scripts/session_analytics/$f" "$FIXTURE/scripts/session_analytics/$f"
+done
+ln -s "$REPO_DIR/scripts/session_analytics/config_data/defaults.json" \
+      "$FIXTURE/scripts/session_analytics/config_data/defaults.json"
+printf 'CCT_SA_JUDGE_WORKERS=5\n' > "$FIXTURE/.env"
+DOTENV=$(python3 -c "
+import sys
+sys.path.insert(0, '$REPO_DIR/scripts/lib')
+import analytics_layers
+from pathlib import Path
+print(analytics_layers.resolve('judge.workers', Path('$FIXTURE'), environ={}))
+")
+assert ".env sets the value when nothing is exported" "grep -q \"'value': '5'\" <<<\"\$DOTENV\""
+assert "and .env is named as the layer" "grep -q '.env (\$CCT_SA_JUDGE_WORKERS)' <<<\"\$DOTENV\""
+EXPORTED=$(python3 -c "
+import sys
+sys.path.insert(0, '$REPO_DIR/scripts/lib')
+import analytics_layers
+from pathlib import Path
+print(analytics_layers.resolve('judge.workers', Path('$FIXTURE'), environ={'CCT_SA_JUDGE_WORKERS': '9'}))
+")
+assert "an exported variable beats .env" "grep -q \"'value': '9'\" <<<\"\$EXPORTED\""
+DEFAULTED=$(python3 -c "
+import sys
+sys.path.insert(0, '$REPO_DIR/scripts/lib')
+import analytics_layers
+from pathlib import Path
+import os
+os.remove('$FIXTURE/.env')
+print(analytics_layers.resolve('judge.workers', Path('$FIXTURE'), environ={}))
+")
+assert "with no override the default is reported as such" "grep -q \"'layer': 'defaults.json'\" <<<\"\$DEFAULTED\""
+rm -rf "$FIXTURE"
+
+# ── the database key has two names (#362 review) ─────────────
+# config.py reads CCT_SA_DB then the legacy CCT_SA_DSN *within each layer*, so
+# a process-level legacy name beats a .env of the new one. Treating dsn as
+# unpaired made explain report an empty default while the runtime used the
+# exported value.
+DB_ENV=$(CCT_SA_DB=sqlite:///synthetic.db bash "$CCT" config explain analytics.dsn 2>&1 || true)
+assert "an exported CCT_SA_DB is the layer in effect" "grep -q 'set by the environment' <<<\"\$DB_ENV\""
+assert "and the variable is named" "grep -q 'CCT_SA_DB' <<<\"\$DB_ENV\""
+assert "a dsn value stays redacted even when overridden" "! grep -q 'synthetic.db' <<<\"\$DB_ENV\""
+LEGACY_ENV=$(CCT_SA_DSN=sqlite:///legacy.db bash "$CCT" config explain analytics.dsn 2>&1 || true)
+assert "the legacy CCT_SA_DSN is honoured too" "grep -q 'CCT_SA_DSN' <<<\"\$LEGACY_ENV\""
+
+ALIAS_FIXTURE=$(mktemp -d)
+mkdir -p "$ALIAS_FIXTURE/scripts/session_analytics/config_data"
+for f in config.py constants.py; do
+  ln -s "$REPO_DIR/scripts/session_analytics/$f" "$ALIAS_FIXTURE/scripts/session_analytics/$f"
+done
+ln -s "$REPO_DIR/scripts/session_analytics/config_data/defaults.json" \
+      "$ALIAS_FIXTURE/scripts/session_analytics/config_data/defaults.json"
+printf 'CCT_SA_DB=dotenv-new.db\n' > "$ALIAS_FIXTURE/.env"
+
+# The resolver reads the real environment when none is passed, so each case is
+# one variable in front of the command.
+{
+  echo "import sys"
+  echo "sys.path.insert(0, '$REPO_DIR/scripts/lib')"
+  echo "import analytics_layers"
+  echo "from pathlib import Path"
+  echo "print(analytics_layers.resolve('dsn', Path('$ALIAS_FIXTURE')))"
+} > "$ALIAS_FIXTURE/resolve.py"
+
+PROCESS_LEGACY=$(CCT_SA_DSN=process-legacy.db python3 "$ALIAS_FIXTURE/resolve.py")
+DOTENV_ONLY=$(env -u CCT_SA_DB -u CCT_SA_DSN python3 "$ALIAS_FIXTURE/resolve.py")
+BOTH_EXPORTED=$(CCT_SA_DB=new.db CCT_SA_DSN=legacy.db python3 "$ALIAS_FIXTURE/resolve.py")
+assert "a process legacy name beats a .env of the new name" "grep -q 'process-legacy.db' <<<\"\$PROCESS_LEGACY\""
+assert "with nothing exported the .env value wins" "grep -q 'dotenv-new.db' <<<\"\$DOTENV_ONLY\""
+assert "the new name wins over the legacy one in the same layer" "grep -q \"'value': 'new.db'\" <<<\"\$BOTH_EXPORTED\""
+assert "the alias order comes from config.py, not a list typed here" "grep -q 'env_db' '$REPO_DIR/scripts/lib/analytics_layers.py'"
+rm -rf "$ALIAS_FIXTURE"
+
+# One pairing rule for the CLI and the generated reference.
+assert "the reference and the CLI share the pairing module" \
+  "grep -q 'analytics_layers' '$REPO_DIR/scripts/lib/config_reference.py'"
+
 echo ""
 echo "========================================="
 printf "  Results: %d passed, %d failed\n" "$PASS" "$FAIL"
