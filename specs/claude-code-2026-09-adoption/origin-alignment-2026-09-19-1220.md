@@ -1,8 +1,6 @@
 # Origin alignment check — claude-code-2026-09-adoption
 
-> Superseded by `origin-alignment-2026-09-19-1220.md`. Kept as history; the latest record is the current one.
-
-Checked 2026-09-19 11:59, after implementation, before review. The owner accepted D1 (the effort table) and D2 (the manifest sentence), confirmed no skill rename in this slice and no edit to the subagents guide, and asked for a separate PR with DeepSeek review. Results are in tasks.md.
+Checked 2026-09-19 12:20, after peer review and the first CI run. CI's spec validator (`scripts/validate-spec.sh --all`) requires a `## Constraints` section in a lightweight spec.md; it was missing. The section added states constraints the work already followed; claims, differences and verdict are unchanged.
 
 Origin: issue #363 (body, no comments) and
 specs/claude-code-2026-09-adoption/origin/2026-09-19-owner-brief.md

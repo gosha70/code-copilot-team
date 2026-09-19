@@ -76,6 +76,20 @@ limitation, not further work.
 - **FR-6** A test pins FR-1 so a new agent without `effort` fails the
   structure gate.
 
+## Constraints
+
+- Edit authored sources only; derived copies come from
+  `scripts/generate.sh`. Never hand-edit a generated surface.
+- No agent's `model` changes. The skill keeps its name, title and
+  description.
+- Every version gate is confirmed from the changelog or the docs, not
+  copied from the issue.
+- Per-agent effort values live in frontmatter only; no prose surface
+  lists them.
+- No `claude plugin eval`, no `omitClaudeMd` adoption, no work on the
+  environmental items, no `setup.sh --sync` from this branch.
+- The PR references #363 and leaves it open.
+
 ## Out of scope
 
 P3 (`claude plugin eval`), renaming the skill, adopting `omitClaudeMd`,
