@@ -1,8 +1,6 @@
 # Origin alignment check — plugin-hooks-load-fix
 
-> Superseded by `origin-alignment-2026-09-19-1220.md`. Kept as history; the latest record is the current one.
-
-Checked 2026-09-19 11:54, after implementation and after peer review round 1 (DeepSeek). Claims and differences are unchanged. Round 1 changed no behaviour: the third manifest assertion now requires each command to be exactly the quoted plugin root plus one script under scripts/; spec.md names `description` as a documented top-level key with its source; the 11:51 record lost a stray fragment left by a bad sed. Earlier records are kept as history and marked superseded.
+Checked 2026-09-19 12:20, after peer review and the first CI run. CI's spec validator (`scripts/validate-spec.sh --all`) requires a `## Constraints` section in a lightweight spec.md; it was missing. The section added states constraints the work already followed; claims, differences and verdict are unchanged.
 
 Origin: specs/plugin-hooks-load-fix/origin/2026-09-19-owner-direction.md
 (two owner messages in the #363 session)

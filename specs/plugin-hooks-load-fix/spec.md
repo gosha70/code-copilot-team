@@ -64,6 +64,19 @@ install): **not confirmed**. T4 settles it with a before/after run.
   inconclusive, not a pass. Run once before the fix and once after,
   each bounded in tools, budget and time (plan.md).
 
+## Constraints
+
+- `hooks.json` is authored by hand (`scripts/generate.sh` does not write
+  to `plugin/`). Matchers, scripts and timeouts do not change.
+- The gate that runs in CI must not need the `claude` CLI; CI has none.
+- Nothing is installed or synced into `~/.claude`. Runtime probes run in
+  a scratch project with user settings excluded, because the owner's
+  user settings register the same hook scripts.
+- Paid calls are limited to the two owner-authorized haiku probes, each
+  bounded in tools, budget and time.
+- Separate PR from #363 P1+P2. It references #363 and leaves it open;
+  no new issue.
+
 ## Out of scope
 
 Packaging skills, agents or commands into the plugin (step 2). Duplicate
