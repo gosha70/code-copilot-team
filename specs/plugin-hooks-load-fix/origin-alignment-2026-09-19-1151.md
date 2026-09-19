@@ -1,6 +1,8 @@
 # Origin alignment check — plugin-hooks-load-fix
 
-Checked 2026-09-19 11:51, after implementation, before review. The owner approved the plan and the two probes on 2026-09-19 ("Yes to both"), asked for a separate PR with DeepSeek review, and keeps the final review. spec.md and plan.md moved to status approved; plan.md now shows the probe command as run. Results are in tasks.md: the runtime failure is confirmed (before = written), the fix is proven (after = blocked by the plugin hook).n: the runtime proof now classifies each run from the debug log (blocked by the plugin hook / written / inconclusive), permits only the scratch .env write, uses synthetic content, and states its bounds (single tool, per-run budget cap, timeout; no max-turns flag exists on 2.1.278). The review also confirmed the quoting fix is in scope and that the PR references #363 and leaves it open. Spending is not yet authorized.
+> Superseded by `origin-alignment-2026-09-19-1154.md`. Kept as history; the latest record is the current one.
+
+Checked 2026-09-19 11:51, after implementation, before review. The owner approved the plan and the two probes on 2026-09-19 ("Yes to both"), asked for a separate PR with DeepSeek review, and keeps the final review. spec.md and plan.md moved to status approved; plan.md now shows the probe command as run. Results are in tasks.md: the runtime failure is confirmed (before = written), the fix is proven (after = blocked by the plugin hook).
 
 Origin: specs/plugin-hooks-load-fix/origin/2026-09-19-owner-direction.md
 (two owner messages in the #363 session)

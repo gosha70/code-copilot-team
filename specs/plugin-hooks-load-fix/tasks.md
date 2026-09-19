@@ -43,3 +43,22 @@ timeout (macOS has no `timeout` binary).
   untouched master (four "installed hooks/… matches adapter/" checks
   against `~/.claude/hooks`, plus the count line they cause).
 - `scripts/check-doc-accuracy.sh`: clean. `git diff --check`: clean.
+
+## Peer review round 1 (DeepSeek) — FAIL, 1 blocking
+
+- Blocking, fixed: the third manifest assertion only stripped a prefix.
+  It now requires each command to be exactly the quoted plugin root
+  plus one `scripts/*.sh` path, and reports which of the three checks
+  failed. Verified against five accept/reject cases.
+- Warning, fixed: stray fragment in the 11:51 alignment record.
+- Warning, fixed: older alignment records now say they are superseded.
+- Note, answered without a code change: `description` is a documented
+  top-level key (hooks reference); spec.md now cites it.
+- Note, answered without a code change: the empty-string matchers on
+  Stop / Notification / SessionStart are unchanged from the original.
+  The T4 debug log shows the plugin's SessionStart hook
+  (`reinject-context.sh` output) and Stop hook both succeeding, so they
+  load and fire. Notification was not exercised.
+- Two warnings arrived truncated. The legible one (does `rc` survive
+  the `while` loop) does not apply: the loop reads a here-string, so it
+  runs in the current shell.

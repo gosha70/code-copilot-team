@@ -1,5 +1,7 @@
 # Origin alignment check — plugin-hooks-load-fix
 
+> Superseded by `origin-alignment-2026-09-19-1154.md`. Kept as history; the latest record is the current one.
+
 Checked 2026-09-19 10:43, before implementation and before plan approval.
 
 Origin: specs/plugin-hooks-load-fix/origin/2026-09-19-owner-direction.md

@@ -1,8 +1,6 @@
 # Origin alignment check — plugin-hooks-load-fix
 
-> Superseded by `origin-alignment-2026-09-19-1154.md`. Kept as history; the latest record is the current one.
-
-Checked 2026-09-19 11:30, before implementation and before plan approval. Supersedes the 10:43 record after a review correction: the runtime proof now classifies each run from the debug log (blocked by the plugin hook / written / inconclusive), permits only the scratch .env write, uses synthetic content, and states its bounds (single tool, per-run budget cap, timeout; no max-turns flag exists on 2.1.278). The review also confirmed the quoting fix is in scope and that the PR references #363 and leaves it open. Spending is not yet authorized.
+Checked 2026-09-19 11:54, after implementation and after peer review round 1 (DeepSeek). Claims and differences are unchanged. Round 1 changed no behaviour: the third manifest assertion now requires each command to be exactly the quoted plugin root plus one script under scripts/; spec.md names `description` as a documented top-level key with its source; the 11:51 record lost a stray fragment left by a bad sed. Earlier records are kept as history and marked superseded.
 
 Origin: specs/plugin-hooks-load-fix/origin/2026-09-19-owner-direction.md
 (two owner messages in the #363 session)

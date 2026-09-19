@@ -32,7 +32,7 @@ CLI.
 
 | Fact | Source |
 |---|---|
-| Events must nest under top-level `"hooks"`; `$schema` is the only other top-level key the docs mention | `code.claude.com/docs/en/plugins-reference` |
+| Events must nest under top-level `"hooks"`; the only other documented top-level keys are `$schema` (plugins reference) and `description` (hooks reference) | `code.claude.com/docs/en/plugins-reference`, `code.claude.com/docs/en/hooks` |
 | `claude plugin validate` exits 1 on this file | local run, 2.1.278 |
 | `plugin.json` `version` pins marketplace installs; without a bump, installed users never see the update | plugins-reference, version section |
 | Docs quote `"${CLAUDE_PLUGIN_ROOT}"` in shell-form hook commands; ours is unquoted | plugins-reference |

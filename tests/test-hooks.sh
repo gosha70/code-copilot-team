@@ -1314,12 +1314,18 @@ PLUGIN_HOOK_COMMANDS=$(jq -r '.hooks[][] | .hooks[] | .command' "$PLUGIN_HOOKS_J
 while IFS= read -r cmd; do
   [[ -n "$cmd" ]] || continue
   script="${cmd#\"\$\{CLAUDE_PLUGIN_ROOT\}\"/}"
-  if [[ "$script" == "$cmd" || ! -x "$PLUGIN_DIR/$script" ]]; then
-    echo "  not a quoted plugin-root path to an executable script: $cmd"
+  if [[ "$script" == "$cmd" ]]; then
+    echo "  does not start with the quoted plugin root: $cmd"
+    rc=1
+  elif [[ ! "$script" =~ ^scripts/[A-Za-z0-9._-]+\.sh$ ]]; then
+    echo "  is more than one script path under scripts/: $cmd"
+    rc=1
+  elif [[ ! -x "$PLUGIN_DIR/$script" ]]; then
+    echo "  script missing or not executable: $cmd"
     rc=1
   fi
 done <<< "$PLUGIN_HOOK_COMMANDS"
-assert_exit "every plugin hook command is a quoted plugin-root path to an executable script" 0 "$rc"
+assert_exit "every plugin hook command is exactly the quoted plugin root plus an executable script" 0 "$rc"
 
 echo ""
 if [[ "$PASS" -ne "$TEST_HOOKS_EXPECTED_PASS" ]]; then
