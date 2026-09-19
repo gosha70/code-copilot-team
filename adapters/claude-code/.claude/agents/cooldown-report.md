@@ -3,6 +3,7 @@ name: cooldown-report
 description: Generates a cooldown report — bug fixes shipped + pitches ready for next betting table. Writes specs/retros/cooldown-after-NN.md.
 tools: Read, Grep, Glob, Write, Edit, Bash
 model: opus
+effort: low
 ---
 
 # Cooldown-Report Agent

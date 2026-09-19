@@ -3,6 +3,7 @@ name: security-review
 description: Scans code for common security vulnerabilities. Checks for hardcoded secrets, injection risks, missing input validation, and exposed debug endpoints. Read-only.
 tools: Read, Grep, Glob
 model: sonnet
+effort: high
 ---
 
 # Security Review Agent

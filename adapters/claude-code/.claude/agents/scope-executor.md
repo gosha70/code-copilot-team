@@ -3,6 +3,7 @@ name: scope-executor
 description: Executes a single scope of an active Shape-Up pitch. Reads pitch context, updates hill.json, delegates implementation to the build agent. Thin adapter — no inlined build logic.
 tools: Read, Grep, Glob, Edit, Write, Bash, Agent
 model: sonnet
+effort: medium
 ---
 
 # Scope-Executor Agent

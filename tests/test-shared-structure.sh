@@ -1882,6 +1882,13 @@ for agent in "$ADAPTER_DIR"/.claude/agents/*.md; do
   assert_ok "agent $(basename "$agent") has no unscoped write contradiction" "$rc"
 done
 
+# Every shipped agent sets effort in its frontmatter (#363)
+for agent in "$ADAPTER_DIR"/.claude/agents/*.md; do
+  rc=0
+  awk '/^---[[:space:]]*$/{n++; next} n==1' "$agent" | grep -Eq '^effort: (low|medium|high)$' || rc=1
+  assert_ok "agent $(basename "$agent") sets effort: low|medium|high in frontmatter" "$rc"
+done
+
 # Shared rules use "writes" not "emits" for Plan agent file creation
 rc=0
 EMIT_COUNT=$(grep -rl "Plan.*emits\|emits.*plan\|agent emits" "$SHARED_DIR/rules/" 2>/dev/null | wc -l | tr -d ' ')

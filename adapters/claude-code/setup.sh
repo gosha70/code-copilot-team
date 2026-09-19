@@ -625,6 +625,8 @@ Three phases, three configurations:
 - REVIEW (verifying output, integration testing): use highest-capability model +
   high effort. Review holistically as Team Lead, do not delegate.
 Quick tasks (rename, format, boilerplate): use lightest model + low effort.
+The above is for the main session. A shipped subagent runs at the `effort` set in its
+own frontmatter (~/.claude/agents/*.md); that value governs it, not this section.
 
 ## Agent Team Protocol (Global)
 When this project defines an Agent Team section, follow these rules:

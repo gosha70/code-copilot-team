@@ -44,7 +44,7 @@ code-copilot-team/
 ├── tests/
 │   ├── test-hooks.sh                    189 hook tests
 │   ├── test-generate.sh                 304 generation + adapter tests
-│   ├── test-shared-structure.sh         812 structure + content tests
+│   ├── test-shared-structure.sh         826 structure + content tests
 │   ├── test-sync.sh                     121 sync + init metadata tests
 │   ├── test-litellm-proxy-deps.sh       13 benchmark proxy pin tests (+11 with --online)
 │   ├── test-coverage-parse.sh           46 coverage parser + safety tests

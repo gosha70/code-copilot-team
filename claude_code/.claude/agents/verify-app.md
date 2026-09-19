@@ -3,6 +3,7 @@ name: verify-app
 description: Runs end-to-end verification of the project. Executes test suite, type checker, linter, and dev server. Reports pass/fail with specific failure details.
 tools: Read, Grep, Glob, Bash
 model: sonnet
+effort: low
 ---
 
 # Verify App Agent

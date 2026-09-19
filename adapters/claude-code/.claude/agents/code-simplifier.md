@@ -3,6 +3,7 @@ name: code-simplifier
 description: Reviews recently changed code for unnecessary complexity. Simplifies conditionals, removes dead code, extracts repeated patterns, and improves readability without changing behavior.
 tools: Read, Grep, Glob, Edit
 model: sonnet
+effort: medium
 ---
 
 # Code Simplifier Agent

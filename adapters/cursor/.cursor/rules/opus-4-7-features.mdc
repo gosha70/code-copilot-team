@@ -139,3 +139,39 @@ Useful for multi-session workflows where you context-switch between projects.
 The Monitor tool streams background events (stdout lines from a process) into the conversation. Claude can tail logs, watch builds, and react to events in real time.
 
 Use for: tailing a dev server during UI work, watching a long build or test suite, or monitoring a background process you just started.
+
+## CLI Facts (September 2026)
+
+Version-gated Claude Code facts from the v2.1.269–v2.1.273 releases. These are CLI behaviour, not tied to a model. Each gate is taken from the Claude Code changelog.
+
+### `/output-style [name]` (v2.1.269+)
+
+Lists the available output styles, or switches to the named one. Works over Remote Control and in cloud and other headless sessions.
+
+### Bash edit diffs (v2.1.269+)
+
+When the Bash tool handles file edits, the tool result includes a diff of the files the command changed. Controlled by the `bashEditDiffEnabled` setting.
+
+### MCP disconnect notice (v2.1.273+)
+
+When an MCP server disconnects mid-session and automatic reconnection gives up, Claude Code shows a notification pointing at `/mcp`.
+
+### Per-command network hosts in auto mode (v2.1.271+)
+
+In auto mode with sandboxing, Bash, PowerShell and Monitor calls carry a per-command `allowed_domains`: the hosts a command needs are reviewed with it and opened for that command alone; other hosts are refused.
+
+### Subagent frontmatter
+
+Only `omitClaudeMd` is new in this window. The other fields are older and are listed with their real gates because this project now uses one of them.
+
+| Field | Since | Notes |
+|-------|-------|-------|
+| `memory` | v2.1.33 | `user`, `project` or `local` persistent memory scope. |
+| `isolation: worktree` | v2.1.50 | Runs the subagent in a temporary git worktree. |
+| `effort` | v2.1.78 | `low` / `medium` / `high` / `xhigh` / `max`; overrides the session level while the subagent runs. The changelog entry names plugin-shipped agents; the sub-agents reference lists the field for every agent file. **Before v2.1.267 it was ignored on models whose default effort is pinned (Opus 4.7, Opus 4.8, Fable 5).** |
+| `maxTurns` | v2.1.78 | From v2.1.246 a subagent that stops at the limit returns output marked partial and can be continued. |
+| `omitClaudeMd` | v2.1.271 | Launches the subagent without user, project and local `CLAUDE.md` files; managed policy files still load. |
+
+**This project's agents set `effort` in their own frontmatter** (`~/.claude/agents/*.md`). That value governs the subagent; read it there rather than from any prose. An unrecognised frontmatter key did not stop an agent from loading on v2.1.278 (tested); older versions were not tested.
+
+**`omitClaudeMd` is declined on purpose for the shipped agents.** It suits a narrow worker that takes everything from its delegation prompt, such as a log scanner. `security-review` and `code-simplifier` exist to apply the project's coding standards, and silently dropping those conventions is the failure this harness prevents. The omission is a decision, not an oversight (issue #363).
