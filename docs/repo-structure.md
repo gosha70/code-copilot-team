@@ -42,7 +42,7 @@ code-copilot-team/
 │   ├── setup-reviewer.sh                Copilot independent-reviewer installer (Codex first)
 │   └── setup.sh                         Unified install entry point
 ├── tests/
-│   ├── test-hooks.sh                    186 hook tests
+│   ├── test-hooks.sh                    189 hook tests
 │   ├── test-generate.sh                 304 generation + adapter tests
 │   ├── test-shared-structure.sh         812 structure + content tests
 │   ├── test-sync.sh                     121 sync + init metadata tests

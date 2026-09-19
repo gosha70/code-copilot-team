@@ -1290,6 +1290,43 @@ else
   FAIL=$((FAIL + 1))
 fi
 
+# ══════════════════════════════════════════════════════════════
+# Plugin hooks manifest (the rules `claude plugin validate` enforces;
+# CI has no claude CLI, so they are mirrored here)
+# ══════════════════════════════════════════════════════════════
+echo ""
+echo "=== plugin hooks manifest ==="
+
+PLUGIN_DIR="$REPO_DIR/adapters/claude-code/plugin"
+PLUGIN_HOOKS_JSON="$PLUGIN_DIR/hooks/hooks.json"
+
+rc=0
+jq -e 'keys - ["$schema", "description", "hooks"] == []' "$PLUGIN_HOOKS_JSON" >/dev/null 2>&1 || rc=$?
+assert_exit "hooks.json declares no event outside the \"hooks\" object" 0 "$rc"
+
+rc=0
+jq -e '(.hooks | type) == "object" and (.hooks | length) > 0' "$PLUGIN_HOOKS_JSON" >/dev/null 2>&1 || rc=$?
+assert_exit "hooks.json has a non-empty \"hooks\" object" 0 "$rc"
+
+rc=0
+PLUGIN_HOOK_COMMANDS=$(jq -r '.hooks[][] | .hooks[] | .command' "$PLUGIN_HOOKS_JSON" 2>/dev/null) || rc=1
+[[ -n "$PLUGIN_HOOK_COMMANDS" ]] || rc=1
+while IFS= read -r cmd; do
+  [[ -n "$cmd" ]] || continue
+  script="${cmd#\"\$\{CLAUDE_PLUGIN_ROOT\}\"/}"
+  if [[ "$script" == "$cmd" ]]; then
+    echo "  does not start with the quoted plugin root: $cmd"
+    rc=1
+  elif [[ ! "$script" =~ ^scripts/[A-Za-z0-9._-]+\.sh$ ]]; then
+    echo "  is more than one script path under scripts/: $cmd"
+    rc=1
+  elif [[ ! -x "$PLUGIN_DIR/$script" ]]; then
+    echo "  script missing or not executable: $cmd"
+    rc=1
+  fi
+done <<< "$PLUGIN_HOOK_COMMANDS"
+assert_exit "every plugin hook command is exactly the quoted plugin root plus an executable script" 0 "$rc"
+
 echo ""
 if [[ "$PASS" -ne "$TEST_HOOKS_EXPECTED_PASS" ]]; then
   echo "  FAIL: assertion-count drift (expected $TEST_HOOKS_EXPECTED_PASS, got $PASS)"
