@@ -3,6 +3,7 @@ name: research
 description: Explores codebase, reads docs, searches the web. No code changes. Returns a research summary with paths, patterns, and risks.
 tools: Read, Grep, Glob, WebSearch, WebFetch, Bash
 model: opus
+effort: high
 ---
 
 # Research Agent

@@ -3,6 +3,7 @@ name: plan
 description: Asks clarifying questions, produces implementation plans with files, interfaces, test strategy, and delegation. Writes SDD artifacts to specs/. No application code changes.
 tools: Read, Grep, Glob, Write, Edit, AskUserQuestion
 model: opus
+effort: high
 ---
 
 # Plan Agent

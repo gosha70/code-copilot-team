@@ -3,6 +3,7 @@ name: review
 description: Holistic review of all changes — correctness, consistency, style, test coverage. Runs tests, checks console, verifies integration. Returns pass/fail report.
 tools: Read, Grep, Glob, Bash
 model: opus
+effort: high
 ---
 
 # Review Agent

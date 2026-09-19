@@ -3,6 +3,7 @@ name: cycle-retro
 description: Generates a cycle retrospective from pitch.md, hill.json, and git log. Writes specs/retros/cycle-NN.md.
 tools: Read, Grep, Glob, Write, Edit, Bash
 model: opus
+effort: low
 ---
 
 # Cycle-Retro Agent

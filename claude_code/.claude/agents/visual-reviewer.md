@@ -3,6 +3,7 @@ name: visual-reviewer
 description: Drives the visual-review loop for generated UI — boots the app via the ui-harness runner, runs the axe-core a11y gate + anti-slop rubric, reads the screenshots multimodally, scores them against DESIGN.md, and reports triaged findings until the design bar is met.
 tools: Read, Grep, Glob, Bash
 model: opus
+effort: high
 ---
 
 # Visual Reviewer Agent

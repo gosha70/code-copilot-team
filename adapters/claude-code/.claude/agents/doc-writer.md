@@ -3,6 +3,7 @@ name: doc-writer
 description: Generates and updates project documentation after feature work. Updates README, adds JSDoc/docstrings for new functions, and maintains CHANGELOG.
 tools: Read, Grep, Glob, Edit, Write
 model: sonnet
+effort: medium
 ---
 
 # Documentation Writer Agent

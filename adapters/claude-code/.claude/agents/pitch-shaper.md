@@ -3,6 +3,7 @@ name: pitch-shaper
 description: Takes a rough idea, asks clarifying questions, and produces a Shape-Up pitch with appetite, scopes, rabbit holes, no-gos, and circuit breaker. Writes specs/pitches/<id>/pitch.md.
 tools: Read, Grep, Glob, Write, Edit, Bash, AskUserQuestion
 model: opus
+effort: high
 ---
 
 # Pitch-Shaper Agent

@@ -3,6 +3,7 @@ name: phase-recap
 description: Generates a phase recap document summarizing what was built, decisions made, issues encountered, and what's next. Runs at the end of each build phase.
 tools: Read, Grep, Glob, Bash
 model: sonnet
+effort: low
 ---
 
 # Phase Recap Agent
