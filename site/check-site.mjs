@@ -56,6 +56,12 @@ existsSync(join(DIST, "pagefind", "pagefind.js"))
   ? ok("search index built")
   : fail("no Pagefind index in dist/ — search would be missing");
 
+// 2b. llms.txt is served as the repo has it (experimental, #214 Phase 6.1).
+existsSync(join(DIST, "llms.txt")) &&
+(await readFile(join(DIST, "llms.txt"), "utf8")) === (await readFile(join(REPO, "llms.txt"), "utf8"))
+  ? ok("llms.txt published, identical to the repo's")
+  : fail("llms.txt missing from dist/ or different from the repo's — did build-content.mjs run?");
+
 // 3. The release banner is on every page: the site documents the default
 //    branch while the Quick Start installs the tag.
 const pages = [];
