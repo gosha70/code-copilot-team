@@ -1327,6 +1327,73 @@ while IFS= read -r cmd; do
 done <<< "$PLUGIN_HOOK_COMMANDS"
 assert_exit "every plugin hook command is exactly the quoted plugin root plus an executable script" 0 "$rc"
 
+# ══════════════════════════════════════════════════════════════
+# Coexistence guard (spec: plugin-generate-from-sources FR-4): the
+# plugin's copy of a non-safety hook steps aside when setup.sh's copy is
+# installed. The two protect hooks never step aside.
+# ══════════════════════════════════════════════════════════════
+echo ""
+echo "=== plugin coexistence guard ==="
+
+GUARDED_HOOKS="auto-format.sh verify-after-edit.sh verify-on-stop.sh notify.sh reinject-context.sh"
+SAFETY_HOOKS="protect-files.sh protect-git.sh"
+GUARD_MARKER="# --- Coexistence guard ---"
+
+# A HOME where setup.sh's copies are installed, and one where they are not
+_BOTH_HOME=$(mktemp -d)
+_PLUGIN_ONLY_HOME=$(mktemp -d)
+mkdir -p "$_BOTH_HOME/.claude/hooks"
+for h in $GUARDED_HOOKS $SAFETY_HOOKS; do
+  cp "$HOOKS_DIR/$h" "$_BOTH_HOME/.claude/hooks/$h"
+  chmod +x "$_BOTH_HOME/.claude/hooks/$h"
+done
+
+# reinject-context.sh prints context for a git repo, so its stdout shows
+# whether the hook ran or stepped aside.
+reinject_output() {
+  printf '%s' '{}' | env -u CLAUDE_PLUGIN_ROOT CLAUDE_PROJECT_DIR="$REPO_DIR" "$@" bash "$HOOKS_DIR/reinject-context.sh" 2>/dev/null || true
+}
+
+rc=0
+[[ -z "$(reinject_output HOME="$_BOTH_HOME" CLAUDE_PLUGIN_ROOT="$PLUGIN_DIR")" ]] || rc=1
+assert_exit "plugin copy steps aside when setup.sh's copy is installed" 0 "$rc"
+
+rc=0
+[[ -n "$(reinject_output HOME="$_PLUGIN_ONLY_HOME" CLAUDE_PLUGIN_ROOT="$PLUGIN_DIR")" ]] || rc=1
+assert_exit "plugin copy runs when setup.sh's copy is not installed" 0 "$rc"
+
+rc=0
+[[ -n "$(reinject_output HOME="$_BOTH_HOME")" ]] || rc=1
+assert_exit "setup.sh's copy runs: no plugin root, no stepping aside" 0 "$rc"
+
+rc=0
+for h in $GUARDED_HOOKS; do
+  guard_line=$(grep -n -F -- "$GUARD_MARKER" "$HOOKS_DIR/$h" | head -1 | cut -d: -f1)
+  jq_line=$(grep -n -F -- "# --- jq guard ---" "$HOOKS_DIR/$h" | head -1 | cut -d: -f1)
+  if [[ -z "$guard_line" || -z "$jq_line" || "$guard_line" -ge "$jq_line" ]]; then
+    echo "  guard missing or not first in: $h"
+    rc=1
+  fi
+done
+assert_exit "the five non-safety hooks carry the guard before any other work" 0 "$rc"
+
+rc=0
+for h in $SAFETY_HOOKS; do
+  if grep -q 'CLAUDE_PLUGIN_ROOT' "$HOOKS_DIR/$h"; then
+    echo "  safety hook must not look at the plugin root: $h"
+    rc=1
+  fi
+done
+assert_exit "the two protect hooks carry no guard" 0 "$rc"
+
+RC=$(run_hook protect-files.sh '{"tool_input":{"file_path":".env"}}' HOME="$_BOTH_HOME" CLAUDE_PLUGIN_ROOT="$PLUGIN_DIR")
+assert_exit "protect-files still blocks as the plugin copy with both installs" 2 "$RC"
+
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"git push origin main"}}' HOME="$_BOTH_HOME" CLAUDE_PLUGIN_ROOT="$PLUGIN_DIR" HOOK_GIT_ALLOW=false)
+assert_exit "protect-git still blocks as the plugin copy with both installs" 2 "$RC"
+
+rm -rf "$_BOTH_HOME" "$_PLUGIN_ONLY_HOME"
+
 echo ""
 if [[ "$PASS" -ne "$TEST_HOOKS_EXPECTED_PASS" ]]; then
   echo "  FAIL: assertion-count drift (expected $TEST_HOOKS_EXPECTED_PASS, got $PASS)"

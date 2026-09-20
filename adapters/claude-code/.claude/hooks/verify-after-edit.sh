@@ -19,6 +19,13 @@ set -euo pipefail
 # See: https://code.claude.com/docs/en/discover-plugins
 # This hook remains as a fallback for languages without an LSP plugin.
 
+# --- Coexistence guard ---
+# Running as the plugin's copy while setup.sh's copy is installed: that
+# one does the work, so this one steps aside.
+if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -x "$HOME/.claude/hooks/$(basename "$0")" ]]; then
+  exit 0
+fi
+
 # --- jq guard ---
 if ! command -v jq &>/dev/null; then
   echo "jq not found; hook skipped. Install jq for hook support." >&2

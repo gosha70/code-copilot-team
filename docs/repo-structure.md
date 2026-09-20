@@ -23,7 +23,7 @@ code-copilot-team/
 │   ├── presets/                         Curated compare-configs for ./scripts/bench
 │   └── calibration/                     Judge rubrics + calibration corpora/labels
 ├── adapters/
-│   ├── claude-code/                     agents, hooks, commands, settings, setup.sh
+│   ├── claude-code/                     agents, hooks, commands, settings, setup.sh, plugin/ (generated)
 │   ├── codex/                           AGENTS.md, config.toml, 5 skills, setup.sh
 │   ├── cursor/                          .cursor/rules/*.mdc, setup.sh
 │   ├── github-copilot/                  .github/copilot-instructions.md, instructions/, setup.sh
@@ -42,8 +42,8 @@ code-copilot-team/
 │   ├── setup-reviewer.sh                Copilot independent-reviewer installer (Codex first)
 │   └── setup.sh                         Unified install entry point
 ├── tests/
-│   ├── test-hooks.sh                    189 hook tests
-│   ├── test-generate.sh                 304 generation + adapter tests
+│   ├── test-hooks.sh                    196 hook tests
+│   ├── test-generate.sh                 322 generation + adapter tests
 │   ├── test-shared-structure.sh         826 structure + content tests
 │   ├── test-sync.sh                     121 sync + init metadata tests
 │   ├── test-litellm-proxy-deps.sh       13 benchmark proxy pin tests (+11 with --online)

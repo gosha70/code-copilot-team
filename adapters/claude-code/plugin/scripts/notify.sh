@@ -9,6 +9,13 @@ set -euo pipefail
 #
 # Exit: always 0 — notifications are passive, never block.
 
+# --- Coexistence guard ---
+# Running as the plugin's copy while setup.sh's copy is installed: that
+# one does the work, so this one steps aside.
+if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -x "$HOME/.claude/hooks/$(basename "$0")" ]]; then
+  exit 0
+fi
+
 # --- jq guard ---
 if ! command -v jq &>/dev/null; then
   exit 0

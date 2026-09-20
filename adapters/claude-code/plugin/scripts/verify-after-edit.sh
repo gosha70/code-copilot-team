@@ -11,12 +11,20 @@ set -euo pipefail
 #
 # PREFERRED ALTERNATIVE: For Claude Code users, the official *-lsp plugins
 # from claude-plugins-official provide native LSP integration with better
-# fidelity than this bash hook. Install with:
-#   /plugin install pyright-lsp@claude-plugins-official    (Python)
-#   /plugin install typescript-lsp@claude-plugins-official (TypeScript)
-#   /plugin install gopls-lsp@claude-plugins-official      (Go)
+# fidelity than this bash hook. Each requires its language-server binary
+# on $PATH (e.g., pyright, typescript-language-server, gopls). Install with:
+#   /plugin install pyright-lsp@claude-plugins-official    (Python — needs pyright)
+#   /plugin install typescript-lsp@claude-plugins-official (TypeScript — needs typescript-language-server + typescript)
+#   /plugin install gopls-lsp@claude-plugins-official      (Go — needs gopls)
 # See: https://code.claude.com/docs/en/discover-plugins
 # This hook remains as a fallback for languages without an LSP plugin.
+
+# --- Coexistence guard ---
+# Running as the plugin's copy while setup.sh's copy is installed: that
+# one does the work, so this one steps aside.
+if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -x "$HOME/.claude/hooks/$(basename "$0")" ]]; then
+  exit 0
+fi
 
 # --- jq guard ---
 if ! command -v jq &>/dev/null; then
