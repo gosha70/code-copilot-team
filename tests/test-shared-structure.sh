@@ -1918,6 +1918,41 @@ rc=0
 grep -q 'Action required.*phase-complete' "$ADAPTER_DIR/.claude/hooks/reinject-context.sh" || rc=1
 assert_ok "reinject-context.sh has action-required reminder" "$rc"
 
+# ══════════════════════════════════════════════════════════════
+# Codespace tour (#214 Phase 6.2): the container definition is valid and
+# every file the tour tells a visitor to run is really in the repository.
+# A rename would otherwise leave the tour pointing at nothing.
+# ══════════════════════════════════════════════════════════════
+echo ""
+echo "=== Codespace tour ==="
+DEVCONTAINER="$REPO_DIR/.devcontainer/devcontainer.json"
+TOUR="$REPO_DIR/docs/codespace-tour.md"
+
+rc=0
+jq -e '(.image | type) == "string" and (.postCreateCommand | type) == "string"' "$DEVCONTAINER" >/dev/null 2>&1 || rc=1
+assert_ok "devcontainer.json is valid and names an image and a post-create command" "$rc"
+
+rc=0
+for f in $(jq -r '.postCreateCommand' "$DEVCONTAINER" | grep -oE '[A-Za-z0-9_./-]+\.sh') \
+         $(jq -r '.customizations.codespaces.openFiles[]?' "$DEVCONTAINER"); do
+  [[ -f "$REPO_DIR/$f" ]] || { echo "    devcontainer.json names a missing file: $f"; rc=1; }
+done
+assert_ok "the post-create script and the files it opens exist" "$rc"
+
+rc=0
+TOUR_CODE=$(awk '/^```bash$/{f=1; next} /^```$/{f=0} f' "$TOUR")
+for f in $(grep -oE '(\./)?(scripts|tests|adapters)/[A-Za-z0-9_./-]+' <<<"$TOUR_CODE" | sed 's#^\./##' | sort -u); do
+  [[ -e "$REPO_DIR/$f" ]] || { echo "    the tour runs a file that does not exist: $f"; rc=1; }
+done
+for h in $(grep -oE '~/\.claude/hooks/[A-Za-z0-9_.-]+' <<<"$TOUR_CODE" | sed 's#.*/##' | sort -u); do
+  [[ -f "$ADAPTER_DIR/.claude/hooks/$h" ]] || { echo "    the tour runs a hook the adapter does not ship: $h"; rc=1; }
+done
+assert_ok "every script, test and hook the tour runs exists" "$rc"
+
+rc=0
+grep -q 'cct' <<<"$TOUR_CODE" && ! grep -qE '(^|[^./[:alnum:]_-])cct ' <<<"$TOUR_CODE" || rc=1
+assert_ok "the tour calls ./scripts/cct, never a bare cct (setup does not put it on PATH)" "$rc"
+
 if [[ "$PASS" -ne "$TEST_SHARED_STRUCTURE_EXPECTED_PASS" ]]; then
   echo "  FAIL: assertion-count drift (expected $TEST_SHARED_STRUCTURE_EXPECTED_PASS, got $PASS)"
   FAIL=$((FAIL + 1))

@@ -15,6 +15,7 @@ Built for **Claude Code** as the reference implementation, with the provider-neu
 [![Latest release](https://img.shields.io/github/v/release/gosha70/code-copilot-team)](https://github.com/gosha70/code-copilot-team/releases)
 [![CI](https://github.com/gosha70/code-copilot-team/actions/workflows/sync-check.yml/badge.svg)](https://github.com/gosha70/code-copilot-team/actions/workflows/sync-check.yml)
 [![Pi tests](https://github.com/gosha70/code-copilot-team/actions/workflows/pi-tests.yml/badge.svg)](https://github.com/gosha70/code-copilot-team/actions/workflows/pi-tests.yml)
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/gosha70/code-copilot-team)
 
 > 📖 **Deep dive:** [Stop Fighting AI Agents and Build a Reusable Multi-Agent Dev Environment](https://www.linkedin.com/pulse/stop-fighting-ai-agents-build-reusable-multi-agent-dev-george-ivan-mxwbe) — the full story behind this project, lessons learned from 13+ real build sessions, and why every rule exists.
 

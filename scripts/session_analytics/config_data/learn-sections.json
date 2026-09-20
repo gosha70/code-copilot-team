@@ -36,6 +36,7 @@
       "paths": [
         "docs/README.md",
         "README.md",
+        "docs/codespace-tour.md",
         "docs/developer-cookbook.md",
         "docs/auto-code-review-setup.md",
         "docs/features.md",

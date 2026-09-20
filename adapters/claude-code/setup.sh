@@ -507,6 +507,21 @@ echo "  (with Agent Team configurations)"
 echo "============================================"
 echo ""
 
+# Read a yes/no answer into REPLY. With no terminal, or under CI, nobody can
+# answer — and `read` at end-of-input returns non-zero, which under `set -e`
+# ended the whole install at the first prompt: on a headless machine without
+# tmux (a container, a Codespace) setup stopped before the peer-review scripts
+# and exited 1. Answer "n" there, so the caller prints its "install later" line
+# and the install carries on. Same rule as the session-backend choice below.
+read_reply() {
+    if [[ ! -t 0 || -n "${CI:-}" ]]; then
+        REPLY="n"
+        echo "n (non-interactive)"
+    else
+        read -r REPLY
+    fi
+}
+
 # ══════════════════════════════════════════════════════════════
 # 0. DEPENDENCY CHECK: jq
 # ══════════════════════════════════════════════════════════════
@@ -548,7 +563,7 @@ if ! command -v jq &>/dev/null; then
 
     if [[ -n "$INSTALL_CMD" ]]; then
         echo -n "       Install jq now with '$INSTALL_CMD'? [Y/n] "
-        read -r REPLY
+        read_reply
         if [[ -z "$REPLY" || "$REPLY" =~ ^[Yy]$ ]]; then
             echo ""
             if $INSTALL_CMD; then
@@ -1471,7 +1486,7 @@ install_backend() {
             echo "       tmux is not installed."
             if command -v brew &>/dev/null; then
                 echo -n "       Install tmux now with 'brew install tmux'? [Y/n] "
-                read -r REPLY
+                read_reply
                 if [[ -z "$REPLY" || "$REPLY" =~ ^[Yy]$ ]]; then
                     brew install tmux && echo "[done] tmux installed" \
                         || echo "[FAIL] tmux installation failed. Install manually: brew install tmux"
@@ -1480,7 +1495,7 @@ install_backend() {
                 fi
             elif command -v apt-get &>/dev/null; then
                 echo -n "       Install tmux now with 'sudo apt-get install tmux'? [Y/n] "
-                read -r REPLY
+                read_reply
                 if [[ -z "$REPLY" || "$REPLY" =~ ^[Yy]$ ]]; then
                     sudo apt-get install -y tmux && echo "[done] tmux installed" \
                         || echo "[FAIL] tmux installation failed"
@@ -1512,7 +1527,7 @@ install_backend() {
             echo "       cmux is not installed."
             if command -v brew &>/dev/null; then
                 echo -n "       Install cmux now with Homebrew? [Y/n] "
-                read -r REPLY
+                read_reply
                 if [[ -z "$REPLY" || "$REPLY" =~ ^[Yy]$ ]]; then
                     brew tap manaflow-ai/cmux && brew install --cask cmux \
                         && echo "[done] cmux installed" \
