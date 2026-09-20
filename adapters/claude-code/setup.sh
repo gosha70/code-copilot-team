@@ -518,7 +518,8 @@ read_reply() {
         REPLY="n"
         echo "n (non-interactive)"
     else
-        read -r REPLY
+        # Ctrl-D at the prompt is end-of-input too; treat it as "no".
+        read -r REPLY || REPLY="n"
     fi
 }
 

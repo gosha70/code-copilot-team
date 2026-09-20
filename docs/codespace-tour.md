@@ -82,7 +82,7 @@ A few seconds, ending in a `Results:` line with no failures. These are the tests
 - Add a second model as a reviewer: [Auto code review — setup cookbook](auto-code-review-setup.md).
 - Everything else, grouped: the [documentation index](README.md).
 
-If the terminal opened before the installer finished, or you want to see its output, run it again; it is safe to repeat:
+If the terminal opened before the installer finished, or you want to see its output, run it again; it is safe to repeat. Run from a terminal it will ask whether to install `tmux`, which the launcher uses for real sessions; the tour does not need it, so answer `n`:
 
 ```bash
 bash adapters/claude-code/setup.sh

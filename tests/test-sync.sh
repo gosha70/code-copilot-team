@@ -982,6 +982,16 @@ assert_contains "and the install carries on" "$HEADLESS_OUT" "REACHED_END"
 assert_eq "every yes/no prompt goes through read_reply" "1" \
   "$(grep -c 'read -r REPLY' "$SETUP_SH" | tr -d ' ')"
 
+# Ctrl-D at a real prompt is end-of-input too, and must not end the install
+# either. The terminal check is forced to its interactive branch.
+EOF_OUT=$(bash -c '
+  set -e
+  eval "$(sed -n "/^read_reply()/,/^}/p" "$1" | sed "s/^    if \[\[ ! -t 0 .*/    if false; then/")"
+  read_reply
+  echo "REPLY=$REPLY"
+' _ "$SETUP_SH" < /dev/null 2>&1) || true
+assert_eq "end-of-input at an interactive prompt answers no" "REPLY=n" "$EOF_OUT"
+
 # ══════════════════════════════════════════════════════════════
 echo ""
 echo "──────────────────────────────"
