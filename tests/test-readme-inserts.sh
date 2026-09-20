@@ -185,6 +185,58 @@ assert "ALWAYS_RULES is assigned once in setup.sh" "[[ \$(grep -c '^ALWAYS_RULES
 assert "setup.sh iterates the named list, not a literal" "! grep -q 'for name in coding-standards' '$SETUP'"
 assert "the doc-accuracy gate reads the same assignment" "grep -q 'ALWAYS_RULES=\"' '$REPO_DIR/scripts/check-doc-accuracy.sh'"
 
+# ── llms.txt (experimental, #214 Phase 6.1) ─────────────────
+# The documentation index in the llmstxt.org shape. It must be the same list
+# as the landing page, from the same code, or it is a second source.
+echo ""
+echo "=== llms.txt ==="
+LLMS_GEN="$REPO_DIR/scripts/generate-llms-txt.sh"
+LLMS="$REPO_DIR/llms.txt"
+RAW="https://raw.githubusercontent.com/gosha70/code-copilot-team/master"
+
+RC=0; bash "$LLMS_GEN" --check >/dev/null 2>&1 || RC=$?
+assert "llms.txt is current" "[[ '$RC' == '0' ]]"
+assert "it opens with the project name as H1" "[[ \"\$(sed -n '1p' '$LLMS')\" == '# Code Copilot Team' ]]"
+assert "then a blockquote summary" "sed -n '3p' '$LLMS' | grep -q '^> An enforceable harness'"
+assert "it says it is experimental" "grep -q '^Experimental: llms.txt is a proposal' '$LLMS'"
+assert "sections are H2, named as the registry names them" "grep -q '^## Feature guides$' '$LLMS'"
+
+wrong_count=0
+for rel in $(python3 -c "
+import json
+d = json.load(open('$REGISTRY'))
+print(' '.join(p for s in d['sections'] for p in (s.get('paths') or [])))"); do
+  n=$(grep -cF "]($RAW/$rel)" "$LLMS" || true)
+  [[ "$n" -eq 1 ]] || { echo "    listed $n times, expected once: $rel"; wrong_count=$((wrong_count + 1)); }
+done
+assert "every registry path is linked once, as raw Markdown" "[[ $wrong_count -eq 0 ]]"
+assert "it lists exactly what the landing page lists" \
+  "[[ \$(grep -c '^- \[' '$LLMS') -eq \$(grep -c '^- \[' <<<\"\$INDEX\") ]]"
+assert "a description follows a colon, the llms.txt form" "! grep -qE '^- \[[^]]*\]\([^)]*\) — ' '$LLMS'"
+assert "both generators render through the one module" \
+  "grep -q 'scripts/lib/docs_index.py' '$GEN' && grep -q 'scripts/lib/docs_index.py' '$LLMS_GEN' && ! grep -q 'def lead_of' '$GEN'"
+
+cp "$LLMS" "$TMP/llms.bak"
+echo "- [Hand edit](https://example.com): not from the registry" >> "$LLMS"
+RC=0; bash "$LLMS_GEN" --check >/dev/null 2>&1 || RC=$?
+cp "$TMP/llms.bak" "$LLMS"
+assert "a hand-edited llms.txt fails --check" "[[ '$RC' == '1' ]]"
+
+cp "$REGISTRY" "$TMP/registry.bak"
+python3 - "$REGISTRY" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+for s in d["sections"]:
+    if s.get("paths"):
+        s["paths"].append("docs/no-such-guide.md")
+        break
+json.dump(d, open(p, "w"), indent=2, ensure_ascii=False)
+PY
+RC=0; bash "$LLMS_GEN" --stdout >/dev/null 2>&1 || RC=$?
+cp "$TMP/registry.bak" "$REGISTRY"
+assert "a registry entry with no file fails llms.txt too" "[[ '$RC' == '1' ]]"
+
 echo ""
 echo "========================================="
 printf "  Results: %d passed, %d failed\n" "$PASS" "$FAIL"

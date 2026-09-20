@@ -61,6 +61,13 @@ else
     fail "README generated blocks are stale — run scripts/generate-readme-inserts.sh"
 fi
 
+echo "check-doc-accuracy: llms.txt (experimental)"
+if bash "$ROOT/scripts/generate-llms-txt.sh" --check >/dev/null 2>&1; then
+    ok "llms.txt is current"
+else
+    fail "llms.txt is stale — run scripts/generate-llms-txt.sh"
+fi
+
 echo "check-doc-accuracy: counts"
 
 # ── Sources of truth ──

@@ -81,6 +81,7 @@ README.html
 /site/sidebar.generated.json
 /site/site-data.generated.json
 /site/public/images/
+/site/public/llms.txt
 /site/dist/
 /site/node_modules/
 /site/.astro/

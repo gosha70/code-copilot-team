@@ -129,6 +129,10 @@ for (const image of await readdir(join(REPO, registry.image_dir))) {
   }
 }
 
+// llms.txt (experimental, #214 Phase 6.1) is generated at the repo root by
+// scripts/generate-llms-txt.sh; the site only serves that file, at its base.
+await copyFile(join(REPO, "llms.txt"), join(SITE, "public/llms.txt"));
+
 let unresolved = 0;
 function rewrite(target, fromRel) {
   if (/^(https?:|mailto:|#)/.test(target)) return target;

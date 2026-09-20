@@ -20,6 +20,7 @@ on:
       - 'site/**'
       - 'docs/**'
       - 'README.md'
+      - 'llms.txt'
       - 'shared/docs/**'
       - 'adapters/*/docs/**'
       - 'knowledge/README.md'
