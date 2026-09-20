@@ -1,0 +1,63 @@
+{
+  "schema_version": 2,
+  "profile": "advisory",
+  "branch": {
+    "name": "feature/FEATURE_ID",
+    "base": "master",
+    "remote": "origin"
+  },
+  "phases": {
+    "source": "tasks.md",
+    "milestone_every": 2,
+    "max_phases": 8
+  },
+  "build": {
+    "max_turns": 80,
+    "permission_mode": "acceptEdits",
+    "max_fix_sessions_per_phase": 3
+  },
+  "test": {
+    "command": "REPLACE_WITH_TEST_COMMAND",
+    "timeout_sec": 1200
+  },
+  "review": {
+    "reviewers": [
+      {
+        "provider": "REPLACE_WITH_PROVIDER_NAME",
+        "specialization": "correctness",
+        "scope": "both",
+        "gating": true
+      }
+    ],
+    "max_rounds": 5,
+    "round_timeout_sec": 1800,
+    "loop_timeout_sec": 900
+  },
+  "caps": {
+    "wall_clock_sec": 14400,
+    "cost_usd": 25
+  },
+  "unattended": {
+    "on_review_breaker": "terminate",
+    "on_stale_finding": "terminate",
+    "on_origin_gate": "terminate",
+    "budget": {
+      "meter_all_invocations": true,
+      "estimate_unmetered": true,
+      "estimate_usd_per_invocation": 2.0
+    }
+  },
+  "notify": {
+    "command": ""
+  },
+  "pr": {
+    "closes": [],
+    "title": ""
+  },
+  "merge": {
+    "enabled": false,
+    "require_green_ci": true,
+    "require_branch_protection": true,
+    "method": "squash"
+  }
+}

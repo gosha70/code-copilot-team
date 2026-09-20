@@ -79,6 +79,75 @@ for agent_file in $CC_SYNC_AGENTS; do
   fi
 done
 
+# ── Claude Code plugin ───────────────────────────────────────
+# The plugin is a second install path, generated from the same sources
+# setup.sh installs (spec: plugin-generate-from-sources). Authored, never
+# written here: .claude-plugin/plugin.json and hooks/hooks.json.
+echo "[claude-code-plugin] Generating plugin contents..."
+CC_PLUGIN="$ADAPTERS/claude-code/plugin"
+CC_HOOKS_SOURCE="$ADAPTERS/claude-code/.claude/hooks"
+CC_COMMANDS_SOURCE="$ADAPTERS/claude-code/.claude/commands"
+CC_PLUGIN_GENERATED_DIRS="skills agents commands scripts templates"
+# The hooks hooks/hooks.json registers. The adapter's other hooks
+# (peer-review, memkernel) are setup.sh-only.
+CC_PLUGIN_HOOKS="auto-format.sh notify.sh protect-files.sh protect-git.sh reinject-context.sh verify-after-edit.sh verify-on-stop.sh"
+
+# Clean the generated subdirectories only, so a deleted source stops
+# shipping. plugin/ also holds the two authored files: never remove
+# plugin/ itself, .claude-plugin/ or hooks/.
+for d in $CC_PLUGIN_GENERATED_DIRS; do
+  rm -rf "${CC_PLUGIN:?}/$d"
+done
+mkdir -p "$CC_PLUGIN/skills" "$CC_PLUGIN/agents" "$CC_PLUGIN/commands" \
+         "$CC_PLUGIN/scripts" "$CC_PLUGIN/templates/sdd"
+
+# A plugin-only user has no ~/.claude install: point agents and commands
+# at the plugin's own copies instead. Applied to agents and commands
+# only; nothing else in the body changes.
+plugin_rewrite_paths() {
+  sed -E 's#(~|\$HOME|\$\{HOME\})/\.claude/(skills|templates|scripts|agents)/#${CLAUDE_PLUGIN_ROOT}/\2/#g' "$1"
+}
+
+# Skills: verbatim copy, all of them (a plugin cannot ship always-loaded
+# rules, so the ALWAYS_SKILLS ship as ordinary skills too)
+for skill_dir in "$SKILLS_DIR"/*/; do
+  [[ -d "$skill_dir" ]] || continue
+  name=$(basename "$skill_dir")
+  [[ -f "$skill_dir/SKILL.md" ]] || continue
+  mkdir -p "$CC_PLUGIN/skills/$name"
+  cp "$skill_dir/SKILL.md" "$CC_PLUGIN/skills/$name/SKILL.md"
+done
+
+# Agents (after the sync above, so the two synced agents are current)
+for agent_file in "$CC_AGENTS_TARGET"/*.md; do
+  [[ -f "$agent_file" ]] || continue
+  plugin_rewrite_paths "$agent_file" > "$CC_PLUGIN/agents/$(basename "$agent_file")"
+done
+
+for cmd_file in "$CC_COMMANDS_SOURCE"/*.md; do
+  [[ -f "$cmd_file" ]] || continue
+  plugin_rewrite_paths "$cmd_file" > "$CC_PLUGIN/commands/$(basename "$cmd_file")"
+done
+
+# Hook scripts and the review-decide helper: verbatim
+for hook_file in $CC_PLUGIN_HOOKS; do
+  if [[ ! -f "$CC_HOOKS_SOURCE/$hook_file" ]]; then
+    echo "[claude-code-plugin] ERROR: hook source missing: $CC_HOOKS_SOURCE/$hook_file" >&2
+    exit 1
+  fi
+  cp "$CC_HOOKS_SOURCE/$hook_file" "$CC_PLUGIN/scripts/$hook_file"
+done
+cp "$SCRIPT_DIR/review-decide.sh" "$CC_PLUGIN/scripts/review-decide.sh"
+chmod +x "$CC_PLUGIN/scripts"/*.sh
+
+# SDD templates the shape-up commands and agents read
+cp "$REPO_DIR/shared/templates/sdd"/* "$CC_PLUGIN/templates/sdd/"
+
+CC_PLUGIN_SKILL_COUNT=$(ls -d "$CC_PLUGIN/skills"/*/ 2>/dev/null | wc -l | tr -d ' ')
+CC_PLUGIN_AGENT_COUNT=$(ls "$CC_PLUGIN/agents"/*.md 2>/dev/null | wc -l | tr -d ' ')
+CC_PLUGIN_COMMAND_COUNT=$(ls "$CC_PLUGIN/commands"/*.md 2>/dev/null | wc -l | tr -d ' ')
+echo "[claude-code-plugin] Generated $CC_PLUGIN_SKILL_COUNT skills, $CC_PLUGIN_AGENT_COUNT agents, $CC_PLUGIN_COMMAND_COUNT commands"
+
 # ── Codex ────────────────────────────────────────────────────
 # Generate AGENTS.md by concatenating always skills + on-demand TOC
 echo "[codex] Generating AGENTS.md..."

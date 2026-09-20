@@ -544,6 +544,90 @@ assert "Cursor coding-standards.mdc is identical" "[[ '$MD5_BEFORE_CURSOR' == '$
 assert "Windsurf rules.md is identical" "[[ '$MD5_BEFORE_WINDSURF' == '$MD5_AFTER_WINDSURF' ]]"
 assert "Aider CONVENTIONS.md is identical" "[[ '$MD5_BEFORE_AIDER' == '$MD5_AFTER_AIDER' ]]"
 
+# ── Section 25: Claude Code plugin ────────────────────────
+# spec: plugin-generate-from-sources FR-8. One assertion per property,
+# so the count pin does not move when a skill, agent or command is added.
+
+echo ""
+echo "=== Claude Code plugin ==="
+
+CC_DIR="$ADAPTERS/claude-code"
+PLUGIN="$CC_DIR/plugin"
+PLUGIN_HOOKS="auto-format.sh notify.sh protect-files.sh protect-git.sh reinject-context.sh verify-after-edit.sh verify-on-stop.sh"
+PLUGIN_INSTALL_PATH_RE='(~|\$HOME|\$\{HOME\})/\.claude/(skills|templates|scripts|agents)'
+
+# Names on each side, one per line, for the forward and reverse checks
+names() { (cd "$1" 2>/dev/null && ls -1 $2 2>/dev/null | sed 's#/$##' | sort) || true; }
+
+SRC_SKILLS=$(for d in "$SKILLS"/*/; do [[ -f "$d/SKILL.md" ]] && basename "$d"; done | sort)
+assert "every source skill has a plugin copy, and every plugin skill has a source" \
+  "[[ -n '$SRC_SKILLS' && '$SRC_SKILLS' == '$(names "$PLUGIN/skills" '-d */')' ]]"
+assert "every adapter agent has a plugin copy, and every plugin agent has a source" \
+  "[[ -n '$(names "$CC_DIR/.claude/agents" '*.md')' && '$(names "$CC_DIR/.claude/agents" '*.md')' == '$(names "$PLUGIN/agents" '*.md')' ]]"
+assert "every adapter command has a plugin copy, and every plugin command has a source" \
+  "[[ -n '$(names "$CC_DIR/.claude/commands" '*.md')' && '$(names "$CC_DIR/.claude/commands" '*.md')' == '$(names "$PLUGIN/commands" '*.md')' ]]"
+assert "plugin scripts are exactly the seven hooks plus review-decide.sh" \
+  "[[ '$(names "$PLUGIN/scripts" '*')' == '$(printf '%s\n' $PLUGIN_HOOKS review-decide.sh | sort)' ]]"
+assert "plugin templates are exactly shared/templates/sdd" \
+  "[[ -n '$(names "$REPO_DIR/shared/templates/sdd" '*')' && '$(names "$REPO_DIR/shared/templates/sdd" '*')' == '$(names "$PLUGIN/templates/sdd" '*')' ]]"
+assert "plugin/ holds nothing but the two authored directories and the five generated ones" \
+  "[[ '$(cd "$PLUGIN" && ls -1A | grep -vx '.DS_Store' | sort | tr '\n' ' ')' == '.claude-plugin agents commands hooks scripts skills templates ' ]]"
+
+PLUGIN_DIFFS=""
+for name in $SRC_SKILLS; do
+  cmp -s "$SKILLS/$name/SKILL.md" "$PLUGIN/skills/$name/SKILL.md" || PLUGIN_DIFFS="$PLUGIN_DIFFS skills/$name"
+done
+assert "plugin skills are byte-identical to shared/skills" "[[ -z '$PLUGIN_DIFFS' ]]"
+
+PLUGIN_DIFFS=""
+for h in $PLUGIN_HOOKS; do
+  cmp -s "$CC_DIR/.claude/hooks/$h" "$PLUGIN/scripts/$h" || PLUGIN_DIFFS="$PLUGIN_DIFFS $h"
+done
+cmp -s "$REPO_DIR/scripts/review-decide.sh" "$PLUGIN/scripts/review-decide.sh" || PLUGIN_DIFFS="$PLUGIN_DIFFS review-decide.sh"
+assert "plugin hook scripts and review-decide.sh are byte-identical to their sources" "[[ -z '$PLUGIN_DIFFS' ]]"
+
+PLUGIN_DIFFS=""
+for f in "$REPO_DIR/shared/templates/sdd"/*; do
+  cmp -s "$f" "$PLUGIN/templates/sdd/$(basename "$f")" || PLUGIN_DIFFS="$PLUGIN_DIFFS $(basename "$f")"
+done
+assert "plugin templates are byte-identical to shared/templates/sdd" "[[ -z '$PLUGIN_DIFFS' ]]"
+
+assert "plugin scripts are all executable" \
+  "[[ -z \"\$(find '$PLUGIN/scripts' -type f ! -perm -u+x)\" ]]"
+assert "no install path (~/.claude or \$HOME/.claude) remains in plugin agents or commands" \
+  "! grep -rqE '$PLUGIN_INSTALL_PATH_RE' '$PLUGIN/agents' '$PLUGIN/commands'"
+assert "the sources do have install paths, so the rewrite is doing the work" \
+  "grep -rqE '$PLUGIN_INSTALL_PATH_RE' '$CC_DIR/.claude/agents' '$CC_DIR/.claude/commands'"
+assert "list-agents reads the plugin's agents" \
+  "grep -qF '\${CLAUDE_PLUGIN_ROOT}/agents/' '$PLUGIN/commands/list-agents.md'"
+assert "review-decide resolves the plugin's helper" \
+  "grep -qF '\${CLAUDE_PLUGIN_ROOT}/scripts/review-decide.sh' '$PLUGIN/commands/review-decide.md'"
+
+# Apart from the rewritten paths, an agent or command is its source
+PLUGIN_DIFFS=""
+for kind in agents commands; do
+  for f in "$CC_DIR/.claude/$kind"/*.md; do
+    if ! diff -q <(sed -E "s#$PLUGIN_INSTALL_PATH_RE/#\${CLAUDE_PLUGIN_ROOT}/\2/#g" "$f") "$PLUGIN/$kind/$(basename "$f")" >/dev/null; then
+      PLUGIN_DIFFS="$PLUGIN_DIFFS $kind/$(basename "$f")"
+    fi
+  done
+done
+assert "plugin agents and commands differ from their sources in the rewritten paths only" "[[ -z '$PLUGIN_DIFFS' ]]"
+
+# A stale generated file and the authored files, across a generator run
+PLUGIN_JSON_BEFORE=$(cksum < "$PLUGIN/.claude-plugin/plugin.json")
+HOOKS_JSON_BEFORE=$(cksum < "$PLUGIN/hooks/hooks.json")
+mkdir -p "$PLUGIN/skills/zz-stale-skill"
+echo "stale" > "$PLUGIN/skills/zz-stale-skill/SKILL.md"
+echo "stale" > "$PLUGIN/commands/zz-stale-command.md"
+bash "$REPO_DIR/scripts/generate.sh" >/dev/null 2>&1
+assert "a plugin skill or command with no source is removed by the next run" \
+  "[[ ! -e '$PLUGIN/skills/zz-stale-skill' && ! -e '$PLUGIN/commands/zz-stale-command.md' ]]"
+assert "plugin.json survives a generator run unchanged" \
+  "[[ '$PLUGIN_JSON_BEFORE' == '$(cksum < "$PLUGIN/.claude-plugin/plugin.json")' ]]"
+assert "hooks/hooks.json survives a generator run unchanged" \
+  "[[ '$HOOKS_JSON_BEFORE' == '$(cksum < "$PLUGIN/hooks/hooks.json")' ]]"
+
 # ── Results ───────────────────────────────────────────────
 
 echo ""

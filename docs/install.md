@@ -61,13 +61,28 @@ For Claude Code users who prefer the plugin system over `setup.sh`:
 # Add the CCT marketplace (one-time)
 /plugin marketplace add gosha70/code-copilot-team
 
-# Install the hooks plugin
+# Install the plugin
 /plugin install code-copilot-team@code-copilot-team
 ```
 
-This installs the same hooks (file protection, auto-format, type verification, context re-injection, git safety, notifications) as `setup.sh`, but managed through Claude Code's plugin system. Update installed plugins with `/plugin marketplace update`. The plugin does not include peer-review or memkernel hooks — those are CCT-pipeline-specific and remain in the `setup.sh` path.
+The plugin is the quick path; `setup.sh` is the full harness. The plugin's contents are generated from the same sources `setup.sh` installs (`scripts/generate.sh`), so the two never drift apart. Update installed plugins with `/plugin marketplace update`.
 
-Both install paths coexist. Use `setup.sh` for the full install (skills, agents, templates, hooks, peer review) or the plugin for hooks only.
+**What the plugin installs**
+
+- All 24 skills, the 14 agents and the 14 commands, plus the SDD templates and the `review-decide` helper the commands and agents read.
+- The same seven hooks as `setup.sh`: file protection, git safety, auto-format, type verification, test-on-stop, context re-injection, notifications.
+- Plugin components are namespaced: commands are `/code-copilot-team:shape`, agents are `code-copilot-team:build`. Asking for "the build agent" by its plain name still reaches it.
+- Commands that read a template read it from the plugin's own directory, which is outside your project, so Claude Code's usual permission check for reads outside the project applies.
+
+**What only `setup.sh` gives you**
+
+- **Always-loaded rules.** A plugin cannot ship instructions that load into every session. The six skills `setup.sh` installs as always-on rules (coding-standards, copilot-conventions, copyright-headers, origin-confirmation, safety, wiki-first-query) ship in the plugin as ordinary skills: they load when relevant, not always. The two protect hooks enforce file and git safety either way.
+- The global `CLAUDE.md` manifest, the `claude-code` launcher, the status line, and the templates for new projects.
+- The peer-review and memkernel hooks — those are CCT-pipeline-specific.
+
+**Using both**
+
+Both install paths coexist. Claude Code does not merge same-named components: you will see `/shape` and `/code-copilot-team:shape`, `build` and `code-copilot-team:build`, side by side, and they behave the same. The cost is that every skill and agent is listed twice in context (about 1,500 extra tokens). The plugin's copies of the five non-safety hooks step aside when `setup.sh`'s copies are installed, so formatting, verification and notifications run once. The two protect hooks never step aside: with both installs they run twice, which costs a duplicate block message and nothing else.
 
 ### Recommended: Install LSP Plugins (Claude Code)
 
