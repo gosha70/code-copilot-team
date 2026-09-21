@@ -947,6 +947,52 @@ assert_contains "--playwright is documented in --help" \
   "$(cd "$PW_STUB" && bash scripts/setup.sh --help 2>&1)" "--playwright"
 
 # ══════════════════════════════════════════════════════════════
+# setup.sh prompts when nobody can answer (#214 Phase 6.2)
+#
+# `read` at end-of-input returns non-zero, and setup.sh runs under `set -e`:
+# on a headless machine without tmux (a container, a Codespace) the install
+# stopped at "Install tmux now?" and exited 1, before the peer-review scripts.
+# CI runners ship tmux, so only a function-level test reaches this path.
+# ══════════════════════════════════════════════════════════════
+echo ""
+echo "=== setup.sh: prompts with no terminal ==="
+
+SETUP_SH="$ADAPTER_DIR/setup.sh"
+headless_install_backend() {   # <setup.sh to take the functions from>
+  bash -c '
+    set -e
+    eval "$(sed -n "/^read_reply()/,/^}/p" "$1")"
+    eval "$(sed -n "/^install_backend()/,/^}/p" "$1")"
+    # A machine with apt-get but neither tmux nor Homebrew.
+    command() {
+      if [[ "$1" == "-v" ]]; then
+        case "$2" in tmux|brew) return 1 ;; apt-get) return 0 ;; esac
+      fi
+      builtin command "$@"
+    }
+    install_backend tmux
+    echo "REACHED_END"
+  ' _ "$1" < /dev/null 2>&1
+}
+
+HEADLESS_RC=0; HEADLESS_OUT=$(headless_install_backend "$SETUP_SH") || HEADLESS_RC=$?
+assert_eq "a missing backend does not end a headless install" "0" "$HEADLESS_RC"
+assert_contains "it says how to install it later" "$HEADLESS_OUT" "[skip] Install later: sudo apt-get install tmux"
+assert_contains "and the install carries on" "$HEADLESS_OUT" "REACHED_END"
+assert_eq "every yes/no prompt goes through read_reply" "1" \
+  "$(grep -c 'read -r REPLY' "$SETUP_SH" | tr -d ' ')"
+
+# Ctrl-D at a real prompt is end-of-input too, and must not end the install
+# either. The terminal check is forced to its interactive branch.
+EOF_OUT=$(bash -c '
+  set -e
+  eval "$(sed -n "/^read_reply()/,/^}/p" "$1" | sed "s/^    if \[\[ ! -t 0 .*/    if false; then/")"
+  read_reply
+  echo "REPLY=$REPLY"
+' _ "$SETUP_SH" < /dev/null 2>&1) || true
+assert_eq "end-of-input at an interactive prompt answers no" "REPLY=n" "$EOF_OUT"
+
+# ══════════════════════════════════════════════════════════════
 echo ""
 echo "──────────────────────────────"
 echo "Results: $PASS passed, $FAIL failed"
