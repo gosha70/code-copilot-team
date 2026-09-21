@@ -17,6 +17,10 @@ Built for **Claude Code** as the reference implementation, with the provider-neu
 [![Pi tests](https://github.com/gosha70/code-copilot-team/actions/workflows/pi-tests.yml/badge.svg)](https://github.com/gosha70/code-copilot-team/actions/workflows/pi-tests.yml)
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/gosha70/code-copilot-team)
 
+![Code Copilot Team in 35 seconds: the installer, cct features, and two safety hooks refusing an edit to .env and a git push](docs/images/demo.gif)
+
+<sub>Recorded on `master`: the `cct` command is not in the latest release yet. Every command shown is run by CI before the GIF is rendered — [`docs/demo/`](docs/demo/demo.tape).</sub>
+
 > 📖 **Deep dive:** [Stop Fighting AI Agents and Build a Reusable Multi-Agent Dev Environment](https://www.linkedin.com/pulse/stop-fighting-ai-agents-build-reusable-multi-agent-dev-george-ivan-mxwbe) — the full story behind this project, lessons learned from 13+ real build sessions, and why every rule exists.
 
 ---

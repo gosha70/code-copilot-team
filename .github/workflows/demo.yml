@@ -1,0 +1,40 @@
+name: demo
+
+# The README demo as an executable test (#214 Phase 6.3). docs/demo/render.sh
+# first RUNS every command the tape types and fails if one breaks or its output
+# changes shape, then renders the GIF in the container docs/demo/Dockerfile
+# defines. The GIF is uploaded as an artifact; nothing is pushed back to the
+# repository. A person looks at it and commits docs/images/demo.gif.
+on:
+  pull_request:
+    paths:
+      - 'docs/demo/**'
+      - 'scripts/cct'
+      - 'scripts/lib/cct_features.py'
+      - 'shared/features/catalog.yaml'
+      - 'adapters/claude-code/setup.sh'
+      - 'adapters/claude-code/.claude/hooks/protect-files.sh'
+      - 'adapters/claude-code/.claude/hooks/protect-git.sh'
+      - '.github/workflows/demo.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check the tape's commands, then render it
+        run: bash docs/demo/render.sh "$RUNNER_TEMP/demo"
+
+      - name: Upload the rendered GIF
+        uses: actions/upload-artifact@v7
+        with:
+          name: demo-gif
+          path: ${{ runner.temp }}/demo/demo.gif
+          if-no-files-found: error
+          retention-days: 30

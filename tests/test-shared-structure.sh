@@ -1953,6 +1953,51 @@ rc=0
 grep -q 'cct' <<<"$TOUR_CODE" && ! grep -qE '(^|[^./[:alnum:]_-])cct ' <<<"$TOUR_CODE" || rc=1
 assert_ok "the tour calls ./scripts/cct, never a bare cct (setup does not put it on PATH)" "$rc"
 
+# ══════════════════════════════════════════════════════════════
+# README demo (#214 Phase 6.3). Rendering needs Docker and runs in its own
+# workflow; here, without it: the tape points at real files, the image pin is
+# the one that encodes, and the checker that makes the demo an executable test
+# really does fail when a command breaks.
+# ══════════════════════════════════════════════════════════════
+echo ""
+echo "=== README demo ==="
+DEMO_DIR="$REPO_DIR/docs/demo"
+TAPE="$DEMO_DIR/demo.tape"
+TAPE_CHECK="$DEMO_DIR/check-tape.py"
+
+rc=0
+for f in $(grep -E '^Type ' "$TAPE" | grep -oE '(\./)?(scripts|tests|adapters)/[A-Za-z0-9_./-]+' | sed 's#^\./##' | sort -u); do
+  [[ -e "$REPO_DIR/$f" ]] || { echo "    the tape runs a file that does not exist: $f"; rc=1; }
+done
+for h in $(grep -E '^Type ' "$TAPE" | grep -oE '~/\.claude/hooks/[A-Za-z0-9_.-]+' | sed 's#.*/##' | sort -u); do
+  [[ -f "$ADAPTER_DIR/.claude/hooks/$h" ]] || { echo "    the tape runs a hook the adapter does not ship: $h"; rc=1; }
+done
+assert_ok "every script and hook the demo tape runs exists" "$rc"
+
+rc=0
+[[ -x "$DEMO_DIR/render.sh" ]] && grep -q 'check-tape.py' "$DEMO_DIR/render.sh" || rc=1
+assert_ok "render.sh is executable and checks the tape before rendering it" "$rc"
+
+rc=0
+grep -qE '^FROM ghcr\.io/charmbracelet/vhs:v0\.11\.0$' "$DEMO_DIR/Dockerfile" || rc=1
+assert_ok "the demo image stays on the VHS release that encodes (v0.12.0 writes no file)" "$rc"
+
+rc=0
+grep -qF '](docs/images/demo.gif)' "$REPO_DIR/README.md" && [[ -s "$REPO_DIR/docs/images/demo.gif" ]] || rc=1
+assert_ok "the README shows the demo from docs/images, by a path the site can rewrite" "$rc"
+
+DEMO_TMP=$(mktemp -d)
+printf '# expect: hello\nType "clear" Enter\nType "# note" Enter\nType "echo hello | cat" Enter\n' > "$DEMO_TMP/good.tape"
+printf '# expect: hello\nType "echo hello" Enter\nType "false | cat" Enter\n' > "$DEMO_TMP/broken.tape"
+printf '# expect: goodbye\nType "echo hello" Enter\n' > "$DEMO_TMP/changed.tape"
+rc_good=0;    python3 "$TAPE_CHECK" "$DEMO_TMP/good.tape"    >/dev/null 2>&1 || rc_good=$?
+rc_broken=0;  python3 "$TAPE_CHECK" "$DEMO_TMP/broken.tape"  >/dev/null 2>&1 || rc_broken=$?
+rc_changed=0; python3 "$TAPE_CHECK" "$DEMO_TMP/changed.tape" >/dev/null 2>&1 || rc_changed=$?
+rm -rf "$DEMO_TMP"
+assert_eq "the tape checker passes a tape whose commands work" "0" "$rc_good"
+assert_eq "it fails when a command in a pipeline breaks" "1" "$rc_broken"
+assert_eq "it fails when the output no longer contains what the tape expects" "1" "$rc_changed"
+
 if [[ "$PASS" -ne "$TEST_SHARED_STRUCTURE_EXPECTED_PASS" ]]; then
   echo "  FAIL: assertion-count drift (expected $TEST_SHARED_STRUCTURE_EXPECTED_PASS, got $PASS)"
   FAIL=$((FAIL + 1))
