@@ -1990,13 +1990,16 @@ DEMO_TMP=$(mktemp -d)
 printf '# expect: hello\nType "clear" Enter\nType "# note" Enter\nType "echo hello | cat" Enter\n' > "$DEMO_TMP/good.tape"
 printf '# expect: hello\nType "echo hello" Enter\nType "false | cat" Enter\n' > "$DEMO_TMP/broken.tape"
 printf '# expect: goodbye\nType "echo hello" Enter\n' > "$DEMO_TMP/changed.tape"
+printf '# expect: hi\nType "echo hi" Enter\nType echo unquoted Enter\n' > "$DEMO_TMP/unparsed.tape"
 rc_good=0;    python3 "$TAPE_CHECK" "$DEMO_TMP/good.tape"    >/dev/null 2>&1 || rc_good=$?
 rc_broken=0;  python3 "$TAPE_CHECK" "$DEMO_TMP/broken.tape"  >/dev/null 2>&1 || rc_broken=$?
 rc_changed=0; python3 "$TAPE_CHECK" "$DEMO_TMP/changed.tape" >/dev/null 2>&1 || rc_changed=$?
+rc_unparsed=0; python3 "$TAPE_CHECK" "$DEMO_TMP/unparsed.tape" >/dev/null 2>&1 || rc_unparsed=$?
 rm -rf "$DEMO_TMP"
 assert_eq "the tape checker passes a tape whose commands work" "0" "$rc_good"
 assert_eq "it fails when a command in a pipeline breaks" "1" "$rc_broken"
 assert_eq "it fails when the output no longer contains what the tape expects" "1" "$rc_changed"
+assert_eq "it refuses a Type line it cannot parse rather than skipping its command" "1" "$rc_unparsed"
 
 if [[ "$PASS" -ne "$TEST_SHARED_STRUCTURE_EXPECTED_PASS" ]]; then
   echo "  FAIL: assertion-count drift (expected $TEST_SHARED_STRUCTURE_EXPECTED_PASS, got $PASS)"
