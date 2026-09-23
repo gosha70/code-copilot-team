@@ -111,12 +111,7 @@ _TURNS_BOOL_IDX = (4,)  # has_tool_use
 # range — the normalizer then coerced 'NEUTRAL' to 1 and exported a
 # corrupted column. A positional list that must be re-counted by hand
 # whenever a column moves is a defect waiting for the next edit.
-_LABELS_BOOL_NAMES = (
-    "user_corrects_agent", "user_asks_question", "user_gives_command",
-    "agent_asks_clarification", "user_changes_approach",
-    "agent_changes_approach", "has_misunderstanding", "response_helpful",
-    "rework_detected",
-)
+_LABELS_BOOL_NAMES = C.LABEL_BOOL_NAMES
 _LABELS_BOOL_IDX = tuple(
     LABELS_COLUMNS.index(name) for name in _LABELS_BOOL_NAMES
 )

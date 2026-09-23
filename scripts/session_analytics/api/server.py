@@ -1106,11 +1106,19 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         # E10 Slice B (#65): tokenized, ranked search over archived
         # (redacted) trace text; `limit` is a top-N. Degrades to Slice A
         # substring ordering when the store has no usable index.
+        # The normal noise policy applies (#371 A2), and the archive's
+        # coverage comes back with the hits so a page can tell "no match"
+        # from "nothing archived yet".
         if not q.strip():
             raise HTTPException(status_code=400, detail="empty search query")
+        noise = load_config().noise
         conn = db()
         try:
-            return {"query": q, "results": arch.search_traces(conn, q, limit=limit)}
+            return {
+                "query": q,
+                "results": arch.search_traces(conn, q, limit=limit, noise=noise),
+                "coverage": arch.archive_coverage(conn, noise=noise),
+            }
         finally:
             conn.close()
 
@@ -1317,32 +1325,45 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
     def sessions(
         query: str = "", copilot: str = "", limit: int = 50, include_noise: bool = False,
         sort: str = mcp_tools.SESSION_SORT_DEFAULT, order: str = "desc",
+        date_from: str = "", date_to: str = "", tag: str = "",
+        developer: str = "", model: str = "", tool: str = "",
+        min_cost: Optional[float] = None, max_cost: Optional[float] = None,
+        label: str = "",
     ) -> dict[str, Any]:
         """The list, noise excluded by default (#307); ``excluded_noise``
         is how many the same filters would add with include_noise=1, so
         the page's toggle can say "Show excluded (n)". ``sort``/``order``
-        are the grid's column headers; the limit applies after ordering."""
+        are the grid's column headers; the limit applies after ordering.
+        The filters (#371 A2) combine with AND; ``facets`` are the values
+        they can take, over the same population as the list."""
         if order not in ("asc", "desc"):
             raise HTTPException(status_code=400, detail="order must be asc or desc")
         noise = load_config().noise
+        filters = dict(
+            copilot=copilot or None, date_from=date_from or None, date_to=date_to or None,
+            tag=tag or None, developer=developer or None, model=model or None,
+            tool=tool or None, min_cost=min_cost, max_cost=max_cost, label=label or None,
+        )
         conn = db()
         try:
             try:
                 rows = mcp_tools.search_sessions(
-                    conn, query or None, copilot=copilot or None, limit=limit,
+                    conn, query or None, limit=limit,
                     noise=noise, include_noise=include_noise,
-                    sort=sort, descending=(order == "desc"),
+                    sort=sort, descending=(order == "desc"), **filters,
                 )
-            except mcp_tools.UnknownSortError as exc:
+                excluded = mcp_tools.count_noise_sessions(conn, noise, query or None, **filters)
+            except (
+                mcp_tools.UnknownSortError, mcp_tools.UnknownTagError, mcp_tools.UnknownLabelError
+            ) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from None
             return {
                 "sessions": rows,
                 "sort": sort,
                 "order": order,
-                "excluded_noise": mcp_tools.count_noise_sessions(
-                    conn, noise, query or None, copilot=copilot or None,
-                ),
+                "excluded_noise": excluded,
                 "include_noise": include_noise,
+                "facets": mcp_tools.session_facets(conn, noise=noise, include_noise=include_noise),
             }
         finally:
             conn.close()

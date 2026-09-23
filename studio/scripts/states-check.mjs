@@ -80,6 +80,9 @@ try {
         join(STUDIO, "components/ResponseTime.tsx"),
         join(STUDIO, "components/TraceTree.tsx"),
         join(STUDIO, "lib/traceView.ts"),
+        join(STUDIO, "lib/searchView.ts"),
+        join(STUDIO, "lib/filterView.ts"),
+        join(STUDIO, "components/SessionFilters.tsx"),
         join(STUDIO, "components/SessionHeader.tsx"),
         join(STUDIO, "components/SessionTags.tsx"),
         join(STUDIO, "lib/graphView.ts"),
@@ -1085,6 +1088,45 @@ try {
   const ttCycle = ttShapeOf([ttTurn(0), ttTurn(1, { is_sidechain: true, parent_sequence: 2 }), ttTurn(2, { is_sidechain: true, parent_sequence: 1 })]);
   if (ttCycle !== "0[] 1[] 2[]") fail(`cycle: ${ttCycle}`);
   else console.log("  ok  a cyclic chain falls back to the top level instead of looping");
+
+  // ── search page + session filters (#371 A2) ─────────────────────────
+  console.log("\nsearch and filters:");
+  const a2sv = await import(pathToFileURL(join(out, "lib/searchView.js")));
+  const a2cov = (e, s, t) => ({ eligible_sessions: e, archived_sessions: s, archived_turns: t });
+  const a2hit = { session_ref: 7, session_id: "s", sequence_num: 12, snippet: "…", project_path: "/p", copilot: "claude-code", redaction_mode: "code" };
+  if (a2sv.hitHref(a2hit) !== "/sessions/7#turn-12") fail("hitHref");
+  else console.log("  ok  a hit links to its turn on the session page");
+  const a2st = (q, r) => a2sv.searchState(q, r).kind;
+  if (a2st("", null) !== "idle" || a2st("x", null) !== "idle") fail("idle state");
+  else if (a2st("x", { query: "x", results: [], coverage: a2cov(42, 0, 0) }) !== "nothing-archived") fail("nothing-archived");
+  else if (a2st("x", { query: "x", results: [], coverage: a2cov(42, 3, 900) }) !== "no-match") fail("no-match");
+  else if (a2st("x", { query: "x", results: [a2hit], coverage: a2cov(42, 3, 900) }) !== "hits") fail("hits");
+  else console.log("  ok  idle, nothing archived, no match, hits: told apart by the coverage figures");
+  if (!/Nothing is archived yet/.test(a2sv.stateLine(a2sv.searchState("x", { query: "x", results: [], coverage: a2cov(42, 0, 0) }))) || !/42 sessions could be/.test(a2sv.stateLine(a2sv.searchState("x", { query: "x", results: [], coverage: a2cov(42, 0, 0) })))) fail("nothing-archived line");
+  else if (!/No match in 900 archived turns across 3 sessions/.test(a2sv.stateLine(a2sv.searchState("x", { query: "x", results: [], coverage: a2cov(42, 3, 900) })))) fail("no-match line");
+  else if (!/1 match, best first/.test(a2sv.stateLine(a2sv.searchState("x", { query: "x", results: [a2hit], coverage: a2cov(42, 1, 5) })))) fail("hits line");
+  else console.log("  ok  each state says its numbers, singular and plural right");
+  if (!/no model involved/.test(a2sv.SEARCH_VS_ASK) || !/Ask/.test(a2sv.SEARCH_VS_ASK)) fail("search vs ask");
+  else console.log("  ok  the page says what Search is and what Ask is");
+
+  const a2fv = await import(pathToFileURL(join(out, "lib/filterView.js")));
+  const a2fromUrl = a2fv.filtersFromParams((k) => ({ tool: "bash", min_cost: "0.5", max_cost: "abc", date_to: "2026-09-22", label: "" })[k] ?? null);
+  const a2sorted = (o) => JSON.stringify(Object.fromEntries(Object.entries(o).sort()));
+  if (a2sorted(a2fromUrl) !== a2sorted({ tool: "bash", min_cost: 0.5, date_to: "2026-09-22" })) fail(`filtersFromParams: ${JSON.stringify(a2fromUrl)}`);
+  else if (a2fv.paramsFromFilters(a2fromUrl).toString() !== "date_to=2026-09-22&tool=bash&min_cost=0.5") fail(`paramsFromFilters: ${a2fv.paramsFromFilters(a2fromUrl)}`);
+  else if (a2fv.activeCount(a2fromUrl) !== 3 || a2fv.activeCount({}) !== 0) fail("activeCount");
+  else console.log("  ok  filters round-trip through the URL; a non-number and a blank are dropped; the active count is right");
+
+  const a2sf = await import(pathToFileURL(join(out, "components/SessionFilters.js")));
+  const a2facets = { developers: ["me"], models: ["m1", "m2"], tools: ["bash"], labels: ["rework_detected"] };
+  const a2bar = render(a2sf.default, { filters: { tool: "bash", min_cost: 0.5 }, facets: a2facets, onChange: () => {} });
+  if (!/<option value="m1">m1<\/option>/.test(a2bar) || !/<option value="rework_detected">/.test(a2bar)) fail("facet options");
+  else if (!/clear 2 filters/.test(a2bar)) fail(`clear count: ${a2bar.match(/clear[^<]*/)?.[0]}`);
+  else if (!/priced cost/.test(a2bar) || !/the whole day, inclusive/.test(a2bar)) fail("labels: priced cost / inclusive day");
+  else console.log("  ok  the bar offers the facets, counts the active filters, and names priced cost and the inclusive day");
+  const a2bare = render(a2sf.default, { filters: {}, facets: null, onChange: () => {} });
+  if (/clear \d/.test(a2bare) || !/Any developer/.test(a2bare)) fail("bare bar");
+  else console.log("  ok  no facets yet: the dropdowns still render with their any-value option, and there is nothing to clear");
 
   if (!process.exitCode) console.log("\nstates-check: all states asserted");
 } finally {

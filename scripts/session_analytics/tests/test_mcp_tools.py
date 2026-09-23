@@ -239,6 +239,29 @@ class TestMcpTools(RegistryResetTestCase):
         self.assertIsNone(orphan["parent_sequence"])
         self.assertEqual(len(turns), 6)
 
+    def test_mcp_search_sessions_wrapper_exposes_every_filter(self) -> None:
+        """FR-2 (#371 A2): the public MCP tool carries the same filters the
+        query layer has, and forwards them. Contract: the registered
+        schema names each one; a call with a filter narrows."""
+        import asyncio
+
+        try:
+            from session_analytics.mcp.server import build_server
+            server = build_server(self.dsn)
+        except ImportError:
+            self.skipTest("mcp SDK not installed")
+        tool = next(t for t in asyncio.run(server.list_tools()) if t.name == "search_sessions")
+        props = set(tool.inputSchema.get("properties", {}))
+        for name in ("query", "copilot", "date_from", "date_to", "limit", "tag", "developer",
+                     "model", "tool", "min_cost", "max_cost", "label"):
+            self.assertIn(name, props, name)
+        # And they reach the query: a tool the fixture used keeps it, one it
+        # did not drops it.
+        kept = asyncio.run(server.call_tool("search_sessions", {"tool": "bash"}))
+        dropped = asyncio.run(server.call_tool("search_sessions", {"tool": "no-such-tool"}))
+        self.assertEqual(len(_tool_rows(kept)), 1)
+        self.assertEqual(len(_tool_rows(dropped)), 0)
+
     def test_get_session_details_missing(self) -> None:
         self.assertIn("error", tools.get_session_details(self.db, 99999))
 
@@ -261,3 +284,17 @@ class TestMcpTools(RegistryResetTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _tool_rows(result):
+    """The list a FastMCP tool returned, whichever shape the SDK hands back
+    (structured content, or a JSON text block)."""
+    import json
+
+    if isinstance(result, tuple):
+        result = result[1] if len(result) > 1 and isinstance(result[1], (list, dict)) else result[0]
+    if isinstance(result, dict) and "result" in result:
+        return result["result"]
+    if isinstance(result, list) and result and hasattr(result[0], "text"):
+        return json.loads(result[0].text) if result[0].text.startswith("[") else [json.loads(c.text) for c in result]
+    return result

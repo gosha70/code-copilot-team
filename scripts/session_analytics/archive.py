@@ -415,6 +415,31 @@ def _purge_unauthorized(
 # ── search (Slice B: tokenized + ranked; Slice A substring as fallback) ─
 
 
+def archive_coverage(
+    db: Database, *, noise: Optional[NoiseConfig] = None
+) -> dict[str, int]:
+    """What the archive holds, so a search page can tell "no match" from
+    "nothing archived" (#371 A2): sessions with at least one archived
+    turn, archived turns, and the sessions the noise policy would let a
+    search see at all. Counts, not content."""
+    keep_sql, keep_params = (
+        keep_clause(noise, "copilot_session") if noise is not None else ("1=1", ())
+    )
+    params = tuple(keep_params)
+    one = lambda sql: int((db.query_one(sql, params) or (0,))[0] or 0)  # noqa: E731
+    return {
+        "eligible_sessions": one(f"SELECT COUNT(*) FROM copilot_session WHERE {keep_sql}"),
+        "archived_sessions": one(
+            f"SELECT COUNT(DISTINCT td.session_ref) FROM {C.TBL_TRACE_DOCUMENT} td "
+            f"JOIN copilot_session ON copilot_session.id = td.session_ref WHERE {keep_sql}"
+        ),
+        "archived_turns": one(
+            f"SELECT COUNT(*) FROM {C.TBL_TRACE_DOCUMENT} td "
+            f"JOIN copilot_session ON copilot_session.id = td.session_ref WHERE {keep_sql}"
+        ),
+    }
+
+
 def search_traces(
     db: Database, query: str, *, limit: int = C.SEARCH_DEFAULT_LIMIT,
     noise: Optional[NoiseConfig] = None,

@@ -1,16 +1,36 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { Suspense, useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { SessionSort, SessionTagsInfo, api } from "@/lib/api";
+import { useRouter, useSearchParams } from "next/navigation";
+import { SessionFilters, SessionSort, SessionTagsInfo, api } from "@/lib/api";
+import { filtersFromParams, paramsFromFilters } from "@/lib/filterView";
+import SessionFiltersBar from "@/components/SessionFilters";
 import SessionTagIcons, { HandTag, TAG_LABEL, TagHeaderIcon } from "@/components/SessionTags";
 import { Card, ErrorNote, Loading, formatCost, useApi } from "@/components/ui";
 
 const REFRESH_MS = 15000;
 
 export default function SessionsPage() {
-  const [query, setQuery] = useState("");
-  const [copilot, setCopilot] = useState("");
+  // useSearchParams needs a Suspense boundary for the static shell.
+  return (
+    <Suspense fallback={<Loading />}>
+      <Sessions />
+    </Suspense>
+  );
+}
+
+function Sessions() {
+  // The filters live in the URL (#371 A2): a filtered list can be linked
+  // and reloaded, and the browser's back button undoes a filter.
+  const params = useSearchParams();
+  const router = useRouter();
+  const filters: SessionFilters = filtersFromParams((k) => params.get(k));
+  const setFilters = (next: SessionFilters) => {
+    const p = paramsFromFilters(next).toString();
+    router.replace(p ? `/sessions?${p}` : "/sessions");
+  };
+  const filterKey = params.toString();
   // #307: probe runs and too-short sessions are hidden by default. The
   // count on the toggle is the server's, from the same filters, so it
   // equals what appears when the toggle is on.
@@ -21,10 +41,16 @@ export default function SessionsPage() {
   const [sort, setSort] = useState<SessionSort>("started_at");
   const [order, setOrder] = useState<"asc" | "desc">("desc");
   const { data, error, loading } = useApi(
-    () => api.sessions(query, copilot, showNoise, sort, order),
-    [query, copilot, showNoise, sort, order],
+    () => api.sessions(filters, showNoise, sort, order),
+    [filterKey, showNoise, sort, order],
     REFRESH_MS
   );
+  // Facets arrive with every list; keep the last ones while a new list
+  // loads so the dropdowns do not flicker empty.
+  const [facets, setFacets] = useState(data?.facets ?? null);
+  useEffect(() => {
+    if (data?.facets) setFacets(data.facets);
+  }, [data]);
 
   // A tag toggled in the grid shows at once (an override on that row)
   // and the override is dropped when the next server list arrives —
@@ -94,23 +120,7 @@ export default function SessionsPage() {
           Auto-refreshing every {REFRESH_MS / 1000}s
         </span>
       </div>
-      <div className="flex gap-3">
-        <input
-          className="border border-slate-300 bg-white text-slate-900 rounded px-3 py-1.5 text-sm flex-1"
-          placeholder="Search project path / model…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        <select
-          className="border border-slate-300 bg-white text-slate-900 rounded px-3 py-1.5 text-sm"
-          value={copilot}
-          onChange={(e) => setCopilot(e.target.value)}
-        >
-          <option value="">All copilots</option>
-          <option value="claude-code">Claude Code</option>
-          <option value="aider">Aider</option>
-        </select>
-      </div>
+      <SessionFiltersBar filters={filters} facets={facets} onChange={setFilters} />
       {data && data.excluded_noise > 0 && (
         <label className="flex items-center gap-2 text-sm text-slate-600">
           <input
@@ -144,7 +154,7 @@ export default function SessionsPage() {
                 <Th column="turn_count" className="text-right pr-3">Turns</Th>
                 <Th column="tool_call_count" className="text-right pr-3">Tools</Th>
                 <Th column="error_count" className="text-right pr-3">Errors</Th>
-                <Th column="cost_usd" className="text-right pr-3">Cost</Th>
+                <Th column="cost_usd" className="text-right pr-3" label="priced cost">Priced cost</Th>
                 <Th column="started_at" className="pl-3">Started</Th>
               </tr>
             </thead>

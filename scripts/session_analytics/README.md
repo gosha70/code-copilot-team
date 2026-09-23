@@ -467,6 +467,28 @@ exports via `--table benchmark_results` (and `--table all`).
 **Deferred (out of scope)**: a Studio comparison UI; a fuzzy `project_path` +
 time-window fallback for null-`session_id` runs — a later E9 issue.
 
+## Search and filters (#371 A2)
+
+The Sessions page filters by developer, model, tool (at least one call to
+it), the packaged rubric's labels (marked true on at least one turn), tag,
+a date range, and **priced cost**. The filters live in the URL, so a
+filtered list can be linked. The dropdowns offer the values the store
+really has, over the same population as the list, so "Show excluded (n)"
+counts under the same filters. Two rules worth knowing: a "to" date names
+the whole day, inclusive; and *priced cost* is the sum of the turns that
+carry a price, so a session with no priced turn has an unknown cost and
+matches neither bound, it is never shown as zero. The same filters are on
+`GET /api/sessions` and the MCP `search_sessions` tool; an unknown tag or
+label is a 400.
+
+The **Search** page is ranked, deterministic matching over archived turns
+(`GET /api/search`), with no model involved; every hit links to its turn
+on the session page. It reports the archive's coverage alongside the hits,
+so "no match" and "nothing archived yet" are told apart: only projects
+that opted into `trace_archive` are searchable. **Ask** is the other
+thing: it interprets the whole store through a model. Search takes a nav
+entry that the #307 nav cut had left out, on purpose.
+
 ## Trace tree (#371 A1)
 
 A session page shows, under each turn, what the agent did with its tools:
