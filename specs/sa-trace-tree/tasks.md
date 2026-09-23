@@ -9,4 +9,4 @@
 | 3 | Studio: `TurnRow` type, `TraceTree` component, Timeline nesting; existing behaviours kept (FR-4, FR-5) | `studio/lib/api.ts`, `studio/components/TraceTree.tsx`, `studio/app/sessions/[id]/page.tsx` | [x] |
 | 4 | `states-check` entry for `TraceTree`; README paragraph (FR-6) | `studio/scripts/states-check.mjs`, `scripts/session_analytics/README.md` | [x] |
 | 5 | Verify against a scratch store on separate ports; report payload size on the largest session; the owner's store only after they authorize recreating it | — | [x] |
-| 6 | Gates, alignment re-check (two owner review rounds folded in), `/review-submit`, PR (no close marker), CI green | — | [ ] |
+| 6 | Gates, alignment re-check (two owner review rounds folded in), `/review-submit` (DeepSeek PASS ×2), PR (no close marker), CI green | — | [ ] |
