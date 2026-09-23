@@ -80,7 +80,8 @@ CREATE TABLE IF NOT EXISTS copilot_tool_result (
     status        VARCHAR(20),
     is_error      BOOLEAN NOT NULL DEFAULT FALSE,
     output_length INTEGER,
-    error_message TEXT
+    error_message TEXT,
+    completed_at  TEXT                    -- schema 8 (#371 A1): the result record's timestamp
 );
 
 CREATE TABLE IF NOT EXISTS copilot_file_access (

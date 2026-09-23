@@ -104,7 +104,12 @@ _DDL_FILES = (
 #    is the whole migration.
 # 6: + human_label (#313, judge validation) — likewise a new table.
 # 7: + auto_build_verdict (#190 §12, auto-build-run-surface) — a new table.
-_SCHEMA_VERSION = 7
+# 8: + copilot_tool_result.completed_at (#371 A1, the trace tree). A COLUMN
+#    on an existing table, which create-if-absent cannot add: apply_ddl
+#    refuses a store that has the table without the column, and says how
+#    to recreate it. Session Analytics is unreleased; there is no
+#    migration path by the owner's ruling.
+_SCHEMA_VERSION = 8
 
 _PK_SQL = {
     DIALECT_POSTGRES: "BIGSERIAL PRIMARY KEY",
@@ -233,12 +238,74 @@ def _statements(sql_text: str) -> list[str]:
     return [s.strip() for s in body.split(";") if s.strip()]
 
 
+class SchemaMismatch(RuntimeError):
+    """The store predates the current schema in a way create-if-absent
+    cannot repair. The message names the remedy."""
+
+
+# Columns that create-if-absent cannot add to a store that already has the
+# table. Checked before anything is recorded, so an old store is refused
+# with a remedy rather than stamped current and then failing on a query.
+_REQUIRED_COLUMNS = (("copilot_tool_result", "completed_at"),)
+
+
+def _has_table(db: Database, table: str) -> bool:
+    if db.dialect == DIALECT_SQLITE:
+        row = db.query_one(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+        )
+    else:
+        # The store's own schema only: a same-named table elsewhere on the
+        # search_path must not answer for it.
+        row = db.query_one(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema = current_schema() AND table_name = ?",
+            (table,),
+        )
+    return row is not None
+
+
+def _has_column(db: Database, table: str, column: str) -> bool:
+    if db.dialect == DIALECT_SQLITE:
+        return any(r[1] == column for r in db.query(f"PRAGMA table_info({table})"))
+    row = db.query_one(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?",
+        (table, column),
+    )
+    return row is not None
+
+
+def check_schema(db: Database) -> None:
+    """Refuse a store whose existing tables lack a column the current
+    schema needs. Raises SchemaMismatch; a fresh store passes."""
+    for table, column in _REQUIRED_COLUMNS:
+        if _has_table(db, table) and not _has_column(db, table, column):
+            # A store can have the table and no version row at all (a
+            # partial creation); the refusal must still be this one.
+            found = (
+                db.query_one("SELECT MAX(version) FROM schema_version")
+                if _has_table(db, "schema_version")
+                else None
+            )
+            found_version = found[0] if found and found[0] is not None else "unknown"
+            raise SchemaMismatch(
+                f"this store was created with schema version {found_version}; "
+                f"version {_SCHEMA_VERSION} adds {table}.{column}, which cannot be "
+                "added in place. Session Analytics is unreleased and has no "
+                "migration: recreate the store (delete the SQLite file, or drop the "
+                "Postgres schema), then run `session-analytics ingest --full`."
+            )
+
+
 def apply_ddl(db: Database) -> None:
-    """Create all tables + indexes if absent. Idempotent.
+    """Create all tables + indexes if absent. Idempotent for a store at the
+    current schema; refuses one that predates it (see check_schema).
 
     Substitutes the ``{PK}`` placeholder for the dialect's auto-increment
     primary-key declaration, then runs each statement.
     """
+    check_schema(db)
     pk = _PK_SQL[db.dialect]
     for fname in _DDL_FILES:
         text = resources.files(_DDL_PACKAGE).joinpath(fname).read_text(encoding="utf-8")

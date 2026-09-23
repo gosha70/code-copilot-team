@@ -21,6 +21,7 @@ from ..relational.db import (
     DIALECT_POSTGRES,
     DIALECT_SQLITE,
     Database,
+    SchemaMismatch,
     apply_ddl,
     is_sqlite_dsn,
 )
@@ -182,12 +183,17 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
     # table. Apply the idempotent DDL once at app creation; a briefly
     # unreachable DB is logged, not fatal (matching the old startup behavior —
     # requests surface connection errors as before).
+    # A store from before the current schema is a different case (#371 A1):
+    # the refusal carries the remedy, and an API started over that store
+    # would fail on its first query instead of saying so. It escapes.
     try:
         _conn = db()
         try:
             apply_ddl(_conn)
         finally:
             _conn.close()
+    except SchemaMismatch:
+        raise
     except Exception as exc:  # noqa: BLE001
         _log.warning("startup apply_ddl skipped (db unreachable?): %s", exc)
 

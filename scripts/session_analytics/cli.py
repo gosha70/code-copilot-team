@@ -19,6 +19,7 @@ from . import constants as C
 from . import identity as IDENT
 from .config import AnalyticsConfig, load_config
 from .registry import UnknownAdapterError, list_adapter_ids
+from .relational.db import SchemaMismatch
 
 _log = logging.getLogger(__name__)
 
@@ -516,6 +517,8 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
     except UnknownAdapterError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return C.EXIT_USAGE
+    except SchemaMismatch:
+        raise  # the store predates the schema; main() prints the remedy
     except Exception as exc:  # noqa: BLE001 — surface as runtime failure
         _log.exception("ingest failed")
         print(f"error: ingest failed: {exc}", file=sys.stderr)
@@ -542,6 +545,8 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             report["store"] = _store_counts(db)
             report["store"]["dsn_dialect"] = db.dialect
             db.close()
+        except SchemaMismatch:
+            raise  # the store predates the schema; main() prints the remedy
         except Exception as exc:  # noqa: BLE001
             report["store"] = {"error": str(exc)}
     else:
@@ -598,6 +603,8 @@ def _cmd_graph(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return C.EXIT_RUNTIME
+    except SchemaMismatch:
+        raise  # the store predates the schema; main() prints the remedy
     except Exception as exc:  # noqa: BLE001
         _log.exception("graph build failed")
         print(f"error: graph build failed: {exc}", file=sys.stderr)
@@ -668,6 +675,8 @@ def _cmd_export(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return C.EXIT_USAGE
+    except SchemaMismatch:
+        raise  # the store predates the schema; main() prints the remedy
     except Exception as exc:  # noqa: BLE001
         _log.exception("export failed")
         print(f"error: export failed: {exc}", file=sys.stderr)
@@ -721,6 +730,8 @@ def _cmd_correlate(args: argparse.Namespace) -> int:
             cor.run(db, args.runs_root, stats=stats)
         finally:
             db.close()
+    except SchemaMismatch:
+        raise  # the store predates the schema; main() prints the remedy
     except Exception as exc:  # noqa: BLE001
         # FR-4: the partial counters gathered before the failure are still
         # reported (same JSON shape, stderr — stdout stays success-only).
@@ -825,6 +836,8 @@ def _cmd_watch(args: argparse.Namespace) -> int:
             should_stop=stop.is_set,
             fail_fast_first=True,
         )
+    except SchemaMismatch:
+        raise  # the store predates the schema; main() prints the remedy
     except Exception:
         _log.exception("watch: initial ingest failed — check DSN / config")
         return C.EXIT_RUNTIME
@@ -862,6 +875,8 @@ def _cmd_archive(args: argparse.Namespace) -> int:
             project_id_rules=cfg.project_id_rules,
             stats=stats,
         )
+    except SchemaMismatch:
+        raise  # the store predates the schema; main() prints the remedy
     except Exception as exc:  # noqa: BLE001
         print(json.dumps(stats.as_dict(), indent=2), file=sys.stderr)
         print(
@@ -903,6 +918,8 @@ def _cmd_search(args: argparse.Namespace) -> int:
             results = arch.search_traces(db, args.query, limit=args.limit)
         finally:
             db.close()
+    except SchemaMismatch:
+        raise  # the store predates the schema; main() prints the remedy
     except Exception as exc:  # noqa: BLE001
         print(f"error: search failed: {exc}", file=sys.stderr)
         _log.exception("search failed")
@@ -958,6 +975,8 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
     except UnknownJudgeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return C.EXIT_USAGE
+    except SchemaMismatch:
+        raise  # the store predates the schema; main() prints the remedy
     except Exception as exc:  # noqa: BLE001
         _log.exception("analyze failed")
         print(f"error: analyze failed: {exc}", file=sys.stderr)
@@ -1040,6 +1059,8 @@ def _cmd_embed(args: argparse.Namespace) -> int:
             )
         finally:
             db.close()
+    except SchemaMismatch:
+        raise  # the store predates the schema; main() prints the remedy
     except Exception as exc:  # noqa: BLE001 — a refused pass (probe,
         #                       config) is a runtime error, reported
         #                       plainly with zero writes performed.
@@ -1204,6 +1225,8 @@ def _cmd_similar(args: argparse.Namespace) -> int:
         # exists but uninitialized: a prerequisite, with guidance.
         print(f"error: {exc}", file=sys.stderr)
         return C.EXIT_USAGE
+    except SchemaMismatch:
+        raise  # the store predates the schema; main() prints the remedy
     except Exception as exc:  # noqa: BLE001 — a torn pass rolled back;
         #                       the previous edge set stands.
         _log.exception("similar failed")
@@ -1274,6 +1297,8 @@ def _cmd_clusters(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return C.EXIT_RUNTIME
+    except SchemaMismatch:
+        raise  # the store predates the schema; main() prints the remedy
     except Exception as exc:  # noqa: BLE001 — a read failure is reported,
         #                      never a traceback; nothing was written.
         _log.exception("clusters failed")
@@ -1302,6 +1327,8 @@ def _cmd_kpis(args: argparse.Namespace) -> int:
             stats = compute_kpis(db, rubric.name, session_id=args.session_id)
         finally:
             db.close()
+    except SchemaMismatch:
+        raise  # the store predates the schema; main() prints the remedy
     except Exception as exc:  # noqa: BLE001
         _log.exception("kpis failed")
         print(f"error: kpis failed: {exc}", file=sys.stderr)
@@ -1329,6 +1356,8 @@ def _cmd_calibrate(args: argparse.Namespace) -> int:
         # message names what to fix
         print(f"error: {exc}", file=sys.stderr)
         return C.EXIT_USAGE
+    except SchemaMismatch:
+        raise  # the store predates the schema; main() prints the remedy
     except Exception as exc:  # noqa: BLE001
         _log.exception("calibrate failed")
         print(f"error: calibrate failed: {exc}", file=sys.stderr)
@@ -1354,6 +1383,8 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return C.EXIT_RUNTIME
+    except SchemaMismatch:
+        raise  # the store predates the schema; main() prints the remedy
     except Exception as exc:  # noqa: BLE001
         _log.exception("mcp server failed")
         print(f"error: mcp server failed: {exc}", file=sys.stderr)
@@ -1425,4 +1456,12 @@ def main(argv: Sequence[str]) -> int:
     if handler is None:  # pragma: no cover — argparse enforces required choice
         parser.error(f"unknown subcommand: {args.subcommand}")
         return C.EXIT_USAGE
-    return handler(args)
+    # Every command that opens the store runs apply_ddl, and a store from
+    # before the current schema is refused there with its remedy (#371 A1).
+    # One place turns that into an exit code and a message, whatever the
+    # command; every handler's own catch-all lets it through.
+    try:
+        return handler(args)
+    except SchemaMismatch as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return C.EXIT_RUNTIME

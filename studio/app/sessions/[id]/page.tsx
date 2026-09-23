@@ -27,6 +27,8 @@ import {
 import SessionAnalysis, { PanelState } from "@/components/SessionAnalysis";
 import SimilarPanel, { stepsFor } from "@/components/SimilarPanel";
 import ResponseTimeCard from "@/components/ResponseTime";
+import TraceTree from "@/components/TraceTree";
+import { nestTurns } from "@/lib/traceView";
 import SessionHeader from "@/components/SessionHeader";
 import { HandTag } from "@/components/SessionTags";
 import { classifySimilar, type SimilarOutcome } from "@/lib/similarStates";
@@ -197,12 +199,21 @@ function Timeline({ data }: { data: SessionDetail }) {
           text.
         </p>
       )}
-      {data.turns.map((t) => (
-        <TurnCard
-          key={t.sequence_num}
-          t={t}
-          highlighted={t.sequence_num === target}
-        />
+      {nestTurns(data.turns).map(({ turn, children }) => (
+        <div key={turn.sequence_num}>
+          <TurnCard t={turn} highlighted={turn.sequence_num === target} />
+          {children.length > 0 && (
+            <div className="ml-6 mt-1 space-y-1 border-l-2 border-blue-100 pl-2">
+              {children.map((c) => (
+                <TurnCard
+                  key={c.sequence_num}
+                  t={c}
+                  highlighted={c.sequence_num === target}
+                />
+              ))}
+            </div>
+          )}
+        </div>
       ))}
     </div>
   );
@@ -268,7 +279,16 @@ function TurnCard({ t, highlighted }: { t: TurnRow; highlighted: boolean }) {
           )}
           <div className="flex flex-wrap gap-1 mt-1.5">
             {t.slash_command && <Badge kind="command">{t.slash_command}</Badge>}
-            {t.has_tool_use && <Badge kind="question">tools</Badge>}
+            {t.is_sidechain && (
+              <Badge kind="question">
+                {t.parent_sequence == null
+                  ? "subagent, parent not in this session"
+                  : "subagent"}
+              </Badge>
+            )}
+            {t.has_tool_use && t.tool_calls.length === 0 && (
+              <Badge kind="question">tools</Badge>
+            )}
             {turnBadges(t).map((b, i) => (
               <Badge key={i} kind={b.kind}>
                 {b.label}
@@ -280,6 +300,7 @@ function TurnCard({ t, highlighted }: { t: TurnRow; highlighted: boolean }) {
               </span>
             )}
           </div>
+          <TraceTree calls={t.tool_calls} />
         </div>
       </div>
     </Card>

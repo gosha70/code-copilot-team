@@ -68,6 +68,10 @@ class RawToolCall:
     sequence_num: int
     result_is_error: Optional[bool] = None
     result_text: Optional[str] = None
+    # ISO-8601 stamp of the record that carried the result, or ``None``
+    # when no result was paired or the record had no timestamp. The trace
+    # tree derives "time until result" from it (#371 A1).
+    result_timestamp: Optional[str] = None
 
 
 @dataclass(frozen=True)

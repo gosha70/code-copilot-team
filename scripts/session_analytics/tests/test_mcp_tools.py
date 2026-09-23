@@ -145,6 +145,100 @@ class TestMcpTools(RegistryResetTestCase):
         self.assertEqual(tools._percentile([1, 2, 3, 4, 5, 6], 0.5), 3)
         self.assertEqual(tools._percentile([7], 0.9), 7)
 
+    # ── the trace tree (#371 A1) ──────────────────────────────────────
+    def test_trace_tree_fixture_path(self) -> None:
+        """Every tool call is under its turn with its result, files and
+        the time until the result; the sidechain turn names its parent."""
+        turns = tools.get_session_details(self.db, self._session_id())["turns"]
+        calls = [(t["sequence_num"], c) for t in turns for c in t["tool_calls"]]
+        self.assertEqual([seq for seq, _ in calls], [1, 3])
+        bash, read = calls[0][1], calls[1][1]
+        self.assertEqual((bash["tool_name"], bash["has_result"], bash["status"], bash["is_error"]),
+                         ("bash", True, "success", False))
+        self.assertEqual((read["tool_name"], read["status"], read["is_error"]), ("file_read", "error", True))
+        self.assertEqual(read["files"], [{"file_path": "/repo/demo/app.py", "access_type": "read"}])
+        # Results land one second after the turn that issued the call.
+        self.assertEqual([c["duration_seconds"] for _, c in calls], [1.0, 1.0])
+        self.assertTrue(all(c["completed_at"] for _, c in calls))
+        # Turns without calls say so, rather than omitting the key.
+        self.assertEqual(turns[0]["tool_calls"], [])
+        # Exactly one sidechain turn, nested under the turn its parent_uuid names.
+        side = [t for t in turns if t["is_sidechain"]]
+        self.assertEqual([t["sequence_num"] for t in side], [5])
+        self.assertEqual(side[0]["parent_sequence"], 3)
+        self.assertIsNone(turns[0]["parent_sequence"])
+
+    def test_trace_tree_additive(self) -> None:
+        """Nothing the page relied on before changes shape (FR-3)."""
+        d = tools.get_session_details(self.db, self._session_id())
+        for key in ("sequence_num", "role", "content_preview", "has_tool_use", "slash_command",
+                    "sentiment", "interaction_quality", "timestamp", "content", "archived",
+                    "latency_seconds"):
+            self.assertIn(key, d["turns"][0])
+        self.assertEqual({t["tool"] for t in d["tool_usage"]}, {"bash", "file_read"})
+
+    def _add_call(self, turn_seq: int, *, with_result: bool, completed_at):
+        """A synthetic tool call on an existing turn, with or without a
+        result row: the cases the fixture does not carry."""
+        turn_id = self.db.query_one(
+            "SELECT id FROM copilot_turn WHERE session_id = ? AND sequence_num = ?",
+            (self._session_id(), turn_seq),
+        )[0]
+        self.db.execute(
+            "INSERT INTO copilot_tool_call (turn_id, tool_use_id, tool_name, tool_name_raw, "
+            "input_preview, sequence_num) VALUES (?, ?, ?, ?, ?, ?)",
+            (turn_id, f"synthetic-{turn_seq}", "bash", "Bash", "{}", 99),
+        )
+        call_id = self.db.query_one(
+            "SELECT id FROM copilot_tool_call WHERE tool_use_id = ?", (f"synthetic-{turn_seq}",)
+        )[0]
+        if with_result:
+            self.db.execute(
+                "INSERT INTO copilot_tool_result (tool_call_id, status, is_error, output_length, "
+                "error_message, completed_at) VALUES (?, 'success', 0, 3, NULL, ?)",
+                (call_id, completed_at),
+            )
+        self.db.commit()
+
+    def _synthetic_call(self, turn_seq: int):
+        turns = tools.get_session_details(self.db, self._session_id())["turns"]
+        turn = next(t for t in turns if t["sequence_num"] == turn_seq)
+        return next(c for c in turn["tool_calls"] if c["sequence_num"] == 99)
+
+    def test_trace_tree_unfinished_call_is_kept(self) -> None:
+        """A call whose result never came (a session ended mid-call) is
+        still listed, with null result and duration fields (FR-1c)."""
+        self._add_call(3, with_result=False, completed_at=None)
+        c = self._synthetic_call(3)
+        self.assertFalse(c["has_result"])
+        for key in ("status", "is_error", "output_length", "error_message", "completed_at",
+                    "duration_seconds"):
+            self.assertIsNone(c[key], key)
+
+    def test_trace_tree_duration_follows_latency_rule(self) -> None:
+        """Missing, malformed and backward timestamps all give a null
+        duration, the page's existing latency rule (FR-1a)."""
+        for seq, stamp in ((1, None), (3, "not-a-timestamp"), (5, "2026-05-29T09:00:00.000Z")):
+            self._add_call(seq, with_result=True, completed_at=stamp)
+            c = self._synthetic_call(seq)
+            self.assertTrue(c["has_result"], seq)
+            self.assertIsNone(c["duration_seconds"], (seq, stamp))
+
+    def test_trace_tree_orphan_sidechain_is_kept(self) -> None:
+        """A sidechain turn whose parent is not in the session stays in the
+        list, with parent_sequence null (D3)."""
+        self.db.execute(
+            "UPDATE copilot_turn SET parent_uuid = 'not-ingested' WHERE session_id = ? "
+            "AND sequence_num = 5",
+            (self._session_id(),),
+        )
+        self.db.commit()
+        turns = tools.get_session_details(self.db, self._session_id())["turns"]
+        orphan = next(t for t in turns if t["sequence_num"] == 5)
+        self.assertTrue(orphan["is_sidechain"])
+        self.assertIsNone(orphan["parent_sequence"])
+        self.assertEqual(len(turns), 6)
+
     def test_get_session_details_missing(self) -> None:
         self.assertIn("error", tools.get_session_details(self.db, 99999))
 
