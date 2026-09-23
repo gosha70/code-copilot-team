@@ -48,3 +48,11 @@ heuristic-v1 and nine. (2) The public MCP search_sessions wrapper only
 forwarded query, copilot and dates; it now carries and forwards every
 filter, with a contract test over the registered schema and a call
 through the built server. Verdict and confidence unchanged.
+
+Re-checked after the DeepSeek build review: round 1 PASS with one real
+inconsistency, a malformed date filtering silently where an unknown tag
+or label is refused; fixed (a 400, and a timestamp filter normalised to
+the stored shape, since text comparison put "...:00Z" after
+"...:00.000Z"). Round 2 PASS with restatements and one claim, a 500 on
+a non-numeric cost bound, disproved on both surfaces (HTTP 422, MCP
+validation error). Verdict and confidence unchanged.

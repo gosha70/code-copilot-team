@@ -9,4 +9,4 @@
 | 4 | Studio: filter bar with URL state; search page with turn links; nav entry (FR-3, FR-5) | `studio/components/SessionFilters.tsx`, `studio/app/sessions/page.tsx`, `studio/app/search/page.tsx`, `studio/lib/searchView.ts`, `studio/lib/api.ts`, `studio/app/layout.tsx` | [x] |
 | 5 | `states-check` states; README paragraph incl. Search vs Ask and the #307 note (FR-5a, FR-6) | `studio/scripts/states-check.mjs`, `scripts/session_analytics/README.md` | [x] |
 | 6 | Scratch-store verification on other ports; facet timing on the largest store | — | [x] |
-| 7 | Gates, alignment re-check, `/review-submit`, PR (no close marker), CI green | — | [ ] |
+| 7 | Gates, alignment re-check, `/review-submit` (DeepSeek PASS ×2), PR (no close marker), CI green | — | [ ] |
