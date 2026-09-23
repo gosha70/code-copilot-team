@@ -1354,7 +1354,8 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
                 )
                 excluded = mcp_tools.count_noise_sessions(conn, noise, query or None, **filters)
             except (
-                mcp_tools.UnknownSortError, mcp_tools.UnknownTagError, mcp_tools.UnknownLabelError
+                mcp_tools.UnknownSortError, mcp_tools.UnknownTagError,
+                mcp_tools.UnknownLabelError, mcp_tools.InvalidDateError,
             ) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from None
             return {

@@ -260,6 +260,12 @@ class UnknownLabelError(ValueError):
     """The requested label is not one the packaged rubric produces."""
 
 
+class InvalidDateError(ValueError):
+    """A date filter that is neither a day (YYYY-MM-DD) nor an ISO-8601
+    timestamp. Refused, like an unknown tag or label, rather than compared
+    as text and silently filtering everything or nothing."""
+
+
 # The priced subtotal, as _SESSION_SELECT_COLS computes it: NULL when no
 # turn of the session carries a price, which is "unknown", never zero.
 _PRICED_COST_SQL = (
@@ -289,13 +295,14 @@ def _session_filters(
         params.append(copilot)
     if date_from:
         where.append("started_at >= ?")
-        params.append(date_from)
+        params.append(_valid_date(date_from, "date_from"))
     if date_to:
         # A day means the whole day: "to 2026-09-22" includes a session
         # started at 23:59 that day, so the bound is "before the next day".
-        # Anything longer than a date (a full timestamp) is used as given.
+        # A full timestamp is used as given.
+        bound = _valid_date(date_to, "date_to")
         where.append("started_at < ?")
-        params.append(_day_after(date_to) if len(date_to) == 10 else date_to)
+        params.append(_day_after(bound) if len(bound) == 10 else bound)
     if tag:
         tag_sql = SESSION_TAG_FILTERS.get(tag)
         if tag_sql is None:
@@ -340,14 +347,33 @@ def _session_filters(
     return where, params
 
 
-def _day_after(day: str) -> str:
-    """'2026-09-22' → '2026-09-23'; a value that is not a date is returned
-    as given, so a malformed date_to filters nothing rather than raising."""
+def _valid_date(value: str, name: str) -> str:
+    """A day (YYYY-MM-DD) as given, or an ISO-8601 timestamp normalised to
+    the stored form (UTC, milliseconds, Z); InvalidDateError otherwise.
+    Timestamps compare as text in the store, and "…:00Z" sorts AFTER
+    "…:00.000Z" ('.' < 'Z'), so a filter must carry the same shape as the
+    rows or a session at the boundary second goes missing."""
+    from datetime import date, datetime, timezone
+
     try:
-        from datetime import date, timedelta
-        return (date.fromisoformat(day) + timedelta(days=1)).isoformat()
+        if len(value) == 10:
+            date.fromisoformat(value)
+            return value
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
-        return day
+        raise InvalidDateError(
+            f"{name} must be a day (YYYY-MM-DD) or an ISO-8601 timestamp, not {value!r}"
+        ) from None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+
+
+def _day_after(day: str) -> str:
+    """'2026-09-22' → '2026-09-23'. The caller has validated the day."""
+    from datetime import date, timedelta
+
+    return (date.fromisoformat(day) + timedelta(days=1)).isoformat()
 
 
 def session_facets(

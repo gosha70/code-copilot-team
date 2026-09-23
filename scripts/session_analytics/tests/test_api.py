@@ -562,6 +562,14 @@ class TestApi(RegistryResetTestCase):
         self.assertNotIn(early_next, got)
         self.assertIn(early_next, self._ids(self._list(date_to="2026-09-23")))
         self.assertEqual(self._ids(self._list(date_from="2026-09-23")), [early_next])
+        # A full timestamp is accepted as given; a malformed date is a 400,
+        # like an unknown tag or label, never a text comparison.
+        self.assertEqual(self._ids(self._list(date_from="2026-09-22T23:59:00Z")), [late, early_next])
+        for bad in ("not-a-date", "2026-13-01", "22/09/2026"):
+            r = self.client.get("/api/sessions", params={"date_to": bad})
+            self.assertEqual(r.status_code, 400, bad)
+            self.assertIn("date_to", r.json()["detail"])
+        self.assertEqual(self.client.get("/api/sessions", params={"date_from": "x"}).status_code, 400)
 
     def test_sessions_cost_filters_read_the_priced_subtotal(self) -> None:
         # The fixture's turns carry no price: its cost is unknown, and an
