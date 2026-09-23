@@ -81,6 +81,24 @@ class TestSchemaMismatch(unittest.TestCase):
         self.assertIn("ingest --full", message)
         self.assertEqual(store.query("SELECT version FROM schema_version"), [(7,)])
 
+    def test_partial_store_without_a_version_table_is_still_refused(self) -> None:
+        import sqlite3
+        import tempfile
+        from pathlib import Path
+
+        path = Path(tempfile.mkdtemp(prefix="cct-sa-partial-")) / "partial.db"
+        conn = sqlite3.connect(path)
+        conn.executescript(
+            "CREATE TABLE copilot_tool_result (id INTEGER PRIMARY KEY, tool_call_id INTEGER,"
+            " status TEXT, is_error INTEGER, output_length INTEGER, error_message TEXT);"
+        )
+        conn.commit()
+        conn.close()
+        store = db.Database.connect(f"sqlite:///{path}")
+        with self.assertRaises(db.SchemaMismatch) as ctx:
+            db.apply_ddl(store)
+        self.assertIn("schema version unknown", str(ctx.exception))
+
     def test_fresh_store_is_stamped_current(self) -> None:
         from session_analytics.tests.support import RegistryResetTestCase
 

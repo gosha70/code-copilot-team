@@ -857,7 +857,7 @@ def _attach_trace(
         """
         SELECT tc.turn_id, tc.id, tc.tool_name, tc.tool_name_raw, tc.input_preview,
                tc.sequence_num, r.status, r.is_error, r.output_length,
-               r.error_message, r.completed_at, f.file_path, f.access_type
+               r.error_message, r.completed_at, f.file_path, f.access_type, r.id
         FROM copilot_tool_call tc
         JOIN copilot_turn t ON t.id = tc.turn_id
         LEFT JOIN copilot_tool_result r ON r.tool_call_id = tc.id
@@ -868,13 +868,14 @@ def _attach_trace(
         (session["id"],),
     )
     calls_by_id: dict[Any, dict[str, Any]] = {}
-    for turn_id, call_id, name, raw, preview, seq, status, is_error, out_len, err, done, path, access in rows:
+    for turn_id, call_id, name, raw, preview, seq, status, is_error, out_len, err, done, path, access, result_id in rows:
         call = calls_by_id.get(call_id)
         if call is None:
             turn = by_turn_id.get(turn_id)
             if turn is None:
                 continue
-            has_result = status is not None or done is not None or is_error
+            # A result is a result ROW, whatever its fields hold.
+            has_result = result_id is not None
             call = {
                 "sequence_num": int(seq),
                 "tool_name": name,
