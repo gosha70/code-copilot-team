@@ -314,8 +314,9 @@ def _insert_turn_tree(
             db.execute(
                 """
                 INSERT INTO copilot_tool_result
-                    (tool_call_id, status, is_error, output_length, error_message)
-                VALUES (?, ?, ?, ?, ?)
+                    (tool_call_id, status, is_error, output_length, error_message,
+                     completed_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     tool_call_id,
@@ -328,6 +329,7 @@ def _insert_turn_tree(
                     redaction.redact_result(tc.result_text, redaction_mode, limit=1000)
                     if tc.result_is_error
                     else None,
+                    tc.result_timestamp,
                 ),
             )
 

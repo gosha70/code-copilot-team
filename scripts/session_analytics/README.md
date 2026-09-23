@@ -467,6 +467,36 @@ exports via `--table benchmark_results` (and `--table all`).
 **Deferred (out of scope)**: a Studio comparison UI; a fuzzy `project_path` +
 time-window fallback for null-`session_id` runs — a later E9 issue.
 
+## Trace tree (#371 A1)
+
+A session page shows, under each turn, what the agent did with its tools:
+every tool call in order, the result that came back or a "no result
+recorded" mark when the session ended mid-call, the files it touched, and
+the time until the result. Subagent (sidechain) turns sit nested under the
+turn that spawned them; one whose parent is not in the session stays at the
+top level, marked. All of it is what ingest already stores, redacted then:
+an input *preview*, never bodies. The same fields are on the MCP
+`get_session_details` tool (`tool_calls`, `is_sidechain`, `parent_sequence`).
+
+"Time until result" is the wall time from the turn that issued the call to
+the transcript record that carried its result. Calls issued together in one
+turn share a start, so their times overlap rather than add. It is `null`
+when either timestamp is missing or malformed, or the clock went backwards,
+the same rule as the per-turn latency.
+
+**Schema 8, and stores from before it.** The result timestamp lives in a new
+column, `copilot_tool_result.completed_at`. The DDL is create-if-absent and
+cannot add a column to an existing table, and Session Analytics is
+unreleased, so there is no migration: a store created before schema 8 is
+refused at startup with this message and remedy:
+
+```
+this store was created with schema version 7; version 8 adds
+copilot_tool_result.completed_at, which cannot be added in place …
+recreate the store (delete the SQLite file, or drop the Postgres schema),
+then run `session-analytics ingest --full`.
+```
+
 ## Trace archive + search (E10 Slice A, issue #98)
 
 The store keeps only 500-char redacted previews, while full traces live in

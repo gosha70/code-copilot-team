@@ -47,3 +47,78 @@ class TestDialect(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSchemaMismatch(unittest.TestCase):
+    """A store from before schema 8 lacks copilot_tool_result.completed_at,
+    which create-if-absent cannot add (#371 A1). apply_ddl must refuse it
+    with the remedy and record nothing, never stamp it current."""
+
+    def _old_store(self) -> str:
+        import sqlite3
+        import tempfile
+        from pathlib import Path
+
+        path = Path(tempfile.mkdtemp(prefix="cct-sa-old-")) / "old.db"
+        conn = sqlite3.connect(path)
+        conn.executescript(
+            "CREATE TABLE schema_version (version INTEGER, applied_at TEXT);"
+            "INSERT INTO schema_version VALUES (7, 'x');"
+            "CREATE TABLE copilot_tool_result (id INTEGER PRIMARY KEY, tool_call_id INTEGER,"
+            " status TEXT, is_error INTEGER, output_length INTEGER, error_message TEXT);"
+        )
+        conn.commit()
+        conn.close()
+        return f"sqlite:///{path}"
+
+    def test_pre_8_store_is_refused_with_the_remedy(self) -> None:
+        store = db.Database.connect(self._old_store())
+        with self.assertRaises(db.SchemaMismatch) as ctx:
+            db.apply_ddl(store)
+        message = str(ctx.exception)
+        self.assertIn("schema version 7", message)
+        self.assertIn("completed_at", message)
+        self.assertIn("ingest --full", message)
+        self.assertEqual(store.query("SELECT version FROM schema_version"), [(7,)])
+
+    def test_fresh_store_is_stamped_current(self) -> None:
+        from session_analytics.tests.support import RegistryResetTestCase
+
+        store = db.Database.connect(RegistryResetTestCase.sqlite_dsn(self))  # type: ignore[arg-type]
+        db.apply_ddl(store)
+        self.assertEqual(store.query("SELECT MAX(version) FROM schema_version"), [(8,)])
+
+    def test_pre_8_store_refused_by_the_api_and_the_cli(self) -> None:
+        """The refusal must reach the person, not be logged as a flaky
+        database at API startup (create_app) or shown as a traceback
+        (the CLI): one message with the remedy, exit code EXIT_RUNTIME."""
+        import io
+        from contextlib import redirect_stderr
+
+        from session_analytics import constants as C
+        from session_analytics.cli import main
+
+        dsn = self._old_store()
+        try:
+            from session_analytics.api.server import create_app
+        except ImportError:  # fastapi absent: the CLI half still runs
+            create_app = None
+        if create_app is not None:
+            with self.assertRaises(db.SchemaMismatch):
+                create_app(dsn)
+        # ingest is the command the remedy names, and the one a person runs
+        # first; doctor reports the same error inside its JSON by design.
+        err = io.StringIO()
+        with redirect_stderr(err):
+            rc = main(["ingest", "--db", dsn, "--copilot", "claude-code"])
+        self.assertEqual(rc, C.EXIT_RUNTIME)
+        self.assertIn("ingest --full", err.getvalue())
+        self.assertNotIn("Traceback", err.getvalue())
+        # A handler with its own catch-all (kpis logs a traceback and returns
+        # on any exception) must let the refusal through to the same place.
+        err = io.StringIO()
+        with redirect_stderr(err):
+            rc = main(["kpis", "--db", dsn])
+        self.assertEqual(rc, C.EXIT_RUNTIME)
+        self.assertIn("ingest --full", err.getvalue())
+        self.assertNotIn("Traceback", err.getvalue())

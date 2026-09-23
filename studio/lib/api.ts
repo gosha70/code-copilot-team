@@ -480,6 +480,33 @@ export interface TurnRow {
   interaction_quality: number | null;
   user_corrects_agent: boolean | null;
   rework_detected: boolean | null;
+  /** A subagent's turn (#371 A1). `parent_sequence` is the turn whose
+   *  uuid this turn's parent_uuid names; null when that turn is not in
+   *  this session (an orphan, shown at top level and marked). */
+  is_sidechain: boolean;
+  parent_sequence: number | null;
+  /** Every tool call the turn issued, in order; [] when none. */
+  tool_calls: ToolCallRow[];
+}
+
+export interface ToolCallRow {
+  sequence_num: number;
+  tool_name: string;
+  tool_name_raw: string | null;
+  /** Redacted at ingest; a preview, never the body. */
+  input_preview: string | null;
+  /** False when no result was recorded (the session ended mid-call);
+   *  the result fields are then all null. */
+  has_result: boolean;
+  status: string | null;
+  is_error: boolean | null;
+  output_length: number | null;
+  error_message: string | null;
+  completed_at: string | null;
+  /** Seconds from the issuing turn to the result record; null when either
+   *  stamp is missing or malformed or the clock went backwards. */
+  duration_seconds: number | null;
+  files: { file_path: string; access_type: string | null }[];
 }
 
 export interface SessionLatency {

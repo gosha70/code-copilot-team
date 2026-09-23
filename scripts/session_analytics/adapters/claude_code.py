@@ -269,6 +269,7 @@ def _collect_tool_results(records: list[dict[str, Any]]) -> dict[str, dict[str, 
             out[tid] = {
                 "is_error": bool(block.get("is_error", False)),
                 "text": _content_to_text(block.get("content")),
+                "timestamp": rec.get("timestamp"),
             }
     return out
 
@@ -305,6 +306,7 @@ def _blocks_to_turn(
                     sequence_num=tool_seq,
                     result_is_error=(paired.get("is_error") if paired else None),
                     result_text=(paired.get("text") if paired else None),
+                    result_timestamp=(paired.get("timestamp") if paired else None),
                 )
             )
             tool_seq += 1

@@ -78,6 +78,8 @@ try {
         join(STUDIO, "components/MarkdownDoc.tsx"),
         join(STUDIO, "lib/urls.ts"),
         join(STUDIO, "components/ResponseTime.tsx"),
+        join(STUDIO, "components/TraceTree.tsx"),
+        join(STUDIO, "lib/traceView.ts"),
         join(STUDIO, "components/SessionHeader.tsx"),
         join(STUDIO, "components/SessionTags.tsx"),
         join(STUDIO, "lib/graphView.ts"),
@@ -1049,6 +1051,40 @@ try {
   if (rvFoot.length !== 3 || !/broken/.test(rvFoot[0]) || !/already listed/.test(rvFoot[1]) || !/2 verdicts kept/.test(rvFoot[2])) fail(`footnotes: ${rvFoot.join(" | ")}`);
   else if (rv.footnotes(rvPayload([rvRun()])).length !== 0) fail("no footnotes when nothing was skipped");
   else console.log("  ok  skipped directories, duplicates and orphaned verdicts are said in the footnotes");
+
+  // ── trace tree (#371 A1) ────────────────────────────────────────────
+  console.log("\ntrace tree:");
+  const tt = await import(pathToFileURL(join(out, "components/TraceTree.js")));
+  const ttCall = (over) => ({ sequence_num: 0, tool_name: "bash", tool_name_raw: "Bash", input_preview: "ls", has_result: true, status: "success", is_error: false, output_length: 8, error_message: null, completed_at: "t", duration_seconds: 1.0, files: [], ...over });
+  const ttNoResult = ttCall({ has_result: false, status: null, is_error: null, output_length: null, completed_at: null, duration_seconds: null });
+  const ttFailed = ttCall({ sequence_num: 1, tool_name: "file_read", status: "error", is_error: true, error_message: "ENOENT", files: [{ file_path: "/repo/app.py", access_type: "read" }] });
+  if (tt.untilResult(ttCall()) !== "1s" || tt.untilResult(ttCall({ duration_seconds: 0.4 })) !== "<1s" || tt.untilResult(ttNoResult) !== null) fail("untilResult");
+  else if (tt.resultLabel(ttNoResult).text !== "no result recorded" || tt.resultLabel(ttFailed).text !== "error" || tt.resultLabel(ttCall()).text !== "success") fail("resultLabel");
+  else console.log("  ok  duration and result labels: measured, sub-second, no result, error, success");
+  if (render(tt.default, { calls: [] }) !== "") fail("a turn without calls renders nothing");
+  else console.log("  ok  no calls: nothing rendered, the turn card is unchanged");
+  const ttCollapsed = render(tt.default, { calls: [ttCall(), ttFailed] });
+  if (!/show 2 tool calls \(1 failed\)/.test(ttCollapsed) || /ENOENT/.test(ttCollapsed)) fail(`collapsed: ${ttCollapsed}`);
+  else console.log("  ok  collapsed: the count and the failures, nothing else");
+  const ttOne = render(tt.default, { calls: [ttNoResult] });
+  if (!/show 1 tool call<\/button>/.test(ttOne)) fail(`singular: ${ttOne}`);
+  else console.log("  ok  one call: singular, no failure count when none failed");
+
+  // The nesting rule lives in lib/traceView, so it loads without Next.
+  const ttPage = await import(pathToFileURL(join(out, "lib/traceView.js")));
+  const ttTurn = (seq, over) => ({ sequence_num: seq, role: "assistant", is_sidechain: false, parent_sequence: null, tool_calls: [], ...over });
+  const ttShapeOf = (rows) => ttPage.nestTurns(rows).map((n) => `${n.turn.sequence_num}[${n.children.map((c) => c.sequence_num).join(",")}]`).join(" ");
+  const ttShape = ttShapeOf([ttTurn(0), ttTurn(1, { is_sidechain: true, parent_sequence: 0 }), ttTurn(2, { is_sidechain: true, parent_sequence: 9 }), ttTurn(3, { parent_sequence: 2 })]);
+  if (ttShape !== "0[1] 2[] 3[]") fail(`nesting: ${ttShape}`);
+  else console.log("  ok  a subagent turn nests under its parent; an orphan and every ordinary turn stay at the top level");
+  // main → A → B → C: the whole run lands under the main turn, in order.
+  const ttChain = ttShapeOf([ttTurn(0), ttTurn(1, { is_sidechain: true, parent_sequence: 0 }), ttTurn(2, { is_sidechain: true, parent_sequence: 1 }), ttTurn(3, { is_sidechain: true, parent_sequence: 2 }), ttTurn(4, { parent_sequence: 0 })]);
+  if (ttChain !== "0[1,2,3] 4[]") fail(`chain: ${ttChain}`);
+  else console.log("  ok  a multi-turn subagent run: every turn of the chain under the main turn that started it");
+  // A cycle among sidechain turns cannot hang the walk.
+  const ttCycle = ttShapeOf([ttTurn(0), ttTurn(1, { is_sidechain: true, parent_sequence: 2 }), ttTurn(2, { is_sidechain: true, parent_sequence: 1 })]);
+  if (ttCycle !== "0[] 1[] 2[]") fail(`cycle: ${ttCycle}`);
+  else console.log("  ok  a cyclic chain falls back to the top level instead of looping");
 
   if (!process.exitCode) console.log("\nstates-check: all states asserted");
 } finally {

@@ -269,7 +269,7 @@ def get_session_details(db: Database, session_id: int) -> dict[str, Any]:
         SELECT t.sequence_num, t.role, t.content_preview, t.has_tool_use,
                t.slash_command, h.sentiment, h.interaction_quality,
                h.user_corrects_agent, h.rework_detected, t.timestamp,
-               td.content
+               td.content, t.id, t.uuid, t.parent_uuid, t.is_sidechain
         FROM copilot_turn t
         LEFT JOIN heuristic_label h
           ON h.id = (SELECT h2.id FROM heuristic_label h2
@@ -295,10 +295,15 @@ def get_session_details(db: Database, session_id: int) -> dict[str, Any]:
             # say WHY there is no text rather than print "(no content)".
             "content": r[10],
             "archived": r[10] is not None,
+            "is_sidechain": bool(r[14]),
+            # Filled below, once every turn's uuid is known.
+            "parent_sequence": None,
+            "tool_calls": [],
         }
         for r in turns
     ]
     _attach_latency(session)
+    _attach_trace(db, session, [(r[11], r[12], r[13]) for r in turns])
     session["tool_usage"] = [
         {"tool": r[0], "count": int(r[1])}
         for r in db.query(
@@ -813,6 +818,81 @@ def session_clusters(
         "cluster": None,
         **notes,
     }
+
+
+def _attach_trace(
+    db: Database, session: dict[str, Any], turn_keys: list[tuple[Any, Any, Any]]
+) -> None:
+    """The trace tree (#371 A1): every tool call under its turn, with the
+    result that came back (or did not), the files it touched, and the
+    time until the result; and each subagent (sidechain) turn pointed at
+    its parent turn.
+
+    One query for the whole session (calls, their results, the files they
+    touched), LEFT JOINed so a call whose result never arrived — a session
+    that ended mid-call — is still listed, with null result fields, rather
+    than dropped. The parent link comes from the turns query the page
+    already ran. ``duration_seconds`` follows the page's latency rule
+    (``turn_latency``): None unless both stamps parse and the clock did
+    not run backwards. It is the wall time from the turn that issued the
+    call to the record that carried the result; calls issued together in
+    one turn share a start, so their durations overlap rather than add.
+    """
+    turns = session["turns"]
+    by_turn_id: dict[Any, dict[str, Any]] = {}
+    seq_by_uuid: dict[str, int] = {}
+    for turn, (turn_id, uuid, _parent) in zip(turns, turn_keys):
+        by_turn_id[turn_id] = turn
+        if uuid:
+            seq_by_uuid[str(uuid)] = int(turn["sequence_num"])
+    # parent_sequence: the turn whose uuid this turn's parent_uuid names,
+    # or None (an orphan: its parent was not ingested with this session).
+    for turn, (_turn_id, _uuid, parent_uuid) in zip(turns, turn_keys):
+        if parent_uuid:
+            turn["parent_sequence"] = seq_by_uuid.get(str(parent_uuid))
+
+    # A call touching several files repeats across rows; the fold below
+    # keys on the call id, so each call is appended once.
+    rows = db.query(
+        """
+        SELECT tc.turn_id, tc.id, tc.tool_name, tc.tool_name_raw, tc.input_preview,
+               tc.sequence_num, r.status, r.is_error, r.output_length,
+               r.error_message, r.completed_at, f.file_path, f.access_type
+        FROM copilot_tool_call tc
+        JOIN copilot_turn t ON t.id = tc.turn_id
+        LEFT JOIN copilot_tool_result r ON r.tool_call_id = tc.id
+        LEFT JOIN copilot_file_access f ON f.tool_call_id = tc.id
+        WHERE t.session_id = ?
+        ORDER BY t.sequence_num, tc.sequence_num, f.id
+        """,
+        (session["id"],),
+    )
+    calls_by_id: dict[Any, dict[str, Any]] = {}
+    for turn_id, call_id, name, raw, preview, seq, status, is_error, out_len, err, done, path, access in rows:
+        call = calls_by_id.get(call_id)
+        if call is None:
+            turn = by_turn_id.get(turn_id)
+            if turn is None:
+                continue
+            has_result = status is not None or done is not None or is_error
+            call = {
+                "sequence_num": int(seq),
+                "tool_name": name,
+                "tool_name_raw": raw,
+                "input_preview": preview,
+                "has_result": bool(has_result),
+                "status": status,
+                "is_error": _b(is_error) if has_result else None,
+                "output_length": out_len,
+                "error_message": err,
+                "completed_at": done,
+                "duration_seconds": turn_latency(_parse_ts(turn.get("timestamp")), _parse_ts(done)),
+                "files": [],
+            }
+            calls_by_id[call_id] = call
+            turn["tool_calls"].append(call)
+        if path:
+            call["files"].append({"file_path": path, "access_type": access})
 
 
 def _b(v):
