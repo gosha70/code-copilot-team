@@ -323,6 +323,15 @@ FLAG_FAVORITE = "favorite"
 FLAG_TODO = "todo"
 SESSION_FLAGS = (FLAG_FAVORITE, FLAG_TODO)
 LABEL_SOURCE_RUBRIC = "rubric"
+#: The packaged rubric's boolean labels, by column name on heuristic_label
+#: (and human_label). One list: export orders its columns by it, and the
+#: sessions list's ``label`` filter (#371 A2) accepts exactly these.
+LABEL_BOOL_NAMES = (
+    "user_corrects_agent", "user_asks_question", "user_gives_command",
+    "agent_asks_clarification", "user_changes_approach",
+    "agent_changes_approach", "has_misunderstanding", "response_helpful",
+    "rework_detected",
+)
 LABEL_SOURCE_HUMAN = "human"
 # score.json field keys. These cross the benchmark_runner → session_analytics
 # boundary (run.py writes them; correlate.py reads them), so per the repo's

@@ -173,8 +173,21 @@ def search_sessions(
     sort: str = SESSION_SORT_DEFAULT,
     descending: bool = True,
     tag: Optional[str] = None,
+    developer: Optional[str] = None,
+    model: Optional[str] = None,
+    tool: Optional[str] = None,
+    min_cost: Optional[float] = None,
+    max_cost: Optional[float] = None,
+    label: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Find sessions by keyword (project path / model) + optional filters.
+
+    The filters (#371 A2) combine with AND: ``developer`` and ``model``
+    are exact (model case-insensitive); ``tool`` means at least one call
+    to it; ``min_cost``/``max_cost`` read the PRICED subtotal, so a session
+    with no priced turn has an unknown cost and matches neither bound;
+    ``label`` is one of LABEL_BOOL_NAMES, true on at least one turn under
+    the packaged rubric; ``date_to`` names a whole day, inclusive.
 
     With ``noise`` given and ``include_noise`` False, probe/temp-dir/too-
     short sessions are left out (see session_filter). Use
@@ -188,14 +201,11 @@ def search_sessions(
         raise UnknownSortError(
             f"cannot sort sessions by {sort!r}; one of: {', '.join(SESSION_SORT_COLUMNS)}"
         )
-    where, params = _session_filters(query, copilot, date_from, date_to)
-    if tag:
-        tag_sql = SESSION_TAG_FILTERS.get(tag)
-        if tag_sql is None:
-            raise UnknownTagError(
-                f"cannot filter sessions by tag {tag!r}; one of: {', '.join(SESSION_TAG_FILTERS)}"
-            )
-        where.append(tag_sql)
+    where, params = _session_filters(
+        query, copilot, date_from, date_to,
+        tag=tag, developer=developer, model=model, tool=tool,
+        min_cost=min_cost, max_cost=max_cost, label=label,
+    )
     if noise is not None and not include_noise:
         keep_sql, keep_params = keep_clause(noise, "copilot_session")
         where.append(keep_sql)
@@ -220,10 +230,22 @@ def count_noise_sessions(
     copilot: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    tag: Optional[str] = None,
+    developer: Optional[str] = None,
+    model: Optional[str] = None,
+    tool: Optional[str] = None,
+    min_cost: Optional[float] = None,
+    max_cost: Optional[float] = None,
+    label: Optional[str] = None,
 ) -> int:
     """How many sessions the same filters would list if noise were shown —
-    the number behind the Sessions page's "Show excluded (n)"."""
-    where, params = _session_filters(query, copilot, date_from, date_to)
+    the number behind the Sessions page's "Show excluded (n)". Takes every
+    filter the list takes, or the number stops describing the list."""
+    where, params = _session_filters(
+        query, copilot, date_from, date_to,
+        tag=tag, developer=developer, model=model, tool=tool,
+        min_cost=min_cost, max_cost=max_cost, label=label,
+    )
     noise_sql, noise_params = noise_clause(noise, "copilot_session")
     where.append(noise_sql)
     params += list(noise_params)
@@ -234,9 +256,34 @@ def count_noise_sessions(
     return int((row or (0,))[0] or 0)
 
 
+class UnknownLabelError(ValueError):
+    """The requested label is not one the packaged rubric produces."""
+
+
+class InvalidDateError(ValueError):
+    """A date filter that is neither a day (YYYY-MM-DD) nor an ISO-8601
+    timestamp. Refused, like an unknown tag or label, rather than compared
+    as text and silently filtering everything or nothing."""
+
+
+# The priced subtotal, as _SESSION_SELECT_COLS computes it: NULL when no
+# turn of the session carries a price, which is "unknown", never zero.
+_PRICED_COST_SQL = (
+    "(SELECT SUM(t.cost_usd) FROM copilot_turn t WHERE t.session_id = copilot_session.id)"
+)
+
+
 def _session_filters(
     query: Optional[str], copilot: Optional[str],
     date_from: Optional[str], date_to: Optional[str],
+    *,
+    tag: Optional[str] = None,
+    developer: Optional[str] = None,
+    model: Optional[str] = None,
+    tool: Optional[str] = None,
+    min_cost: Optional[float] = None,
+    max_cost: Optional[float] = None,
+    label: Optional[str] = None,
 ) -> tuple[list[str], list[Any]]:
     where: list[str] = []
     params: list[Any] = []
@@ -248,11 +295,117 @@ def _session_filters(
         params.append(copilot)
     if date_from:
         where.append("started_at >= ?")
-        params.append(date_from)
+        params.append(_valid_date(date_from, "date_from"))
     if date_to:
-        where.append("started_at <= ?")
-        params.append(date_to)
+        # A day means the whole day: "to 2026-09-22" includes a session
+        # started at 23:59 that day, so the bound is "before the next day".
+        # A full timestamp is used as given.
+        bound = _valid_date(date_to, "date_to")
+        where.append("started_at < ?")
+        params.append(_day_after(bound) if len(bound) == 10 else bound)
+    if tag:
+        tag_sql = SESSION_TAG_FILTERS.get(tag)
+        if tag_sql is None:
+            raise UnknownTagError(
+                f"cannot filter sessions by tag {tag!r}; one of: {', '.join(SESSION_TAG_FILTERS)}"
+            )
+        where.append(tag_sql)
+    if developer:
+        where.append("developer_id = ?")
+        params.append(developer)
+    if model:
+        where.append("LOWER(model) = LOWER(?)")
+        params.append(model)
+    if tool:
+        where.append(
+            "EXISTS (SELECT 1 FROM copilot_tool_call tc JOIN copilot_turn tt ON tt.id = tc.turn_id "
+            "WHERE tt.session_id = copilot_session.id AND tc.tool_name = ?)"
+        )
+        params.append(tool)
+    if min_cost is not None:
+        where.append(f"{_PRICED_COST_SQL} >= ?")
+        params.append(float(min_cost))
+    if max_cost is not None:
+        where.append(f"{_PRICED_COST_SQL} <= ?")
+        params.append(float(max_cost))
+    if label:
+        if label not in C.LABEL_BOOL_NAMES:
+            raise UnknownLabelError(
+                f"cannot filter sessions by label {label!r}; one of: {', '.join(C.LABEL_BOOL_NAMES)}"
+            )
+        # The packaged rubric marked it true on at least one turn. The
+        # column name comes from the allowlist above, never from the caller;
+        # the rubric name is the packaged rubric's own (heuristic-v1), the
+        # value its rows are stored under, not a configuration key.
+        from ..judge.rubric import load_rubric
+
+        where.append(
+            f"EXISTS (SELECT 1 FROM {C.TBL_HEURISTIC_LABEL} hl JOIN copilot_turn lt ON lt.id = hl.turn_id "
+            f"WHERE lt.session_id = copilot_session.id AND hl.rubric_name = ? AND hl.{label} = ?)"
+        )
+        params += [load_rubric().name, True]
     return where, params
+
+
+def _valid_date(value: str, name: str) -> str:
+    """A day (YYYY-MM-DD) as given, or an ISO-8601 timestamp normalised to
+    the stored form (UTC, milliseconds, Z); InvalidDateError otherwise.
+    Timestamps compare as text in the store, and "…:00Z" sorts AFTER
+    "…:00.000Z" ('.' < 'Z'), so a filter must carry the same shape as the
+    rows or a session at the boundary second goes missing."""
+    from datetime import date, datetime, timezone
+
+    try:
+        if len(value) == 10:
+            date.fromisoformat(value)
+            return value
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise InvalidDateError(
+            f"{name} must be a day (YYYY-MM-DD) or an ISO-8601 timestamp, not {value!r}"
+        ) from None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+
+
+def _day_after(day: str) -> str:
+    """'2026-09-22' → '2026-09-23'. The caller has validated the day."""
+    from datetime import date, timedelta
+
+    return (date.fromisoformat(day) + timedelta(days=1)).isoformat()
+
+
+def session_facets(
+    db: Database, *, noise: Optional[NoiseConfig] = None, include_noise: bool = False
+) -> dict[str, list[str]]:
+    """The values the sessions list's filters can take (#371 A2): the
+    developers, models and tools present, over the same population the
+    list shows (the noise policy applied unless include_noise), blanks
+    left out. Three small DISTINCT queries."""
+    keep_sql, keep_params = (
+        keep_clause(noise, "copilot_session")
+        if noise is not None and not include_noise
+        else ("1=1", ())
+    )
+    params = tuple(keep_params)
+    def col(sql: str) -> list[str]:
+        return [str(r[0]) for r in db.query(sql, params) if r[0] not in (None, "")]
+    return {
+        "developers": col(
+            f"SELECT DISTINCT developer_id FROM copilot_session WHERE {keep_sql} ORDER BY developer_id"
+        ),
+        "models": col(
+            f"SELECT DISTINCT model FROM copilot_session WHERE {keep_sql} ORDER BY model"
+        ),
+        "tools": col(
+            "SELECT DISTINCT tc.tool_name FROM copilot_tool_call tc "
+            "JOIN copilot_turn t ON t.id = tc.turn_id "
+            f"JOIN copilot_session ON copilot_session.id = t.session_id WHERE {keep_sql} "
+            "ORDER BY tc.tool_name"
+        ),
+        "labels": list(C.LABEL_BOOL_NAMES),
+    }
 
 
 def get_session_details(db: Database, session_id: int) -> dict[str, Any]:

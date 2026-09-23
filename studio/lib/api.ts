@@ -293,6 +293,52 @@ export interface SessionsResponse {
   include_noise: boolean;
   sort: SessionSort;
   order: "asc" | "desc";
+  /** The values the filters can take, over the same population as the
+   *  list (#371 A2); blanks omitted. */
+  facets: SessionFacets;
+}
+
+export interface SessionFacets {
+  developers: string[];
+  models: string[];
+  tools: string[];
+  labels: string[];
+}
+
+/** The sessions list's filters (#371 A2). Every field is optional; an
+ *  empty string or null means "not filtered". They combine with AND. */
+export interface SessionFilters {
+  query?: string;
+  copilot?: string;
+  date_from?: string;
+  /** A date names the whole day, inclusive. */
+  date_to?: string;
+  tag?: string;
+  developer?: string;
+  model?: string;
+  tool?: string;
+  /** Against the priced subtotal; a session with no priced turn matches neither bound. */
+  min_cost?: number | null;
+  max_cost?: number | null;
+  /** One of facets.labels: the packaged rubric marked it true on at least one turn. */
+  label?: string;
+}
+
+export interface SearchHit {
+  session_ref: number;
+  session_id: string;
+  sequence_num: number;
+  snippet: string;
+  project_path: string | null;
+  copilot: string;
+  redaction_mode: string | null;
+}
+
+export interface SearchResponse {
+  query: string;
+  results: SearchHit[];
+  /** What the archive holds, so "no match" and "nothing archived" differ. */
+  coverage: { eligible_sessions: number; archived_sessions: number; archived_turns: number };
 }
 export interface RecentError {
   error_type: string;
@@ -1622,16 +1668,21 @@ export const api = {
     ),
   benchmark: () => get<BenchmarkSummary>("/api/dashboard/benchmark"),
   sessions: (
-    query = "",
-    copilot = "",
+    filters: SessionFilters,
     includeNoise = false,
     sort: SessionSort = "started_at",
     order: "asc" | "desc" = "desc",
-  ) =>
-    get<SessionsResponse>(
-      `/api/sessions?query=${encodeURIComponent(query)}&copilot=${encodeURIComponent(copilot)}` +
-        `&include_noise=${includeNoise}&sort=${sort}&order=${order}`,
-    ),
+  ) => {
+    const p = new URLSearchParams({ include_noise: String(includeNoise), sort, order });
+    for (const [k, v] of Object.entries(filters)) {
+      if (v !== undefined && v !== null && v !== "") p.set(k, String(v));
+    }
+    return get<SessionsResponse>(`/api/sessions?${p.toString()}`);
+  },
+  /** Ranked full-text search over archived turns (#371 A2), with the
+   *  archive's coverage. */
+  search: (q: string, limit = 50) =>
+    get<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}&limit=${limit}`),
   session: (id: number) => get<SessionDetail>(`/api/sessions/${id}`),
   /** Set or clear a hand-set tag; returns the session's tags after. */
   setSessionTag: async (id: number, tag: "favorite" | "todo", on: boolean) => {

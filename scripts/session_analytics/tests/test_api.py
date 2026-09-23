@@ -496,6 +496,187 @@ class TestApi(RegistryResetTestCase):
         r = self.client.get("/api/search", params={"q": "  "})
         self.assertEqual(r.status_code, 400)
 
+    # ── the sessions list's filters (#371 A2) ──────────────────────────
+    def _list(self, **params):
+        r = self.client.get("/api/sessions", params={"limit": 100, **params})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+    def _insert_session(self, **over) -> int:
+        """A second, real-looking session beside the fixture's, so a filter
+        has something to keep and something to drop."""
+        from session_analytics.relational.db import Database
+
+        row = dict(
+            copilot=C.COPILOT_CLAUDE_CODE, session_id="s-2", project_path="/repo/other",
+            model="claude-haiku-4-5", turn_count=8, tool_call_count=0, error_count=0,
+            duration_seconds=90, started_at="2026-09-22T23:59:00.000Z",
+            developer_id="someone-else",
+        )
+        row.update(over)
+        conn = Database.connect(self.dsn)
+        try:
+            conn.execute(
+                "INSERT INTO copilot_session (copilot, session_id, project_path, model, turn_count, "
+                "tool_call_count, error_count, duration_seconds, started_at, developer_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                tuple(row[k] for k in ("copilot", "session_id", "project_path", "model", "turn_count",
+                                       "tool_call_count", "error_count", "duration_seconds",
+                                       "started_at", "developer_id")),
+            )
+            conn.commit()
+            return int(conn.query_one("SELECT MAX(id) FROM copilot_session")[0])
+        finally:
+            conn.close()
+
+    def _ids(self, body) -> list[int]:
+        return sorted(s["id"] for s in body["sessions"])
+
+    def test_sessions_filters_narrow_and_combine(self) -> None:
+        fixture = self._session_id()
+        other = self._insert_session()
+        both = sorted([fixture, other])
+        self.assertEqual(self._ids(self._list()), both)
+        # developer, model (case-insensitive), tool: each keeps one side.
+        self.assertEqual(self._ids(self._list(developer="someone-else")), [other])
+        self.assertEqual(self._ids(self._list(model="CLAUDE-OPUS-4-8")), [fixture])
+        self.assertEqual(self._ids(self._list(tool="bash")), [fixture])
+        self.assertEqual(self._ids(self._list(tool="no-such-tool")), [])
+        # AND: a filter that keeps the fixture and one that drops it.
+        self.assertEqual(self._ids(self._list(tool="bash", developer="someone-else")), [])
+        self.assertEqual(self._ids(self._list(tool="bash", model="claude-opus-4-8")), [fixture])
+        # Every filter is echoed into the excluded count, not only the list.
+        probe = self._insert_probe()
+        self.assertEqual(self._list()["excluded_noise"], 1)
+        self.assertEqual(self._list(tool="bash")["excluded_noise"], 0)
+        self.assertEqual(self._list(developer=C.DEFAULT_DEVELOPER_ID)["excluded_noise"], 1)
+        self.assertNotIn(probe, self._ids(self._list(include_noise=False)))
+
+    def test_sessions_date_to_includes_the_whole_day(self) -> None:
+        # A session at 23:59 on the named day matches; one at 00:00 the
+        # next day does not. The fixture is on 2026-05-29.
+        late = self._insert_session(session_id="late", started_at="2026-09-22T23:59:00.000Z")
+        early_next = self._insert_session(session_id="next", started_at="2026-09-23T00:00:00.000Z")
+        got = self._ids(self._list(date_to="2026-09-22"))
+        self.assertIn(late, got)
+        self.assertNotIn(early_next, got)
+        self.assertIn(early_next, self._ids(self._list(date_to="2026-09-23")))
+        self.assertEqual(self._ids(self._list(date_from="2026-09-23")), [early_next])
+        # A full timestamp is accepted as given; a malformed date is a 400,
+        # like an unknown tag or label, never a text comparison.
+        self.assertEqual(self._ids(self._list(date_from="2026-09-22T23:59:00Z")), [late, early_next])
+        for bad in ("not-a-date", "2026-13-01", "22/09/2026"):
+            r = self.client.get("/api/sessions", params={"date_to": bad})
+            self.assertEqual(r.status_code, 400, bad)
+            self.assertIn("date_to", r.json()["detail"])
+        self.assertEqual(self.client.get("/api/sessions", params={"date_from": "x"}).status_code, 400)
+
+    def test_sessions_cost_filters_read_the_priced_subtotal(self) -> None:
+        # The fixture's turns carry no price: its cost is unknown, and an
+        # unknown cost matches neither bound (never treated as zero).
+        fixture = self._session_id()
+        self.assertEqual(self._ids(self._list(min_cost=0)), [])
+        self.assertEqual(self._ids(self._list(max_cost=1000)), [])
+        from session_analytics.relational.db import Database
+
+        conn = Database.connect(self.dsn)
+        try:
+            conn.execute(
+                "UPDATE copilot_turn SET cost_usd = 0.25 WHERE session_id = ? AND sequence_num = 1",
+                (fixture,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        self.assertEqual(self._ids(self._list(min_cost=0.2)), [fixture])
+        self.assertEqual(self._ids(self._list(min_cost=0.3)), [])
+        self.assertEqual(self._ids(self._list(max_cost=0.3)), [fixture])
+
+    def test_sessions_label_filter_is_the_packaged_rubric_on_any_turn(self) -> None:
+        from session_analytics.relational.db import Database
+
+        from session_analytics.judge.rubric import load_rubric
+
+        fixture = self._session_id()
+        self.assertEqual(self._ids(self._list(label="rework_detected")), [])
+        # The name the packaged rubric's rows are REALLY stored under, read
+        # from the rubric, not typed here: a test that repeats a wrong
+        # constant would pass against a filter that matches nothing real.
+        packaged = load_rubric().name
+        self.assertEqual(packaged, "heuristic-v1")
+        conn = Database.connect(self.dsn)
+        try:
+            turn_id = conn.query_one(
+                "SELECT id FROM copilot_turn WHERE session_id = ? AND sequence_num = 3", (fixture,)
+            )[0]
+            # One turn, the packaged rubric, the boolean true.
+            conn.execute(
+                f"INSERT INTO {C.TBL_HEURISTIC_LABEL} (turn_id, rubric_name, rework_detected, "
+                "user_corrects_agent, judge_id, judge_model) VALUES (?, ?, ?, ?, 'j', 'm')",
+                (turn_id, packaged, True, False),
+            )
+            # The same boolean under a NAMED run must not count (out of scope).
+            conn.execute(
+                f"INSERT INTO {C.TBL_HEURISTIC_LABEL} (turn_id, rubric_name, rework_detected, "
+                "user_corrects_agent, judge_id, judge_model) VALUES (?, ?, ?, ?, 'j', 'm')",
+                (turn_id, "experimental", False, True),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        self.assertEqual(self._ids(self._list(label="rework_detected")), [fixture])
+        self.assertEqual(self._ids(self._list(label="user_corrects_agent")), [])
+        r = self.client.get("/api/sessions", params={"label": "sentiment"})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("rework_detected", r.json()["detail"])
+        r = self.client.get("/api/sessions", params={"tag": "bogus"})
+        self.assertEqual(r.status_code, 400)
+
+    def test_sessions_facets_follow_the_list_and_omit_blanks(self) -> None:
+        # A session with a blank model and developer is listed, but blanks
+        # are not offered as filter values.
+        blank = self._insert_session(session_id="blank", model="", developer_id="")
+        facets = self._list()["facets"]
+        self.assertIn(blank, self._ids(self._list()))
+        self.assertEqual(facets["developers"], [C.DEFAULT_DEVELOPER_ID])
+        self.assertEqual(facets["models"], ["claude-opus-4-8"])
+        self.assertEqual(facets["tools"], ["bash", "file_read"])
+        self.assertEqual(list(facets["labels"]), list(C.LABEL_BOOL_NAMES))
+        # A noise session's values join the facets only when the list shows
+        # noise too: the same population as the rows.
+        self._insert_session(
+            session_id="probe-2", project_path="/private/var/folders/x/cct-probe.q",
+            turn_count=2, developer_id="probe-dev",
+        )
+        self.assertEqual(self._list()["facets"]["developers"], [C.DEFAULT_DEVELOPER_ID])
+        self.assertEqual(
+            self._list(include_noise=True)["facets"]["developers"],
+            [C.DEFAULT_DEVELOPER_ID, "probe-dev"],
+        )
+
+    def test_search_reports_coverage_under_the_noise_policy(self) -> None:
+        from session_analytics import archive as arch
+        from session_analytics.config import ProjectIdRule, ProjectOverride
+
+        body = self.client.get("/api/search", params={"q": "anything"}).json()
+        self.assertEqual(body["results"], [])
+        self.assertEqual(body["coverage"]["archived_sessions"], 0)
+        self.assertEqual(body["coverage"]["archived_turns"], 0)
+        self.assertEqual(body["coverage"]["eligible_sessions"], 1)
+        arch.archive(
+            dsn=self.dsn, copilots=[C.COPILOT_CLAUDE_CODE], root=CLAUDE_CODE_ROOT,
+            projects={"demo-project": ProjectOverride(trace_archive=True)},
+            project_id_rules=(ProjectIdRule(match="/repo/demo", id="demo-project"),),
+            full=True,
+        )
+        body = self.client.get("/api/search", params={"q": "tests"}).json()
+        self.assertEqual(body["coverage"]["archived_sessions"], 1)
+        self.assertGreater(body["coverage"]["archived_turns"], 0)
+        # A probe session is noise: neither its coverage nor its hits count.
+        self._insert_probe()
+        body = self.client.get("/api/search", params={"q": "tests"}).json()
+        self.assertEqual(body["coverage"]["eligible_sessions"], 1)
+
     def test_settings_does_not_leak_dsn(self) -> None:
         r = self.client.get("/api/settings")
         self.assertEqual(r.status_code, 200)

@@ -20,6 +20,7 @@ export const metadata: Metadata = {
 const TABS = [
   { href: "/", label: "Dashboard" },
   { href: "/sessions", label: "Sessions" },
+  { href: "/search", label: "Search" },
   { href: "/team", label: "Team" },
   { href: "/runs", label: "Runs" },
   { href: "/ask", label: "Ask" },

@@ -70,7 +70,7 @@ export default function GraphExplorer() {
       .then((r) => setProjects(r.projects))
       .catch(() => setProjects([]));
     api
-      .sessions("", "", false, "started_at", "desc")
+      .sessions({}, false, "started_at", "desc")
       .then((r) => {
         setRecent(r.sessions);
         if (r.sessions[0])
@@ -164,7 +164,7 @@ export default function GraphExplorer() {
           d.sessionKey.split(":")[0],
           d.sessionKey.slice(d.sessionKey.indexOf(":") + 1),
         ];
-        const r = await api.sessions(native, copilot, true);
+        const r = await api.sessions({ query: native, copilot }, true);
         if (r.sessions[0]) setFocus({ kind: "session", id: r.sessions[0].id });
       }
       return;

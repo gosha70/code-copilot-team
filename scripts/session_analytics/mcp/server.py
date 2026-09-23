@@ -34,14 +34,22 @@ def build_server(dsn: str, kuzu_path: str = ""):
     @server.tool()
     def search_sessions(
         query: str = "", copilot: str = "", date_from: str = "",
-        date_to: str = "", limit: int = 20,
+        date_to: str = "", limit: int = 20, tag: str = "", developer: str = "",
+        model: str = "", tool: str = "", min_cost: Optional[float] = None,
+        max_cost: Optional[float] = None, label: str = "",
     ) -> list[dict[str, Any]]:
-        """Find sessions by keyword/workspace + optional copilot/date filters."""
+        """Find sessions by keyword/workspace + optional filters (#371 A2):
+        copilot; a date range (date_to names the whole day); tag (favorite,
+        todo, analyzed); developer; model; tool (at least one call to it);
+        min/max PRICED cost (a session with no priced turn matches neither);
+        label (a packaged-rubric boolean true on at least one turn)."""
         db = _db()
         try:
             return tools.search_sessions(
                 db, query or None, copilot=copilot or None,
                 date_from=date_from or None, date_to=date_to or None, limit=limit,
+                tag=tag or None, developer=developer or None, model=model or None,
+                tool=tool or None, min_cost=min_cost, max_cost=max_cost, label=label or None,
             )
         finally:
             db.close()
