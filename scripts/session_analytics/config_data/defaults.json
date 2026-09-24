@@ -66,6 +66,7 @@
   },
   "kuzu_path": "",
   "benchmark_runs_root": "",
+  "harness_stamps_path": "",
   "pricing": {
     "models": {
       "claude-haiku-4-8": {

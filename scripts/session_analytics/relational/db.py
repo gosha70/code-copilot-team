@@ -112,7 +112,11 @@ _DDL_FILES = (
 #    migration path by the owner's ruling.
 # 9: + feedback (#371 A3) — a new table, so create-if-absent is the whole
 #    migration again: a schema-8 store gains it in place and is stamped 9.
-_SCHEMA_VERSION = 9
+# 10: + copilot_session.{cli_version, cct_version, cct_sha,
+#    instructions_digest, providers_digest, harness_mixed} (#371 A4, the
+#    harness stamp). COLUMNS on an existing table: a pre-10 store is
+#    refused with the recreate remedy, as for 8.
+_SCHEMA_VERSION = 10
 
 _PK_SQL = {
     DIALECT_POSTGRES: "BIGSERIAL PRIMARY KEY",
@@ -249,7 +253,15 @@ class SchemaMismatch(RuntimeError):
 # Columns that create-if-absent cannot add to a store that already has the
 # table. Checked before anything is recorded, so an old store is refused
 # with a remedy rather than stamped current and then failing on a query.
-_REQUIRED_COLUMNS = (("copilot_tool_result", "completed_at"),)
+_REQUIRED_COLUMNS = (
+    ("copilot_tool_result", "completed_at"),
+    ("copilot_session", "cli_version"),
+    ("copilot_session", "cct_version"),
+    ("copilot_session", "cct_sha"),
+    ("copilot_session", "instructions_digest"),
+    ("copilot_session", "providers_digest"),
+    ("copilot_session", "harness_mixed"),
+)
 
 
 def _has_table(db: Database, table: str) -> bool:

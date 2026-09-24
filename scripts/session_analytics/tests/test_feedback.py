@@ -289,16 +289,25 @@ class TestSchemaBump(unittest.TestCase):
         store = Database.connect(f"sqlite:///{path}")
         dbmod.apply_ddl(store)
         store.execute(f"DROP TABLE {C.TBL_FEEDBACK}")
+        # The previous version, whatever it is now: the point is that a
+        # store one version behind gains the table without a refusal.
         store.execute("DELETE FROM schema_version WHERE version = ?", (dbmod._SCHEMA_VERSION,))
-        store.execute("INSERT INTO schema_version (version, applied_at) VALUES (8, 'x')")
+        store.execute(
+            "INSERT INTO schema_version (version, applied_at) VALUES (?, 'x')",
+            (dbmod._SCHEMA_VERSION - 1,),
+        )
         store.execute(
             "INSERT INTO copilot_session (session_id, copilot, project_path, started_at) "
             "VALUES ('kept', 'claude-code', '/p', '2026-01-01T00:00:00Z')"
         )
         store.commit()
-        self.assertEqual(store.query("SELECT MAX(version) FROM schema_version"), [(8,)])
+        self.assertEqual(
+            store.query("SELECT MAX(version) FROM schema_version"), [(dbmod._SCHEMA_VERSION - 1,)]
+        )
         dbmod.apply_ddl(store)
-        self.assertEqual(store.query("SELECT MAX(version) FROM schema_version"), [(9,)])
+        self.assertEqual(
+            store.query("SELECT MAX(version) FROM schema_version"), [(dbmod._SCHEMA_VERSION,)]
+        )
         self.assertTrue(dbmod._has_table(store, C.TBL_FEEDBACK))
         self.assertEqual(store.query("SELECT session_id FROM copilot_session"), [("kept",)])
         store.close()

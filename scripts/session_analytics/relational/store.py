@@ -177,8 +177,10 @@ def _upsert_session_row(
             (copilot, session_id, project_path, model, agent_profile, phase,
              developer_id, turn_count, tool_call_count, error_count,
              started_at, ended_at, duration_seconds,
-             redaction_mode, content_redacted, source)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'local')
+             redaction_mode, content_redacted, source,
+             cli_version, cct_version, cct_sha, instructions_digest,
+             providers_digest, harness_mixed)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'local', ?, ?, ?, ?, ?, ?)
         ON CONFLICT (copilot, session_id) DO UPDATE SET
             project_path=excluded.project_path,
             model=excluded.model,
@@ -192,9 +194,19 @@ def _upsert_session_row(
             ended_at=excluded.ended_at,
             duration_seconds=excluded.duration_seconds,
             redaction_mode=excluded.redaction_mode,
-            content_redacted=excluded.content_redacted
+            content_redacted=excluded.content_redacted,
+            cli_version=excluded.cli_version,
+            cct_version=excluded.cct_version,
+            cct_sha=excluded.cct_sha,
+            instructions_digest=excluded.instructions_digest,
+            providers_digest=excluded.providers_digest,
+            harness_mixed=excluded.harness_mixed
         RETURNING id
     """
+    # #371 A4: the stamp is re-derived from the ledger on every ingest,
+    # so a session stamped later (a ledger line that arrived after the
+    # first incremental ingest) picks it up on the next run.
+    h = raw.harness
     return db.insert_returning_id(
         sql,
         (
@@ -213,6 +225,12 @@ def _upsert_session_row(
             duration,
             redaction_mode,
             content_redacted,
+            h.cli_version if h else None,
+            h.cct_version if h else None,
+            h.cct_sha if h else None,
+            h.instructions_digest if h else None,
+            h.providers_digest if h else None,
+            h.mixed if h else None,
         ),
     )
 

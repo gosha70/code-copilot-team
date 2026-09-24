@@ -22,7 +22,9 @@ from ..session_filter import keep_clause, noise_clause
 _SESSION_COLS = (
     "id, copilot, session_id, project_path, model, developer_id, phase, "
     "turn_count, tool_call_count, error_count, started_at, ended_at, "
-    "duration_seconds"
+    "duration_seconds, "
+    # #371 A4: the harness stamp; all NULL = unstamped.
+    "cli_version, cct_version, cct_sha, instructions_digest, providers_digest, harness_mixed"
 )
 # E5: session cost = Σ its turns' cost_usd (query-time rollup, not a
 # materialized column — see D-outcome in
@@ -106,6 +108,9 @@ def _session_dict(row, *, has_cost: bool = True) -> dict[str, Any]:
     d = dict(zip(keys, row))
     if d.get("cost_usd") is not None:
         d["cost_usd"] = float(d["cost_usd"])
+    # SQLite hands a BOOLEAN back as 0/1; NULL stays None (unstamped).
+    if d.get(C.HARNESS_KEY_MIXED) is not None:
+        d[C.HARNESS_KEY_MIXED] = bool(d[C.HARNESS_KEY_MIXED])
     if has_cost:
         d["tags"] = {
             "favorite": bool(d.pop("favorite")),

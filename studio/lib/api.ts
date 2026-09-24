@@ -506,6 +506,15 @@ export interface SessionRow {
   ended_at?: string | null;
   duration_seconds?: number | null;
   cost_usd: number | null;
+  /** The harness stamp (#371 A4): captured at SessionStart, joined at
+   *  ingest. All five null = unstamped; `harness_mixed` null when
+   *  unstamped, true when a later stamp or CLI version differed. */
+  cli_version: string | null;
+  cct_version: string | null;
+  cct_sha: string | null;
+  instructions_digest: string | null;
+  providers_digest: string | null;
+  harness_mixed: boolean | null;
 }
 
 export interface TurnRow {

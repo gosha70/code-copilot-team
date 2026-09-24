@@ -105,6 +105,22 @@ class RawTurn:
 
 
 @dataclass(frozen=True)
+class HarnessStamp:
+    """The harness a session ran under (#371 A4), as joined at ingest:
+    the EARLIEST ledger line's facts plus the transcript's CLI version.
+    ``mixed`` is True when a later line or a second CLI version differed;
+    the earliest facts are kept. Every field is Optional: a fact the
+    hook could not establish is None, never fabricated."""
+
+    cli_version: Optional[str] = None
+    cct_version: Optional[str] = None
+    cct_sha: Optional[str] = None
+    instructions_digest: Optional[str] = None
+    providers_digest: Optional[str] = None
+    mixed: bool = False
+
+
+@dataclass(frozen=True)
 class RawSession:
     """A fully parsed session in copilot-agnostic form.
 
@@ -125,6 +141,8 @@ class RawSession:
     started_at: Optional[str] = None
     ended_at: Optional[str] = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    #: None = unstamped (no ledger line and no CLI version); see HarnessStamp.
+    harness: Optional[HarnessStamp] = None
 
 
 # ── Protocol ───────────────────────────────────────────────────────────
