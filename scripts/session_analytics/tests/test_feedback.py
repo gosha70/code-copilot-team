@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import sqlite3
 import unittest
+from unittest import mock
 
 from session_analytics import constants as C
 from session_analytics import export as exp
@@ -98,13 +99,26 @@ class TestValues(FeedbackBase):
                          (C.FEEDBACK_SOURCE_JUDGE, "heuristic-v1:qwen", "because"))
         self.assertIsNone(self.add("m", True, rationale="  ")["rationale"])
 
-    def test_check_constraint_refuses_two_values_at_the_database(self) -> None:
+    def test_check_constraint_refuses_two_values_or_none_at_the_database(self) -> None:
         with self.assertRaises(sqlite3.IntegrityError):
             self.db.execute(
                 f"INSERT INTO {C.TBL_FEEDBACK} (session_ref, name, value_bool, value_num, "
                 "source_type, source_id, created_at) VALUES (?, 'n', 1, 1, 'human', 'x', 'now')",
                 (self.sid,),
             )
+        self.db.rollback()
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute(
+                f"INSERT INTO {C.TBL_FEEDBACK} (session_ref, name, source_type, source_id, "
+                "created_at) VALUES (?, 'n', 'human', 'x', 'now')",
+                (self.sid,),
+            )
+        self.db.rollback()
+
+    def test_a_large_whole_number_reads_back_as_a_float(self) -> None:
+        self.assertEqual(self.add("big", 1e20)["value"], 1e20)
+        self.assertIsInstance(fb.list_feedback(self.db, self.sid)[0]["value"], float)
+        self.assertIs(type(self.add("small", 7.0)["value"]), int)
 
 
 class TestTargets(FeedbackBase):
@@ -191,6 +205,14 @@ class TestSupersession(FeedbackBase):
                 (self.sid, base["id"]),
             )
         self.db.rollback()
+        # A racing writer: the store's check passes, the UNIQUE fires, and
+        # the caller still gets the 400-class refusal, not a driver error.
+        real_check = fb._check_supersedes
+        with mock.patch.object(fb, "_check_supersedes", lambda *a, **k: base["id"]):
+            with self.assertRaisesRegex(fb.InvalidFeedbackError, "another writer"):
+                self.add("n", "d", sequence_num=1, supersedes=base["id"])
+        self.assertIs(fb._check_supersedes, real_check)
+        self.assertEqual([r["id"] for r in fb.current_feedback(self.db, self.sid)], [replacement["id"]])
         self.assertEqual([r["id"] for r in fb.current_feedback(self.db, self.sid)], [replacement["id"]])
 
     def test_a_row_in_another_session_cannot_be_superseded(self) -> None:
@@ -237,7 +259,11 @@ class TestPayloadAndExport(FeedbackBase):
             tools.get_session_details(self.db, self.sid)
         finally:
             self.db.execute = original  # type: ignore[method-assign]
-        self.assertEqual(sum(1 for q in seen if f"FROM {C.TBL_FEEDBACK} " in q), 1)
+        hits = [q for q in seen if f"FROM {C.TBL_FEEDBACK} " in q]
+        self.assertEqual(len(hits), 1)
+        # The one query is the current-rows self-join, filtered in SQL.
+        self.assertIn(f"LEFT JOIN {C.TBL_FEEDBACK} later ON later.supersedes = f.id", hits[0])
+        self.assertIn("later.id IS NULL", hits[0])
 
     def test_export_table(self) -> None:
         self.assertIn(C.EXPORT_TABLE_FEEDBACK, C.EXPORT_DATA_TABLES)

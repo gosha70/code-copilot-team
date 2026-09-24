@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+import importlib
 from typing import Any, Optional
 
 from . import constants as C
@@ -237,21 +238,33 @@ def add_feedback(
         db, session_id, supersedes, sequence_num, tool_sequence_num, name
     )
     created_at = now_iso()
-    new_id = db.insert_returning_id(
-        f"""
-        INSERT INTO {C.TBL_FEEDBACK}
-            (session_ref, sequence_num, tool_sequence_num, name,
-             value_bool, value_num, value_text, rationale,
-             source_type, source_id, supersedes, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        RETURNING id
-        """,
-        (
-            session_id, sequence_num, tool_sequence_num, name,
-            v_bool, v_num, v_text, rationale,
-            source_type, source_id, supersedes, created_at,
-        ),
-    )
+    try:
+        new_id = db.insert_returning_id(
+            f"""
+            INSERT INTO {C.TBL_FEEDBACK}
+                (session_ref, sequence_num, tool_sequence_num, name,
+                 value_bool, value_num, value_text, rationale,
+                 source_type, source_id, supersedes, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING id
+            """,
+            (
+                session_id, sequence_num, tool_sequence_num, name,
+                v_bool, v_num, v_text, rationale,
+                source_type, source_id, supersedes, created_at,
+            ),
+        )
+    except _integrity_error(db) as exc:
+        # The table's own constraints are the last word: a writer that
+        # superseded the same row between the check above and this insert
+        # trips UNIQUE (supersedes); the CHECK catches a value shape the
+        # store never produces. Either is a refusal, not a server fault.
+        db.rollback()
+        raise InvalidFeedbackError(
+            f"feedback refused by the store: {exc}"
+            if supersedes is None
+            else f"feedback {supersedes} was superseded by another writer"
+        ) from None
     db.commit()
     return _row(
         (
@@ -262,6 +275,12 @@ def add_feedback(
     )
 
 
+def _integrity_error(db: Database) -> type[Exception]:
+    """The DB-API IntegrityError of whichever driver opened ``db``
+    (sqlite3 or psycopg), so the store need not import either."""
+    return importlib.import_module(type(db.conn).__module__.split(".")[0]).IntegrityError
+
+
 # ── read ───────────────────────────────────────────────────────────────
 
 
@@ -270,7 +289,9 @@ def _row(r: tuple) -> dict[str, Any]:
         value: Any = bool(r[5])
     elif r[6] is not None:
         value = float(r[6])
-        if value == int(value):
+        # A whole number reads back as an int (a rating is 4, not 4.0),
+        # within the range where the two agree exactly.
+        if value.is_integer() and abs(value) < 2**53:
             value = int(value)
     else:
         value = r[7]

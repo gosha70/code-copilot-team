@@ -475,9 +475,10 @@ and on any tool call in the trace tree: a **name**, a **value** of the type
 the name takes, and an optional **rationale** ("why"). The names offered
 are the packaged rubric's nine booleans (`rework_detected`,
 `response_helpful`, …), `rating` (an integer 1–5) and `note` (free text);
-a custom name is accepted with any one of those types. The server types
-the value by its name and refuses a mismatch with a 400, so a `rating` of
-"good" or a `rework_detected` of `1` never lands.
+a custom name (up to 80 characters) is accepted with any one of those
+types. The server types the value by its name and refuses a mismatch
+with a 400, so a `rating` of "good" or a `rework_detected` of `1` never
+lands; text values and rationales are capped at 4,000 characters.
 
 Feedback is history, not editing: "replace" writes a new row that names
 the one it supersedes, and the old row stays. A row can be replaced once,
