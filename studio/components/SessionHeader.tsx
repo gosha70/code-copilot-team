@@ -3,6 +3,7 @@
 import { EffortEstimate, EffortSummary, SessionDetail, SessionTagsInfo } from "@/lib/api";
 import { Stat, formatCost, formatDuration } from "@/components/ui";
 import SessionTagIcons, { HandTag } from "@/components/SessionTags";
+import { MIXED_NOTE, UNSTAMPED_NOTE, harnessFacts, harnessState } from "@/lib/harnessView";
 
 // THE TOP OF A SESSION PAGE. It used to be one grey sentence — path,
 // model, "4659 turns · 46 errors · 3d 7h · —" — with the project's
@@ -64,6 +65,36 @@ function Fact({ label, value, mono = false }: { label: string; value: string; mo
       <dt className="text-[11px] uppercase tracking-wide text-slate-400">{label}</dt>
       <dd className={"text-slate-700 " + (mono ? "font-mono text-xs" : "")}>{value}</dd>
     </div>
+  );
+}
+
+/** The harness the session ran under (#371 A4): one labelled row of
+ *  facts, or a single sentence when there is no stamp. A mixed session
+ *  shows its earliest stamp and says so. */
+export function HarnessFacts({ data }: { data: SessionDetail }) {
+  const state = harnessState(data);
+  if (state === "unstamped") {
+    return (
+      <p className="mt-2 text-xs text-slate-400" title={UNSTAMPED_NOTE}>
+        Harness: unstamped
+      </p>
+    );
+  }
+  return (
+    <dl className="mt-2 flex flex-wrap gap-x-6 gap-y-2 text-sm">
+      {harnessFacts(data).map((f) => (
+        <div key={f.label} title={f.title}>
+          <dt className="text-[11px] uppercase tracking-wide text-slate-400">{f.label}</dt>
+          <dd className="font-mono text-xs text-slate-700">{f.value}</dd>
+        </div>
+      ))}
+      {state === "mixed" && (
+        <div title={MIXED_NOTE}>
+          <dt className="text-[11px] uppercase tracking-wide text-slate-400">Harness</dt>
+          <dd className="text-xs text-amber-700">mixed — earliest stamp shown</dd>
+        </div>
+      )}
+    </dl>
   );
 }
 
@@ -138,6 +169,7 @@ export default function SessionHeader({
             }
           />
         </dl>
+        <HarnessFacts data={data} />
       </div>
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <Stat

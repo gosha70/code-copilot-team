@@ -34,6 +34,10 @@ ENV_DSN = ENV_DB
 ENV_DEVELOPER_ID = "CCT_DEVELOPER_ID"
 ENV_KUZU_PATH = "CCT_SA_KUZU_PATH"
 ENV_BENCHMARK_RUNS_ROOT = "CCT_SA_BENCHMARK_RUNS_ROOT"
+# #371 A4: the ledger harness-stamp.sh appends to. The SAME name the hook
+# honours (no CCT_SA_ prefix: the hook is not analytics), so one override
+# moves both the writer and the reader.
+ENV_HARNESS_STAMPS = "CCT_HARNESS_STAMPS"
 #: auto_build.ledger_root (#190 §12): the .cct directory the auto-build
 #: driver writes ledgers under; relative = against the repository root.
 ENV_AUTO_BUILD_ROOT = "CCT_SA_AUTO_BUILD_ROOT"
@@ -333,6 +337,12 @@ class AnalyticsConfig:
     #: benchmark runs" step is skipped. Expanded, never validated here
     #: (the step reports a missing directory as its failure reason).
     benchmark_runs_root: str
+    #: #371 A4: the harness-stamp ledger the Claude Code adapter joins at
+    #: ingest. Environment-only (CCT_HARNESS_STAMPS, the same name the
+    #: hook honours) or the default ~/.cct/harness-stamps.jsonl — never a
+    #: JSON key, which the hook could not see. A missing file is a no-op
+    #: (every session unstamped), never an error.
+    harness_stamps_path: str
     redaction_mode: str
     judge: JudgeConfig
     embedding: "EmbeddingConfig"
@@ -874,6 +884,9 @@ def load_config(
         resolved_kuzu = resolved_kuzu / C.KUZU_STORE_NAME
     raw_runs_root = env(ENV_BENCHMARK_RUNS_ROOT) or data.get(C.CFG_BENCHMARK_RUNS_ROOT) or ""
     runs_root = str(Path(raw_runs_root).expanduser()) if raw_runs_root else ""
+    harness_stamps_path = str(Path(
+        env(ENV_HARNESS_STAMPS) or str(Path.home() / ".cct" / C.HARNESS_STAMPS_FILENAME)
+    ).expanduser())
     resolved_redaction = (
         redaction_mode or env(ENV_REDACTION) or data.get(C.CFG_REDACTION) or C.REDACT_CODE
     )
@@ -1017,6 +1030,7 @@ def load_config(
         dsn=str(resolved_dsn),
         kuzu_path=str(resolved_kuzu),
         benchmark_runs_root=runs_root,
+        harness_stamps_path=harness_stamps_path,
         redaction_mode=resolved_redaction,
         judge=judge,
         embedding=embedding,

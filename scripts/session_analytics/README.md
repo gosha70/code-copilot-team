@@ -468,6 +468,55 @@ exports via `--table benchmark_results` (and `--table all`).
 **Deferred (out of scope)**: a Studio comparison UI; a fuzzy `project_path` +
 time-window fallback for null-`session_id` runs — a later E9 issue.
 
+## Harness stamp (#371 A4a)
+
+Every Claude Code session ingested after the stamp is installed carries
+the harness it ran under, so "did the new skill change anything" has a
+population to compare over (the compare itself is A4b):
+
+| Fact | Where it comes from |
+|---|---|
+| `cct_version`, `cct_sha` | `~/.cct/harness.json`, written by `setup.sh` on install and `--sync`: the repo's `package.json` version and the **full** commit the instructions were installed from |
+| `instructions_digest` | sha256 over the rules, skills, agents and commands actually present in `~/.claude` at session start — hand edits included |
+| `providers_digest` | sha256 of the providers profile's bytes at session start (the bytes are read only to hash them) |
+| `cli_version` | the Claude Code CLI version the transcript records carry |
+| `harness_mixed` | true when a later stamp for the same session, or a second CLI version in its transcript, differed from the earliest |
+
+The first four are captured **when the session starts**, not at ingest,
+by the `SessionStart` hook `harness-stamp.sh` (installed by `setup.sh`
+beside the other hooks), which appends one JSON line per session start
+to `~/.cct/harness-stamps.jsonl` (`CCT_HARNESS_STAMPS` moves it for the
+hook and the reader alike). Ingest joins that ledger by session id and
+writes the columns on `copilot_session`. Capturing at ingest would stamp
+every `--full` re-ingest of an old transcript with today's instructions;
+capturing at session start cannot.
+
+**Earliest wins, and a difference is a fact.** A resumed session may
+span a `--sync`; its stamp is the earliest valid ledger line, and a
+later line that differs marks it `harness_mixed` rather than moving its
+earlier turns to the newer harness. Identical lines from a resume or
+compaction are not a difference. A stamp, once stored, is sticky: a
+re-ingest that finds no ledger line (a pruned ledger, or
+`CCT_HARNESS_STAMPS` pointing elsewhere) keeps the facts already
+recorded, and mixed stays mixed. The session page shows the stamp
+(digests and sha shortened, full on hover), "mixed — earliest stamp
+shown", or "Harness: unstamped".
+
+**What is unstamped, and stays so.** Sessions from before the hook was
+installed; Pi and Aider sessions (no hook); plugin-only Claude Code
+sessions — the generated plugin deliberately omits the hook, because a
+plugin loads its instructions from `CLAUDE_PLUGIN_ROOT`, not `~/.claude`,
+and a digest of the wrong tree would be worse than none. The ledger is
+untrusted local input: every field is bounded and shape-checked on read,
+a malformed line is skipped with one warning, a missing ledger is a
+no-op.
+
+**Schema 10, and stores from before it.** Six columns on
+`copilot_session`; the DDL cannot add them in place, so a pre-10 store
+is refused at startup with the same remedy as schema 8 (recreate, then
+`ingest --full`). Only sessions that ran after the hook was installed
+will carry a stamp after the rebuild.
+
 ## Feedback (#371 A3)
 
 A session page takes feedback from a person on the session, on any turn,

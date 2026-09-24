@@ -8,6 +8,7 @@
 #   ~/.claude/agents/                      Global agents (10 utility + 4 phase)
 #   ~/.claude/hooks/                       Global hook scripts (verify, notify)
 #   ~/.claude/settings.json                Global settings with hooks wired
+#   ~/.cct/harness.json                    Harness identity (release + commit) the SessionStart stamp reads
 #   ~/.claude/templates/<type>/CLAUDE.md   Project templates (with Agent Team configs)
 #   ~/.claude/templates/<type>/commands/   Custom slash commands per type
 #   Installs claude-code launcher to ~/.local/bin/
@@ -230,6 +231,33 @@ install_helper_scripts() {
     done
 }
 
+# The harness identity the SessionStart hook harness-stamp.sh reads
+# (#371 A4): the release (package.json) and the FULL commit the
+# instructions were installed from. Only the installer knows the repo,
+# so it is written here, on install and on every --sync. The hook
+# records absence as null when this file is missing; never fabricated.
+write_harness_json() {
+    local repo_root="$SCRIPT_DIR/../.."
+    local target_dir="$HOME/.cct"
+    local version="" sha=""
+    if [[ -f "$repo_root/package.json" ]]; then
+        if command -v jq &>/dev/null; then
+            version=$(jq -r '.version // empty' "$repo_root/package.json" 2>/dev/null) || version=""
+        else
+            version=$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$repo_root/package.json" | head -1)
+        fi
+    fi
+    if command -v git &>/dev/null; then
+        sha=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null) || sha=""
+    fi
+    mkdir -p "$target_dir"
+    printf '{"cct_version": %s, "cct_sha": %s, "installed_at": "%s"}\n' \
+        "$([[ -n "$version" ]] && printf '"%s"' "$version" || printf 'null')" \
+        "$([[ -n "$sha" ]] && printf '"%s"' "$sha" || printf 'null')" \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$target_dir/harness.json"
+    echo "[done] Wrote harness identity to $target_dir/harness.json (${version:-no version} @ ${sha:0:12})"
+}
+
 # ══════════════════════════════════════════════════════════════
 # --sync: re-copy rules, skills, agents, commands, hooks, and launcher from repo
 # ══════════════════════════════════════════════════════════════
@@ -311,6 +339,7 @@ if [[ "$SYNC_MODE" == "1" ]]; then
             protect-files.sh \
             protect-git.sh \
             reinject-context.sh \
+            harness-stamp.sh \
             peer-review-on-stop.sh \
             memkernel-recall.sh \
             memkernel-recall.py \
@@ -367,6 +396,8 @@ if [[ "$SYNC_MODE" == "1" ]]; then
             echo "[done] Added peer-review hook to $SETTINGS_FILE" || true
         ensure_hook_command "$SETTINGS_FILE" "SessionStart" "" "~/.claude/hooks/memkernel-recall.sh" 30000 && \
             echo "[done] Added MemKernel SessionStart hook to $SETTINGS_FILE" || true
+        ensure_hook_command "$SETTINGS_FILE" "SessionStart" "" "~/.claude/hooks/harness-stamp.sh" 10000 && \
+            echo "[done] Added harness-stamp SessionStart hook to $SETTINGS_FILE" || true
         ensure_hook_command "$SETTINGS_FILE" "PreCompact" "" "~/.claude/hooks/memkernel-pre-compact.sh" 30000 && \
             echo "[done] Added MemKernel PreCompact hook to $SETTINGS_FILE" || true
         ensure_hook_command "$SETTINGS_FILE" "PostCompact" "" "~/.claude/hooks/memkernel-post-compact.sh" 30000 && \
@@ -469,6 +500,7 @@ if [[ "$SYNC_MODE" == "1" ]]; then
     fi
 
     install_helper_scripts
+    write_harness_json
 
     echo "Sync complete."
     exit 0
@@ -943,6 +975,7 @@ if [[ -d "$HOOKS_SOURCE" ]]; then
         protect-files.sh \
         protect-git.sh \
         reinject-context.sh \
+        harness-stamp.sh \
         peer-review-on-stop.sh \
         memkernel-recall.sh \
         memkernel-recall.py \
@@ -981,6 +1014,7 @@ fi
 # ══════════════════════════════════════════════════════════════
 
 install_helper_scripts
+write_harness_json
 
 # ══════════════════════════════════════════════════════════════
 # 11b. GLOBAL AGENTS
@@ -1157,6 +1191,11 @@ HOOKS_CONFIG='{
             "type": "command",
             "command": "~/.claude/hooks/memkernel-recall.sh",
             "timeout": 30000
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/harness-stamp.sh",
+            "timeout": 10000
           }
         ]
       }
@@ -1241,6 +1280,7 @@ elif command -v jq &>/dev/null; then
         fi
 
         ensure_hook_command "$UPDATED" "SessionStart" "" "~/.claude/hooks/memkernel-recall.sh" 30000 && CHANGED=1 || true
+        ensure_hook_command "$UPDATED" "SessionStart" "" "~/.claude/hooks/harness-stamp.sh" 10000 && CHANGED=1 || true
         ensure_hook_command "$UPDATED" "PreCompact" "" "~/.claude/hooks/memkernel-pre-compact.sh" 30000 && CHANGED=1 || true
         ensure_hook_command "$UPDATED" "PostCompact" "" "~/.claude/hooks/memkernel-post-compact.sh" 30000 && CHANGED=1 || true
 

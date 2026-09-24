@@ -86,6 +86,7 @@ try {
         join(STUDIO, "lib/feedbackView.ts"),
         join(STUDIO, "components/FeedbackControl.tsx"),
         join(STUDIO, "components/SessionHeader.tsx"),
+        join(STUDIO, "lib/harnessView.ts"),
         join(STUDIO, "components/SessionTags.tsx"),
         join(STUDIO, "lib/graphView.ts"),
         join(STUDIO, "lib/askView.ts"),
@@ -717,7 +718,8 @@ try {
   else if (sh.versusProject(5, { observations: 3, sufficient: false, median: 4, p90: 9, max: 9 }).note !== "") fail("insufficient baseline must say nothing");
   else if (sh.projectName("/Users/x/dev/repo/code-copilot-team/") !== "code-copilot-team" || sh.projectName(null) !== "(no project path)") fail("project name");
   else console.log("  ok  comparison wording: ×median, near-median, above p90, withheld when insufficient");
-  const detail = { id: 1, tags: { favorite: false, todo: false, analyzed_kinds: 0, analysis_kinds_total: 3 }, cost_coverage: { priced_turns: 0, priceable_turns: 10, complete: false }, copilot: "claude-code", session_id: "abc", project_path: "/Users/x/dev/repo/code-copilot-team", model: "claude-opus-5", turn_count: 4659, tool_call_count: 1543, error_count: 46, started_at: "2026-09-03T11:46:54Z", duration_seconds: 284400, cost_usd: null, turns: [], tool_usage: [], errors: [], latency: null };
+  const a4none = { cli_version: null, cct_version: null, cct_sha: null, instructions_digest: null, providers_digest: null, harness_mixed: null };
+  const detail = { id: 1, tags: { favorite: false, todo: false, analyzed_kinds: 0, analysis_kinds_total: 3 }, cost_coverage: { priced_turns: 0, priceable_turns: 10, complete: false }, copilot: "claude-code", session_id: "abc", project_path: "/Users/x/dev/repo/code-copilot-team", model: "claude-opus-5", turn_count: 4659, tool_call_count: 1543, error_count: 46, started_at: "2026-09-03T11:46:54Z", duration_seconds: 284400, cost_usd: null, turns: [], tool_usage: [], errors: [], latency: null, feedback: [], ...a4none };
   const base = { scope: "project", sessions: 14, turns: es(2114, 6457), tool_calls: es(600, 2000), errors: es(10, 40), duration_seconds: es(100000, 250000), cost_usd: { observations: 0, sufficient: false, median: null, p90: null, max: null }, cost_usd_coverage: { sessions_with_any_priced_turn: 0, sessions_fully_priced: 0, sessions_with_priceable_turns: 0 }, min_observations: 5, basis: "" };
   const head = render(sh.default, { data: detail, baseline: base });
   if (!/<h1[^>]*>code-copilot-team<\/h1>/.test(head)) fail("title is not the project name");
@@ -729,6 +731,25 @@ try {
   const bare = render(sh.default, { data: { ...detail, project_path: null, model: null, started_at: null, duration_seconds: null }, baseline: null });
   if (!/no project path/.test(bare) || !/too few sessions of this project/.test(bare) || /×/.test(bare)) fail("header without a project/baseline still claims a comparison");
   else console.log("  ok  no project path / no baseline: nothing compared, nothing invented");
+  // ── the harness stamp on the header (#371 A4a) ─────────────────────
+  const a4hv = await import(pathToFileURL(join(out, "lib/harnessView.js")));
+  const a4full = { cli_version: "2.1.0", cct_version: "1.1.0", cct_sha: "a".repeat(40), instructions_digest: "1".repeat(64), providers_digest: null, harness_mixed: false };
+  if (a4hv.harnessState(a4none) !== "unstamped" || a4hv.harnessState(a4full) !== "stamped" || a4hv.harnessState({ ...a4full, harness_mixed: true }) !== "mixed") fail("harnessState");
+  else if (a4hv.harnessState({ ...a4none, cli_version: "2.1.0" }) !== "stamped") fail("a CLI version alone is a (partial) stamp");
+  else if (a4hv.short("a".repeat(40)) !== "a".repeat(12) || a4hv.short(null) !== "—" || a4hv.short("1.1.0") !== "1.1.0") fail("short");
+  else console.log("  ok  unstamped, stamped, mixed and partial stamps told apart; long values shortened only for display");
+  const a4facts = a4hv.harnessFacts(a4full);
+  if (a4facts.map((f) => f.label).join(",") !== "CCT release,CCT commit,Instructions,Providers,CLI") fail("fact order");
+  else if (a4facts[1].value !== "a".repeat(12) || a4facts[1].title !== "a".repeat(40) || a4facts[3].value !== "—" || a4facts[3].title !== undefined) fail("fact values/titles");
+  else console.log("  ok  five facts in order; the full sha rides on the title; an absent fact reads as absent");
+  if (!/Harness: unstamped/.test(head) || /CCT commit/.test(head)) fail("unstamped header");
+  else console.log("  ok  an unstamped session says so in one line, no empty fact row");
+  const a4stamped = render(sh.default, { data: { ...detail, ...a4full }, baseline: base });
+  if (!/<dt[^>]*>CCT commit<\/dt>/.test(a4stamped) || !new RegExp(`title="${"a".repeat(40)}"`).test(a4stamped) || !/>aaaaaaaaaaaa</.test(a4stamped) || /mixed/.test(a4stamped) || /unstamped/.test(a4stamped)) fail(`stamped header: ${a4stamped.slice(0, 400)}`);
+  else console.log("  ok  a stamped session lists the facts, sha shortened with the full one on hover");
+  const a4mixed = render(sh.default, { data: { ...detail, ...a4full, harness_mixed: true }, baseline: base });
+  if (!/mixed — earliest stamp shown/.test(a4mixed) || !/>aaaaaaaaaaaa</.test(a4mixed)) fail("mixed header");
+  else console.log("  ok  a mixed session shows its earliest stamp and says it is mixed");
   // A priced SUBTOTAL is never compared with complete costs (reviewer P2 on #317).
   const costBase = { ...base, cost_usd: es(10, 40) };
   const partCost = render(sh.default, { data: { ...detail, cost_usd: 1, cost_coverage: { priced_turns: 3, priceable_turns: 10, complete: false } }, baseline: costBase });

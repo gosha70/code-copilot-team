@@ -39,6 +39,18 @@ CREATE TABLE IF NOT EXISTS copilot_session (
     benchmark_run_dir VARCHAR(1000),                          -- E9
     session_embedding TEXT,                                   -- E2 (nullable)
     source            VARCHAR(20) NOT NULL DEFAULT 'local',
+    -- #371 A4: the harness the session ran under, captured at SessionStart
+    -- by harness-stamp.sh and joined at ingest by session id; cli_version
+    -- from the transcript. All NULL = unstamped (no ledger line: Pi, Aider,
+    -- plugin-only, or a session from before the hook was installed).
+    -- harness_mixed: a later stamp or a second CLI version differed from
+    -- the earliest; the earliest facts are kept, never the later ones.
+    cli_version         VARCHAR(40),
+    cct_version         VARCHAR(40),
+    cct_sha             VARCHAR(40),
+    instructions_digest VARCHAR(64),
+    providers_digest    VARCHAR(64),
+    harness_mixed       BOOLEAN,
     UNIQUE (copilot, session_id)
 );
 

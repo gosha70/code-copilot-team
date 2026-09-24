@@ -200,6 +200,7 @@ class TestCliDerivation(unittest.TestCase):
             dsn="sqlite:///unused",
             kuzu_path="unused",
             benchmark_runs_root="",
+            harness_stamps_path="",
             redaction_mode="code",
             judge=judge,
             embedding=EmbeddingConfig(

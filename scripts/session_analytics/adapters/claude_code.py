@@ -25,7 +25,8 @@ from typing import Any, Iterable, Optional
 
 from .. import constants as C
 from ..config import load_config
-from ..contracts import RawSession, RawToolCall, RawTurn, SessionRef
+from ..contracts import HarnessStamp, RawSession, RawToolCall, RawTurn, SessionRef
+from ..harness_stamps import read_ledger
 from ..registry import register_adapter
 
 _log = logging.getLogger(__name__)
@@ -41,8 +42,13 @@ _SLASH_RE = re.compile(r"<command-name>\s*(/?[\w:-]+)\s*</command-name>")
 class ClaudeCodeAdapter:
     copilot_id = COPILOT_ID
 
-    def __init__(self, default_root: Optional[Path] = None) -> None:
+    def __init__(
+        self, default_root: Optional[Path] = None, harness_stamps_path: Optional[str] = None
+    ) -> None:
         self._default_root = default_root
+        # #371 A4: the ledger to join; None = the configured path (read
+        # lazily, so a test that never touches it never loads config).
+        self._harness_stamps_path = harness_stamps_path
 
     # ── discovery ──────────────────────────────────────────────────────
 
@@ -117,6 +123,9 @@ class ClaudeCodeAdapter:
         started_at: Optional[str] = None
         ended_at: Optional[str] = None
         git_branch: Optional[str] = None
+        # #371 A4: the CLI version(s) the records carry, in order of first
+        # sight; more than one is a mixed session.
+        cli_versions: list[str] = []
 
         seq = 0
         for rec in ordered:
@@ -129,6 +138,13 @@ class ClaudeCodeAdapter:
 
             project_path = project_path or rec.get("cwd")
             git_branch = git_branch or rec.get("gitBranch")
+            cli_version = rec.get("version")
+            if (
+                isinstance(cli_version, str) and cli_version
+                and len(cli_version) <= C.HARNESS_VERSION_MAX_CHARS
+                and cli_version not in cli_versions
+            ):
+                cli_versions.append(cli_version)
             ts = rec.get("timestamp")
             if ts:
                 started_at = started_at or ts
@@ -178,6 +194,26 @@ class ClaudeCodeAdapter:
             started_at=started_at,
             ended_at=ended_at,
             metadata=metadata,
+            harness=self._harness(ref.native_session_id, cli_versions),
+        )
+
+    def _harness(self, native_session_id: str, cli_versions: list[str]) -> Optional[HarnessStamp]:
+        """#371 A4: the earliest ledger line for this session joined with
+        the transcript's CLI version; None when neither exists. Mixed when
+        a later ledger line differed or the transcript saw two versions."""
+        path = self._harness_stamps_path
+        if path is None:
+            path = load_config().harness_stamps_path
+        stamp = read_ledger(path).get(native_session_id)
+        if stamp is None and not cli_versions:
+            return None
+        return HarnessStamp(
+            cli_version=cli_versions[0] if cli_versions else None,
+            cct_version=stamp.cct_version if stamp else None,
+            cct_sha=stamp.cct_sha if stamp else None,
+            instructions_digest=stamp.instructions_digest if stamp else None,
+            providers_digest=stamp.providers_digest if stamp else None,
+            mixed=bool(stamp and stamp.mixed) or len(cli_versions) > 1,
         )
 
     # ── internals ──────────────────────────────────────────────────────

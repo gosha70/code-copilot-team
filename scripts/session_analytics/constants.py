@@ -92,6 +92,33 @@ CFG_DSN = "dsn"
 CFG_KUZU_PATH = "kuzu_path"
 #: Where the benchmark harness wrote its runs (Settings → Benchmarks).
 CFG_BENCHMARK_RUNS_ROOT = "benchmark_runs_root"
+# ── Harness stamp (#371 A4) ────────────────────────────────────────────
+# The SessionStart hook harness-stamp.sh appends one JSON line per
+# session to the ledger; ingest joins it by session id. The key names
+# cross the hook (bash), the reader and the store, so they live here.
+# The ledger path has ONE control, CCT_HARNESS_STAMPS in the environment
+# (config.ENV_HARNESS_STAMPS): the hook is bash and reads no JSON config,
+# so a JSON key would move the reader and leave the writer behind.
+HARNESS_STAMPS_FILENAME = "harness-stamps.jsonl"
+HARNESS_KEY_SESSION_ID = "session_id"
+HARNESS_KEY_RECORDED_AT = "recorded_at"
+HARNESS_KEY_CLI_VERSION = "cli_version"
+HARNESS_KEY_CCT_VERSION = "cct_version"
+HARNESS_KEY_CCT_SHA = "cct_sha"
+HARNESS_KEY_INSTRUCTIONS_DIGEST = "instructions_digest"
+HARNESS_KEY_PROVIDERS_DIGEST = "providers_digest"
+HARNESS_KEY_MIXED = "harness_mixed"
+#: The four facts a ledger line carries (cli_version comes from the transcript).
+HARNESS_LEDGER_FACTS = (
+    HARNESS_KEY_CCT_VERSION, HARNESS_KEY_CCT_SHA,
+    HARNESS_KEY_INSTRUCTIONS_DIGEST, HARNESS_KEY_PROVIDERS_DIGEST,
+)
+#: The five facts on copilot_session, in column order.
+HARNESS_FACTS = (HARNESS_KEY_CLI_VERSION,) + HARNESS_LEDGER_FACTS
+HARNESS_VERSION_MAX_CHARS = 40
+HARNESS_SHA_HEX_CHARS = 40
+HARNESS_DIGEST_HEX_CHARS = 64
+HARNESS_SESSION_ID_MAX_CHARS = 200
 #: The Kùzu store FILE name: the packaged default under ~/.cct, and the
 #: file created inside a directory when kuzu_path points at one.
 KUZU_STORE_NAME = "session-analytics-graph"
