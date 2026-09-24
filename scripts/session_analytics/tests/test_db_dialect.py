@@ -104,7 +104,9 @@ class TestSchemaMismatch(unittest.TestCase):
 
         store = db.Database.connect(RegistryResetTestCase.sqlite_dsn(self))  # type: ignore[arg-type]
         db.apply_ddl(store)
-        self.assertEqual(store.query("SELECT MAX(version) FROM schema_version"), [(8,)])
+        self.assertEqual(
+            store.query("SELECT MAX(version) FROM schema_version"), [(db._SCHEMA_VERSION,)]
+        )
 
     def test_pre_8_store_refused_by_the_api_and_the_cli(self) -> None:
         """The refusal must reach the person, not be logged as a flaky

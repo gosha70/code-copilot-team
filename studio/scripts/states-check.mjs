@@ -83,6 +83,8 @@ try {
         join(STUDIO, "lib/searchView.ts"),
         join(STUDIO, "lib/filterView.ts"),
         join(STUDIO, "components/SessionFilters.tsx"),
+        join(STUDIO, "lib/feedbackView.ts"),
+        join(STUDIO, "components/FeedbackControl.tsx"),
         join(STUDIO, "components/SessionHeader.tsx"),
         join(STUDIO, "components/SessionTags.tsx"),
         join(STUDIO, "lib/graphView.ts"),
@@ -1127,6 +1129,46 @@ try {
   const a2bare = render(a2sf.default, { filters: {}, facets: null, onChange: () => {} });
   if (/clear \d/.test(a2bare) || !/Any developer/.test(a2bare)) fail("bare bar");
   else console.log("  ok  no facets yet: the dropdowns still render with their any-value option, and there is nothing to clear");
+
+  // ── feedback (#371 A3) ──────────────────────────────────────────────
+  console.log("\nfeedback:");
+  const a3fv = await import(pathToFileURL(join(out, "lib/feedbackView.js")));
+  const a3vocab = [{ name: "rework_detected", type: "bool" }, { name: "rating", type: "num", min: 1, max: 5 }, { name: "note", type: "text" }];
+  const a3row = (over) => ({ id: 1, session_id: 7, sequence_num: 3, tool_sequence_num: null, name: "note", value: "wrong file", rationale: null, source_type: "human", source_id: "gosha", supersedes: null, superseded_by: null, created_at: "2026-09-23T10:00:00Z", ...over });
+  if (a3fv.targetKey(null, null) !== "session" || a3fv.targetKey(3, null) !== "turn:3" || a3fv.targetKey(3, 0) !== "call:3:0") fail("targetKey");
+  else if (a3fv.targetLabel(null, null) !== "this session" || a3fv.targetLabel(3, 0) !== "turn #3, call 0") fail("targetLabel");
+  else console.log("  ok  the three target levels key and label apart");
+  if (a3fv.formatValue({ value: true }) !== "yes" || a3fv.formatValue({ value: false }) !== "no" || a3fv.formatValue({ value: 4 }) !== "4" || a3fv.formatValue({ value: "t" }) !== "t") fail("formatValue");
+  else if (a3fv.sourceLabel(a3row()) !== "gosha" || a3fv.sourceLabel(a3row({ source_type: "judge", source_id: "heuristic-v1" })) !== "judge heuristic-v1") fail("sourceLabel");
+  else console.log("  ok  values read as yes/no, numbers and text; a person by id, a judge by kind and name");
+  const a3d = (t, raw, name) => a3fv.draftValue(t, raw, a3fv.typeFor(a3vocab, name));
+  if (!("error" in a3d("bool", "", "rework_detected")) || a3d("bool", "true", "rework_detected").value !== true || a3d("bool", "false", "rework_detected").value !== false) fail("bool draft");
+  else if (!("error" in a3d("num", "6", "rating")) || !("error" in a3d("num", "2.5", "rating")) || !("error" in a3d("num", "x", "rating")) || a3d("num", "4", "rating").value !== 4) fail("rating draft");
+  else if (a3d("num", "0.75", "risk").value !== 0.75 || !("error" in a3d("text", "   ", "note")) || a3d("text", " ok ", "note").value !== "ok") fail("custom/text draft");
+  else console.log("  ok  a draft is typed by its name: yes/no, an integer 1–5 for rating, any finite number for a custom name, non-blank text");
+  const a3after = a3fv.applyWrite([a3row(), a3row({ id: 2, name: "rating", value: 3 })], a3row({ id: 9, supersedes: 1, value: "fixed" }));
+  if (a3after.map((r) => r.id).join(",") !== "2,9") fail(`applyWrite: ${a3after.map((r) => r.id)}`);
+  else console.log("  ok  a write that supersedes a row removes it from the current list and appends the new one");
+
+  const a3fc = await import(pathToFileURL(join(out, "components/FeedbackControl.js")));
+  const a3props = (over) => ({ sessionId: 7, sequenceNum: 3, rows: [], vocabulary: a3vocab, onChange: () => {}, ...over });
+  const a3empty = render(a3fc.default, a3props({}));
+  if (!/add feedback/.test(a3empty) || /replace/.test(a3empty)) fail(`empty: ${a3empty}`);
+  else console.log("  ok  no rows: only the add affordance");
+  const a3rows = render(a3fc.default, a3props({ rows: [a3row({ rationale: "it read app.py" }), a3row({ id: 2, name: "rework_detected", value: false, source_type: "judge", source_id: "heuristic-v1", supersedes: 1 })] }));
+  if (!/wrong file/.test(a3rows) || !/it read app\.py/.test(a3rows) || !/gosha/.test(a3rows) || !/judge heuristic-v1/.test(a3rows) || !/replaced an earlier row/.test(a3rows)) fail(`rows: ${a3rows}`);
+  else if ((a3rows.match(/>replace<\/button>/g) || []).length !== 2) fail("one replace per current row");
+  else if (!/rework_detected<\/span><span[^>]*>no</.test(a3rows)) fail("a boolean row reads no");
+  else console.log("  ok  current rows: name, value, rationale, who said it, a judge's row marked by kind, one replace each");
+  const a3loading = render(a3fc.default, a3props({ vocabulary: null, rows: [a3row()] }));
+  if (/add feedback/.test(a3loading) || /replace/.test(a3loading) || !/wrong file/.test(a3loading)) fail("vocabulary not loaded: rows shown, nothing to click");
+  else console.log("  ok  before the vocabulary arrives the rows show and the form waits");
+  const a3form = render(a3fc.FeedbackForm, { vocabulary: a3vocab, supersedes: null, target: "turn #3", onCancel: () => {}, onSubmit: async () => {} });
+  if (!/feedback on turn #3/.test(a3form) || !/<option value="note" selected="">note<\/option>/.test(a3form) || !/custom name…/.test(a3form) || !/what you saw/.test(a3form)) fail(`form: ${a3form}`);
+  else console.log("  ok  the form offers the vocabulary, defaults to the text name, and takes a custom name");
+  const a3replace = render(a3fc.FeedbackForm, { vocabulary: a3vocab, supersedes: a3row({ name: "rating", value: 3 }), target: "this session", onCancel: () => {}, onSubmit: async () => {} });
+  if (!/replace rating on this session/.test(a3replace) || /<select[^>]*aria-label="feedback name"/.test(a3replace) || !/placeholder="1–5"/.test(a3replace)) fail(`replace form: ${a3replace}`);
+  else console.log("  ok  replacing keeps the name fixed and asks for a value of its type");
 
   if (!process.exitCode) console.log("\nstates-check: all states asserted");
 } finally {

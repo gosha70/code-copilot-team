@@ -16,6 +16,8 @@ from typing import Any, Optional
 
 from .. import archive as arch
 from .. import constants as C
+from .. import feedback as fb
+from .. import identity as IDENT
 from ..config import load_config
 from ..relational.db import (
     DIALECT_POSTGRES,
@@ -262,6 +264,16 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         """The human verdict on the PR an auto-build run produced (#190 §12)."""
         verdict: str
         note: Optional[str] = None
+
+    class FeedbackWrite(BaseModel):
+        """One feedback row from a person (#371 A3). The source is NOT a
+        field: the server names it (see session_feedback_add)."""
+        name: str
+        value: Any
+        rationale: Optional[str] = None
+        sequence_num: Optional[int] = None
+        tool_sequence_num: Optional[int] = None
+        supersedes: Optional[int] = None
 
     # ── health + settings ──────────────────────────────────────────────
     @app.get("/api/health")
@@ -1379,6 +1391,56 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             return {"id": session_id, "tags": mcp_tools.set_session_flag(conn, session_id, flag, req.on)}
         except ValueError as exc:
             raise HTTPException(status_code=404 if "no session" in str(exc) else 400, detail=str(exc)) from None
+        finally:
+            conn.close()
+
+    def _current_developer() -> str:
+        """The server's own developer id, by the same precedence the CLI
+        uses (env/.env > config > git global email > "local"); there is
+        no flag here. Resolved per request so a changed .env is honoured
+        without a restart. Never the request's or the session's."""
+        cfg = load_config()
+        return IDENT.derive_developer_id(
+            env_value=cfg.developer_id_env, config_value=cfg.developer_id_cfg
+        ).id
+
+    @app.get("/api/feedback/vocabulary")
+    def feedback_vocabulary() -> dict[str, Any]:
+        """The offered feedback names and the type each takes (#371 A3),
+        from the one list in constants; the Studio's control offers them."""
+        return {"names": fb.vocabulary()}
+
+    @app.post("/api/sessions/{session_id}/feedback")
+    def session_feedback_add(session_id: int, req: FeedbackWrite) -> dict[str, Any]:
+        """Write one feedback row on the session, a turn or a tool call
+        (#371 A3). source_type is always ``human`` and source_id the
+        server's current developer; a body cannot claim otherwise. 404
+        for a target not in the store, 400 for a name, value, rationale
+        or supersession the rules refuse."""
+        conn = db()
+        try:
+            return fb.add_feedback(
+                conn, session_id, req.name, req.value,
+                C.FEEDBACK_SOURCE_HUMAN, _current_developer(),
+                rationale=req.rationale, sequence_num=req.sequence_num,
+                tool_sequence_num=req.tool_sequence_num, supersedes=req.supersedes,
+            )
+        except fb.UnknownTargetError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+        except fb.InvalidFeedbackError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        finally:
+            conn.close()
+
+    @app.get("/api/sessions/{session_id}/feedback")
+    def session_feedback_list(session_id: int) -> dict[str, Any]:
+        """Every feedback row on the session, current and superseded,
+        newest first; each names what superseded it, if anything."""
+        conn = db()
+        try:
+            if conn.query_one("SELECT 1 FROM copilot_session WHERE id = ?", (session_id,)) is None:
+                raise HTTPException(status_code=404, detail=f"no session {session_id}")
+            return {"id": session_id, "feedback": fb.list_feedback(conn, session_id)}
         finally:
             conn.close()
 

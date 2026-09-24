@@ -8,6 +8,7 @@ import {
   AnalysisKind,
   AnalysisRow,
   api,
+  FeedbackRow,
   JudgeModels,
   SessionAnalysisResponse,
   PipelineStep,
@@ -29,6 +30,8 @@ import SimilarPanel, { stepsFor } from "@/components/SimilarPanel";
 import ResponseTimeCard from "@/components/ResponseTime";
 import TraceTree from "@/components/TraceTree";
 import { nestTurns } from "@/lib/traceView";
+import FeedbackControl from "@/components/FeedbackControl";
+import { targetKey, type VocabularyEntry } from "@/lib/feedbackView";
 import SessionHeader from "@/components/SessionHeader";
 import { HandTag } from "@/components/SessionTags";
 import { classifySimilar, type SimilarOutcome } from "@/lib/similarStates";
@@ -84,6 +87,22 @@ export default function SessionDetailPage() {
     }
   }
 
+  // Feedback (#371 A3). The payload carries every target's current rows;
+  // a write here replaces that target's list without re-reading the
+  // session. The vocabulary is the server's one list, read once.
+  const { data: vocabData } = useApi(() => api.feedbackVocabulary(), []);
+  const vocabulary: VocabularyEntry[] | null = vocabData?.names ?? null;
+  const [feedbackByTarget, setFeedbackByTarget] = useState<Record<string, FeedbackRow[]>>({});
+  const feedbackFor = useCallback(
+    (key: string, fromPayload: FeedbackRow[]) => feedbackByTarget[key] ?? fromPayload,
+    [feedbackByTarget],
+  );
+  const setFeedbackFor = useCallback(
+    (key: string, rows: FeedbackRow[]) => setFeedbackByTarget((m) => ({ ...m, [key]: rows })),
+    [],
+  );
+  const feedback: FeedbackContext = { sessionId: id, vocabulary, feedbackFor, setFeedbackFor };
+
   // A turn chip on an analysis tab links to `#turn-N`, which lives on the
   // Timeline. The Timeline is not mounted while another tab is showing,
   // so the hash must first switch the tab; the Timeline then scrolls to
@@ -107,6 +126,12 @@ export default function SessionDetailPage() {
         baseline={baseline}
         tags={tags ?? data.tags}
         onToggleTag={(tag, on) => toggleTag(tag, on)}
+      />
+      <FeedbackControl
+        sessionId={id}
+        rows={feedbackFor(targetKey(null, null), data.feedback)}
+        vocabulary={vocabulary}
+        onChange={(rows) => setFeedbackFor(targetKey(null, null), rows)}
       />
 
       <div className="flex gap-1 border-b border-slate-200 overflow-x-auto items-center">
@@ -132,7 +157,7 @@ export default function SessionDetailPage() {
         </Link>
       </div>
 
-      {tab === "timeline" && <Timeline data={data} />}
+      {tab === "timeline" && <Timeline data={data} feedback={feedback} />}
       {ANALYSIS_KINDS.includes(tab as AnalysisKind) && (
         <Analysis id={id} kind={tab as AnalysisKind} onResult={refreshTags} />
       )}
@@ -165,7 +190,15 @@ function latencyTone(t: TurnRow): string {
   return "text-slate-500";
 }
 
-function Timeline({ data }: { data: SessionDetail }) {
+/** What a turn card needs to show and write feedback (#371 A3). */
+interface FeedbackContext {
+  sessionId: number;
+  vocabulary: VocabularyEntry[] | null;
+  feedbackFor: (key: string, fromPayload: FeedbackRow[]) => FeedbackRow[];
+  setFeedbackFor: (key: string, rows: FeedbackRow[]) => void;
+}
+
+function Timeline({ data, feedback }: { data: SessionDetail; feedback: FeedbackContext }) {
   const anyArchived = data.turns.some((t) => t.archived);
   // The browser's own anchor jump happened before these cards existed
   // (the tab was not mounted), so repeat it now that they do — and mark
@@ -201,7 +234,7 @@ function Timeline({ data }: { data: SessionDetail }) {
       )}
       {nestTurns(data.turns).map(({ turn, children }) => (
         <div key={turn.sequence_num}>
-          <TurnCard t={turn} highlighted={turn.sequence_num === target} />
+          <TurnCard t={turn} highlighted={turn.sequence_num === target} feedback={feedback} />
           {children.length > 0 && (
             <div className="ml-6 mt-1 space-y-1 border-l-2 border-blue-100 pl-2">
               {children.map((c) => (
@@ -209,6 +242,7 @@ function Timeline({ data }: { data: SessionDetail }) {
                   key={c.sequence_num}
                   t={c}
                   highlighted={c.sequence_num === target}
+                  feedback={feedback}
                 />
               ))}
             </div>
@@ -219,8 +253,17 @@ function Timeline({ data }: { data: SessionDetail }) {
   );
 }
 
-function TurnCard({ t, highlighted }: { t: TurnRow; highlighted: boolean }) {
+function TurnCard({
+  t,
+  highlighted,
+  feedback,
+}: {
+  t: TurnRow;
+  highlighted: boolean;
+  feedback: FeedbackContext;
+}) {
   const [open, setOpen] = useState(false);
+  const turnKey = targetKey(t.sequence_num, null);
   const text = t.archived ? t.content : t.content_preview;
   const long = (text || "").length > 300 || (text || "").split("\n").length > 3;
   return (
@@ -300,7 +343,27 @@ function TurnCard({ t, highlighted }: { t: TurnRow; highlighted: boolean }) {
               </span>
             )}
           </div>
-          <TraceTree calls={t.tool_calls} />
+          <TraceTree
+            calls={t.tool_calls}
+            renderCall={(c) => (
+              <FeedbackControl
+                sessionId={feedback.sessionId}
+                sequenceNum={t.sequence_num}
+                toolSequenceNum={c.sequence_num}
+                rows={feedback.feedbackFor(targetKey(t.sequence_num, c.sequence_num), c.feedback)}
+                vocabulary={feedback.vocabulary}
+                onChange={(rows) => feedback.setFeedbackFor(targetKey(t.sequence_num, c.sequence_num), rows)}
+                compact
+              />
+            )}
+          />
+          <FeedbackControl
+            sessionId={feedback.sessionId}
+            sequenceNum={t.sequence_num}
+            rows={feedback.feedbackFor(turnKey, t.feedback)}
+            vocabulary={feedback.vocabulary}
+            onChange={(rows) => feedback.setFeedbackFor(turnKey, rows)}
+          />
         </div>
       </div>
     </Card>

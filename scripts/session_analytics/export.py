@@ -92,6 +92,15 @@ TRACE_DOCUMENTS_COLUMNS: tuple[str, ...] = (
     "content_hash", "source_path", "redaction_mode", "archived_at",
 )
 
+# #371 A3. Like trace_documents this carries a person's own words
+# (value_text, rationale), unredacted by design; anchored by sequence
+# numbers, not turn/tool-call ids. value_bool is normalized to 0/1.
+FEEDBACK_COLUMNS: tuple[str, ...] = (
+    "id", "session_ref", "sequence_num", "tool_sequence_num", "name",
+    "value_bool", "value_num", "value_text", "rationale", "source_type",
+    "source_id", "supersedes", "created_at",
+)
+
 _COLUMNS: dict[str, tuple[str, ...]] = {
     C.EXPORT_TABLE_SESSIONS: SESSIONS_COLUMNS,
     C.EXPORT_TABLE_TURNS: TURNS_COLUMNS,
@@ -99,6 +108,7 @@ _COLUMNS: dict[str, tuple[str, ...]] = {
     C.EXPORT_TABLE_KPIS: KPIS_COLUMNS,
     C.EXPORT_TABLE_BENCHMARK_RESULTS: BENCHMARK_RESULTS_COLUMNS,
     C.EXPORT_TABLE_TRACE_DOCUMENTS: TRACE_DOCUMENTS_COLUMNS,
+    C.EXPORT_TABLE_FEEDBACK: FEEDBACK_COLUMNS,
 }
 
 # Boolean columns are stored with dialect-dependent affinity (SQLite returns
@@ -192,6 +202,15 @@ _TRACE_DOCUMENTS_SQL = f"""
     ORDER BY id
 """
 
+_FEEDBACK_SQL = f"""
+    SELECT id, session_ref, sequence_num, tool_sequence_num, name,
+           value_bool, value_num, value_text, rationale, source_type,
+           source_id, supersedes, created_at
+    FROM {C.TBL_FEEDBACK}
+    ORDER BY id
+"""
+_FEEDBACK_BOOL_IDX = (FEEDBACK_COLUMNS.index("value_bool"),)
+
 
 def _bool01(v: Any) -> Any:
     """Normalize a stored boolean-affinity value to 0/1 (``None`` stays ``None``)."""
@@ -246,6 +265,11 @@ def iter_trace_documents(db: Database) -> Iterator[tuple]:
     return _stream(db, _TRACE_DOCUMENTS_SQL)
 
 
+def iter_feedback(db: Database) -> Iterator[tuple]:
+    """Stream ``feedback`` rows in ``FEEDBACK_COLUMNS`` order, by ``id``."""
+    return _stream(db, _FEEDBACK_SQL, _FEEDBACK_BOOL_IDX)
+
+
 _ROW_ITERATORS = {
     C.EXPORT_TABLE_SESSIONS: iter_sessions,
     C.EXPORT_TABLE_TURNS: iter_turns,
@@ -253,6 +277,7 @@ _ROW_ITERATORS = {
     C.EXPORT_TABLE_KPIS: iter_kpis,
     C.EXPORT_TABLE_BENCHMARK_RESULTS: iter_benchmark_results,
     C.EXPORT_TABLE_TRACE_DOCUMENTS: iter_trace_documents,
+    C.EXPORT_TABLE_FEEDBACK: iter_feedback,
 }
 
 

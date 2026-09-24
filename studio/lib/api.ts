@@ -533,6 +533,8 @@ export interface TurnRow {
   parent_sequence: number | null;
   /** Every tool call the turn issued, in order; [] when none. */
   tool_calls: ToolCallRow[];
+  /** Current feedback on this turn (#371 A3); [] when none. */
+  feedback: FeedbackRow[];
 }
 
 export interface ToolCallRow {
@@ -553,6 +555,39 @@ export interface ToolCallRow {
    *  stamp is missing or malformed or the clock went backwards. */
   duration_seconds: number | null;
   files: { file_path: string; access_type: string | null }[];
+  /** Current feedback on this call (#371 A3); [] when none. */
+  feedback: FeedbackRow[];
+}
+
+// ── feedback (#371 A3) ────────────────────────────────────────────────
+/** One named, typed judgement on a session, a turn or a tool call. The
+ *  target is `(sequence_num, tool_sequence_num)`: both null is the
+ *  session. History is kept by supersession: a replaced row stays and
+ *  `superseded_by` names its replacement; a current row has none. */
+export interface FeedbackRow {
+  id: number;
+  session_id: number;
+  sequence_num: number | null;
+  tool_sequence_num: number | null;
+  name: string;
+  value: boolean | number | string;
+  rationale: string | null;
+  source_type: "human" | "judge" | "code";
+  /** The developer (human), the judge and model, or the script. */
+  source_id: string;
+  supersedes: number | null;
+  superseded_by: number | null;
+  created_at: string;
+}
+
+/** What a person sends; the server names the source. */
+export interface FeedbackWrite {
+  name: string;
+  value: boolean | number | string;
+  rationale?: string | null;
+  sequence_num?: number | null;
+  tool_sequence_num?: number | null;
+  supersedes?: number | null;
 }
 
 export interface SessionLatency {
@@ -565,6 +600,8 @@ export interface SessionLatency {
 
 export interface SessionDetail extends SessionRow {
   turns: TurnRow[];
+  /** Current session-level feedback (#371 A3). */
+  feedback: FeedbackRow[];
   tool_usage: { tool: string; count: number }[];
   errors: { error_type: string; tool_name: string; message: string }[];
   /** Over assistant turns only; null when no turn carries a timestamp. */
@@ -1697,6 +1734,28 @@ export const api = {
     }
     return (await r.json()) as { id: number; tags: SessionTagsInfo };
   },
+  /** Write one feedback row (#371 A3); the server sets the source. A
+   *  refused row (400/404) throws with the server's reason. */
+  addFeedback: async (id: number, body: FeedbackWrite) => {
+    const r = await fetch(`${BASE}/api/sessions/${id}/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      const parsed = await r.json().catch(() => ({}));
+      throw new Error(typeof parsed?.detail === "string" ? parsed.detail : `feedback → ${r.status}`);
+    }
+    return (await r.json()) as FeedbackRow;
+  },
+  /** The offered feedback names and the type each takes: the server's one list. */
+  feedbackVocabulary: () =>
+    get<{ names: { name: string; type: "bool" | "num" | "text"; min?: number; max?: number }[] }>(
+      "/api/feedback/vocabulary",
+    ),
+  /** Every feedback row on the session, current and superseded, newest first. */
+  sessionFeedback: (id: number) =>
+    get<{ id: number; feedback: FeedbackRow[] }>(`/api/sessions/${id}/feedback`),
   sessionAnalysis: (id: number) =>
     get<SessionAnalysisResponse>(`/api/sessions/${id}/analysis`),
   runSessionAnalysis: (

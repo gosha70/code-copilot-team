@@ -5,7 +5,7 @@
 // files it touched, and the time until the result. The data is what ingest
 // already stores, redacted then: an input PREVIEW, never bodies, so nothing
 // shown here is new information.
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { formatDuration } from "@/components/ui";
 import type { ToolCallRow } from "@/lib/api";
 
@@ -24,7 +24,14 @@ export function resultLabel(c: ToolCallRow): { text: string; tone: string } {
   return { text: c.status || "ok", tone: "text-emerald-700" };
 }
 
-export default function TraceTree({ calls }: { calls: ToolCallRow[] }) {
+export default function TraceTree({
+  calls,
+  renderCall,
+}: {
+  calls: ToolCallRow[];
+  /** Rendered under each call when the tree is open (#371 A3: feedback). */
+  renderCall?: (c: ToolCallRow) => ReactNode;
+}) {
   const [open, setOpen] = useState(false);
   if (calls.length === 0) return null;
   const errors = calls.filter((c) => c.is_error).length;
@@ -75,6 +82,7 @@ export default function TraceTree({ calls }: { calls: ToolCallRow[] }) {
                     ))}
                   </ul>
                 )}
+                {renderCall?.(c)}
               </li>
             );
           })}

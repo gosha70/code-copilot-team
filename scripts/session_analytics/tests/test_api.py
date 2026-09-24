@@ -1093,6 +1093,70 @@ class TestApi(RegistryResetTestCase):
         self.client.post(f"/api/sessions/{sid}/analysis/tuning", json={"judge": "fake:x"})
         self.assertEqual(self.client.get(f"/api/sessions/{sid}").json()["tags"]["analyzed_kinds"], 1)
 
+    # ── feedback (#371 A3) ────────────────────────────────────────────
+    def test_feedback_is_written_by_the_server_s_own_developer_and_read_back(self) -> None:
+        from session_analytics.config import ENV_DEVELOPER_ID
+
+        sid = self._session_id()
+        with mock.patch.dict("os.environ", {ENV_DEVELOPER_ID: "reviewer-one"}):
+            # A body that claims a source is ignored: the server names it.
+            r = self.client.post(f"/api/sessions/{sid}/feedback", json={
+                "name": C.FEEDBACK_NAME_NOTE, "value": "wrong file", "sequence_num": 1,
+                "rationale": "it read app.py",
+                "source_id": "someone-else", "source_type": C.FEEDBACK_SOURCE_JUDGE,
+            })
+        self.assertEqual(r.status_code, 200, r.text)
+        row = r.json()
+        self.assertEqual((row["source_type"], row["source_id"]), (C.FEEDBACK_SOURCE_HUMAN, "reviewer-one"))
+        self.assertEqual((row["name"], row["value"], row["sequence_num"], row["tool_sequence_num"]),
+                         (C.FEEDBACK_NAME_NOTE, "wrong file", 1, None))
+        # The session's own developer_id is not the source either.
+        self.assertNotEqual(row["source_id"], self.client.get(f"/api/sessions/{sid}").json()["developer_id"])
+        # A tool-call row, a session row, then a replacement of the first.
+        call = self.client.post(f"/api/sessions/{sid}/feedback", json={
+            "name": C.LABEL_BOOL_NAMES[0], "value": True, "sequence_num": 1, "tool_sequence_num": 0,
+        }).json()
+        rating = self.client.post(f"/api/sessions/{sid}/feedback",
+                                  json={"name": C.FEEDBACK_NAME_RATING, "value": 4}).json()
+        again = self.client.post(f"/api/sessions/{sid}/feedback", json={
+            "name": C.FEEDBACK_NAME_NOTE, "value": "wrong file, then fixed", "sequence_num": 1,
+            "supersedes": row["id"],
+        }).json()
+        detail = self.client.get(f"/api/sessions/{sid}").json()
+        self.assertEqual([f["id"] for f in detail["feedback"]], [rating["id"]])
+        turn1 = next(t for t in detail["turns"] if t["sequence_num"] == 1)
+        self.assertEqual([f["id"] for f in turn1["feedback"]], [again["id"]])
+        self.assertEqual([f["id"] for f in turn1["tool_calls"][0]["feedback"]], [call["id"]])
+        listed = self.client.get(f"/api/sessions/{sid}/feedback").json()["feedback"]
+        self.assertEqual([f["id"] for f in listed], [again["id"], rating["id"], call["id"], row["id"]])
+        self.assertEqual(listed[-1]["superseded_by"], again["id"])
+
+    def test_feedback_vocabulary_is_the_server_s_one_list(self) -> None:
+        names = self.client.get("/api/feedback/vocabulary").json()["names"]
+        self.assertEqual([n["name"] for n in names], [n for n, _ in C.FEEDBACK_VOCABULARY])
+        rating = next(n for n in names if n["name"] == C.FEEDBACK_NAME_RATING)
+        self.assertEqual((rating["type"], rating["min"], rating["max"]),
+                         (C.FEEDBACK_TYPE_NUM, C.FEEDBACK_RATING_MIN, C.FEEDBACK_RATING_MAX))
+        self.assertEqual(names[0], {"name": C.LABEL_BOOL_NAMES[0], "type": C.FEEDBACK_TYPE_BOOL})
+
+    def test_feedback_refusals_are_404_for_targets_and_400_for_the_rules(self) -> None:
+        sid = self._session_id()
+        post = lambda body, s=sid: self.client.post(f"/api/sessions/{s}/feedback", json=body)  # noqa: E731
+        self.assertEqual(post({"name": "n", "value": True}, 99999).status_code, 404)
+        self.assertEqual(post({"name": "n", "value": True, "sequence_num": 999}).status_code, 404)
+        self.assertEqual(post({"name": "n", "value": True, "sequence_num": 1, "tool_sequence_num": 9}).status_code, 404)
+        self.assertEqual(self.client.get("/api/sessions/99999/feedback").status_code, 404)
+        self.assertEqual(post({"name": C.FEEDBACK_NAME_RATING, "value": 9}).status_code, 400)
+        self.assertEqual(post({"name": C.LABEL_BOOL_NAMES[0], "value": "yes"}).status_code, 400)
+        self.assertEqual(post({"name": "", "value": True}).status_code, 400)
+        self.assertEqual(post({"name": "n", "value": [1]}).status_code, 400)
+        self.assertEqual(post({"name": "n"}).status_code, 422)
+        base = post({"name": "n", "value": "a", "sequence_num": 1}).json()
+        self.assertEqual(post({"name": "m", "value": "b", "sequence_num": 1, "supersedes": base["id"]}).status_code, 400)
+        self.assertEqual(post({"name": "n", "value": "b", "supersedes": base["id"]}).status_code, 400)
+        self.assertEqual(post({"name": "n", "value": "b", "sequence_num": 1, "supersedes": base["id"]}).status_code, 200)
+        self.assertEqual(post({"name": "n", "value": "c", "sequence_num": 1, "supersedes": base["id"]}).status_code, 400)
+
     def test_embedding_endpoints_and_the_similar_steps_in_the_pipeline(self) -> None:
         # Settings → Embeddings: the configured embedding, its model list,
         # a probe; the pipeline knows embed + similar and their counts.
