@@ -257,11 +257,12 @@ EXPORT_TABLE_LABELS = "labels"
 EXPORT_TABLE_KPIS = "kpis"
 EXPORT_TABLE_BENCHMARK_RESULTS = "benchmark_results"  # E9 outcomes (#92)
 EXPORT_TABLE_TRACE_DOCUMENTS = "trace_documents"      # E10 Slice A (#98)
+EXPORT_TABLE_FEEDBACK = "feedback"                    # #371 A3
 EXPORT_TABLE_ALL = "all"
 # The actual queryable tables (i.e. everything except the "all" pseudo-table).
 EXPORT_DATA_TABLES = (
     EXPORT_TABLE_SESSIONS, EXPORT_TABLE_TURNS, EXPORT_TABLE_LABELS, EXPORT_TABLE_KPIS,
-    EXPORT_TABLE_BENCHMARK_RESULTS, EXPORT_TABLE_TRACE_DOCUMENTS,
+    EXPORT_TABLE_BENCHMARK_RESULTS, EXPORT_TABLE_TRACE_DOCUMENTS, EXPORT_TABLE_FEEDBACK,
 )
 EXPORT_TABLES = EXPORT_DATA_TABLES + (EXPORT_TABLE_ALL,)
 
@@ -333,6 +334,34 @@ LABEL_BOOL_NAMES = (
     "rework_detected",
 )
 LABEL_SOURCE_HUMAN = "human"
+
+# ── Feedback (#371 A3) ─────────────────────────────────────────────────
+# A named, typed judgement on a session, a turn or a tool call. The
+# source types cross store / API / Studio; the vocabulary is the list the
+# control offers and the server types by. A name outside it is a custom
+# name (any one supported type, non-blank, bounded).
+TBL_FEEDBACK = "feedback"
+FEEDBACK_SOURCE_HUMAN = "human"
+FEEDBACK_SOURCE_JUDGE = "judge"
+FEEDBACK_SOURCE_CODE = "code"
+FEEDBACK_SOURCE_TYPES = (FEEDBACK_SOURCE_HUMAN, FEEDBACK_SOURCE_JUDGE, FEEDBACK_SOURCE_CODE)
+FEEDBACK_TYPE_BOOL = "bool"
+FEEDBACK_TYPE_NUM = "num"
+FEEDBACK_TYPE_TEXT = "text"
+FEEDBACK_NAME_RATING = "rating"
+FEEDBACK_NAME_NOTE = "note"
+FEEDBACK_RATING_MIN = 1
+FEEDBACK_RATING_MAX = 5
+#: name → required value type, in the order the control offers them:
+#: the nine rubric booleans, then rating, then note.
+FEEDBACK_VOCABULARY = tuple(
+    [(n, FEEDBACK_TYPE_BOOL) for n in LABEL_BOOL_NAMES]
+    + [(FEEDBACK_NAME_RATING, FEEDBACK_TYPE_NUM), (FEEDBACK_NAME_NOTE, FEEDBACK_TYPE_TEXT)]
+)
+FEEDBACK_NAME_MAX_CHARS = 80
+FEEDBACK_TEXT_MAX_CHARS = 4000
+FEEDBACK_RATIONALE_MAX_CHARS = 4000
+FEEDBACK_SOURCE_ID_MAX_CHARS = 120
 # score.json field keys. These cross the benchmark_runner → session_analytics
 # boundary (run.py writes them; correlate.py reads them), so per the repo's
 # constants rule they live here once — same treatment as RUN_RECORD_* above.

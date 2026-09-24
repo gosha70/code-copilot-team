@@ -15,6 +15,7 @@ from typing import Any, Optional
 
 from .. import constants as C
 from ..config import NoiseConfig
+from ..feedback import current_feedback, fold_by_target
 from ..relational.db import Database
 from ..session_filter import keep_clause, noise_clause
 
@@ -452,11 +453,13 @@ def get_session_details(db: Database, session_id: int) -> dict[str, Any]:
             # Filled below, once every turn's uuid is known.
             "parent_sequence": None,
             "tool_calls": [],
+            "feedback": [],
         }
         for r in turns
     ]
     _attach_latency(session)
     _attach_trace(db, session, [(r[11], r[12], r[13]) for r in turns])
+    _attach_feedback(db, session)
     session["tool_usage"] = [
         {"tool": r[0], "count": int(r[1])}
         for r in db.query(
@@ -1042,11 +1045,27 @@ def _attach_trace(
                 "completed_at": done,
                 "duration_seconds": turn_latency(_parse_ts(turn.get("timestamp")), _parse_ts(done)),
                 "files": [],
+                "feedback": [],
             }
             calls_by_id[call_id] = call
             turn["tool_calls"].append(call)
         if path:
             call["files"].append({"file_path": path, "access_type": access})
+
+
+def _attach_feedback(db: Database, session: dict[str, Any]) -> None:
+    """#371 A3: the session's CURRENT feedback, folded onto the session,
+    its turns and their tool calls by sequence number. One query for the
+    whole session (feedback.current_feedback); a row whose target is no
+    longer in the session (a re-ingest that shortened it) is left out of
+    the payload but stays in the store and in GET …/feedback."""
+    on_session, on_turn, on_call = fold_by_target(current_feedback(db, session["id"]))
+    session["feedback"] = on_session
+    for turn in session["turns"]:
+        seq = int(turn["sequence_num"])
+        turn["feedback"] = on_turn.get(seq, [])
+        for call in turn["tool_calls"]:
+            call["feedback"] = on_call.get((seq, int(call["sequence_num"])), [])
 
 
 def _b(v):

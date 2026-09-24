@@ -52,7 +52,9 @@ export default function JudgeQuality({
           </li>
           <li>
             Human: <code>session-analytics labels sample --n 50 --out sample.csv</code>, label the CSV,
-            then <code>session-analytics labels import sample.csv --labeler you</code>.
+            then <code>session-analytics labels import sample.csv --labeler you</code>. That CSV is
+            what this statistic reads; feedback on a single turn is given on the session page and
+            is not counted here.
           </li>
         </ul>
       </Card>

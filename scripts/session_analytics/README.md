@@ -321,6 +321,7 @@ Parquet (optional `pyarrow`) for spreadsheets, pandas, or DuckDB:
 | `kpis`     | One row per `session_kpi` (the session-level rollup a rubric produced). |
 | `benchmark_results` | One row per benchmark attempt outcome (E9): stable identity + result + `session_ref`. |
 | `trace_documents` | One row per archived trace turn (E10). **⚠ Contains FULL redacted turn text**, not 500-char previews — a materially wider disclosure than the preview tables. Only opted-in projects have rows, and every row passed redaction, but review before sharing an export that includes it. |
+| `feedback` | One row per feedback record (#371 A3), current and superseded, anchored by `session_ref` + sequence numbers. **Carries a person's own words** (`value_text`, `rationale`), which are not redacted. |
 | `all`      | One file per table above, written as `<table>.<format>` into `--out <dir>`. **Note:** since E10 this includes `trace_documents` — if your workflow shares `--table all` output, be aware it now carries full redacted trace text for opted-in projects. |
 
 **Formats**: `--format csv` (default, stdlib `csv`, streamed row-by-row — the
@@ -466,6 +467,39 @@ exports via `--table benchmark_results` (and `--table all`).
 
 **Deferred (out of scope)**: a Studio comparison UI; a fuzzy `project_path` +
 time-window fallback for null-`session_id` runs — a later E9 issue.
+
+## Feedback (#371 A3)
+
+A session page takes feedback from a person on the session, on any turn,
+and on any tool call in the trace tree: a **name**, a **value** of the type
+the name takes, and an optional **rationale** ("why"). The names offered
+are the packaged rubric's nine booleans (`rework_detected`,
+`response_helpful`, …), `rating` (an integer 1–5) and `note` (free text);
+a custom name (up to 80 characters) is accepted with any one of those
+types. The server types the value by its name and refuses a mismatch
+with a 400, so a `rating` of "good" or a `rework_detected` of `1` never
+lands; text values and rationales are capped at 4,000 characters.
+
+Feedback is history, not editing: "replace" writes a new row that names
+the one it supersedes, and the old row stays. A row can be replaced once,
+only by a row with the same name on the same target, and by anyone — a
+person correcting a judge's row is the point. The page and the MCP
+`get_session_details` tool show the **current** rows (`feedback` on the
+session, each turn and each tool call); `GET /api/sessions/{id}/feedback`
+lists every row with what superseded it. The source is never the
+client's: a row written through the API is `human` from the developer id
+the *server* resolves (`CCT_DEVELOPER_ID`, `.env`, config, git email, or
+`local`), and a body that claims otherwise is ignored. Judge and code
+sources write through the same `feedback.add_feedback` function and name
+themselves; no judge writes feedback yet.
+
+Targets are sequence numbers, not row ids, so feedback survives a
+re-ingest of its session. The table lands on an existing store in place
+(schema 9; a new table needs no recreation). `human_label`, the CSV path
+and the judge-agreement statistic are untouched: feedback given here is
+not counted in that statistic. **Feedback text is a person's own words
+and is not redacted**; on a shared Postgres store the team sees it, and
+the `feedback` export table carries it.
 
 ## Search and filters (#371 A2)
 

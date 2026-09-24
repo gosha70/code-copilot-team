@@ -93,6 +93,7 @@ _DDL_FILES = (
     "ddl/postgres/007_human_label.sql",
     "ddl/postgres/008_session_flag.sql",
     "ddl/postgres/009_auto_build_verdict.sql",
+    "ddl/postgres/010_feedback.sql",
 )
 # 3: + local_heartbeat (Slice B1, #187)
 # 4: + trace search index (E10 Slice B, #65). NOTE that apply_ddl creates
@@ -109,7 +110,9 @@ _DDL_FILES = (
 #    refuses a store that has the table without the column, and says how
 #    to recreate it. Session Analytics is unreleased; there is no
 #    migration path by the owner's ruling.
-_SCHEMA_VERSION = 8
+# 9: + feedback (#371 A3) — a new table, so create-if-absent is the whole
+#    migration again: a schema-8 store gains it in place and is stamped 9.
+_SCHEMA_VERSION = 9
 
 _PK_SQL = {
     DIALECT_POSTGRES: "BIGSERIAL PRIMARY KEY",
