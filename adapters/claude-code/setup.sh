@@ -396,6 +396,8 @@ if [[ "$SYNC_MODE" == "1" ]]; then
             echo "[done] Added peer-review hook to $SETTINGS_FILE" || true
         ensure_hook_command "$SETTINGS_FILE" "SessionStart" "" "~/.claude/hooks/memkernel-recall.sh" 30000 && \
             echo "[done] Added MemKernel SessionStart hook to $SETTINGS_FILE" || true
+        ensure_hook_command "$SETTINGS_FILE" "SessionStart" "" "~/.claude/hooks/harness-stamp.sh" 10000 && \
+            echo "[done] Added harness-stamp SessionStart hook to $SETTINGS_FILE" || true
         ensure_hook_command "$SETTINGS_FILE" "PreCompact" "" "~/.claude/hooks/memkernel-pre-compact.sh" 30000 && \
             echo "[done] Added MemKernel PreCompact hook to $SETTINGS_FILE" || true
         ensure_hook_command "$SETTINGS_FILE" "PostCompact" "" "~/.claude/hooks/memkernel-post-compact.sh" 30000 && \
@@ -1189,6 +1191,11 @@ HOOKS_CONFIG='{
             "type": "command",
             "command": "~/.claude/hooks/memkernel-recall.sh",
             "timeout": 30000
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/harness-stamp.sh",
+            "timeout": 10000
           }
         ]
       }
@@ -1273,6 +1280,7 @@ elif command -v jq &>/dev/null; then
         fi
 
         ensure_hook_command "$UPDATED" "SessionStart" "" "~/.claude/hooks/memkernel-recall.sh" 30000 && CHANGED=1 || true
+        ensure_hook_command "$UPDATED" "SessionStart" "" "~/.claude/hooks/harness-stamp.sh" 10000 && CHANGED=1 || true
         ensure_hook_command "$UPDATED" "PreCompact" "" "~/.claude/hooks/memkernel-pre-compact.sh" 30000 && CHANGED=1 || true
         ensure_hook_command "$UPDATED" "PostCompact" "" "~/.claude/hooks/memkernel-post-compact.sh" 30000 && CHANGED=1 || true
 

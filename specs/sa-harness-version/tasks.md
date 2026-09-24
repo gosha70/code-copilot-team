@@ -4,7 +4,7 @@
 |---|----|------|---------|------|
 | 0 | — | Owner approves the plan (D1–D8 as corrected 2026-09-24; split A4a/A4b) | `plan.md` | [x] |
 | 1 | A4a | Hook `harness-stamp.sh` (instructions/providers digests, `harness.json` with full sha, ledger append, guards); registered in `settings.json`; `setup.sh` installs it and writes `~/.cct/harness.json` on install and `--sync`; NOT added to `CC_PLUGIN_HOOKS` (FR-1, FR-7) | `adapters/claude-code/.claude/hooks/harness-stamp.sh`, `.claude/settings.json`, `setup.sh` | [x] |
-| 2 | A4a | Six columns, schema 10, `_REQUIRED_COLUMNS`, constants, config key for the ledger path, `RawSession.harness` (FR-4) | `001_core.sql`, `relational/db.py`, `constants.py`, `config.py`, `contracts.py` | [x] |
+| 2 | A4a | Six columns, schema 10, `_REQUIRED_COLUMNS`, constants, the ledger path (environment-only), `RawSession.harness` (FR-4) | `001_core.sql`, `relational/db.py`, `constants.py`, `config.py`, `contracts.py` | [x] |
 | 3 | A4a | `harness_stamps.read_ledger` (earliest + mixed, sanitised); adapter reads `version`(s) and joins the stamp; `upsert_session` writes the six; `_SESSION_COLS` gains them (FR-2, FR-3, FR-4) | `harness_stamps.py`, `adapters/claude_code.py`, `relational/store.py`, `mcp/tools.py`, fixtures | [x] |
 | 4 | A4a | Session header stamp / mixed / unstamped; `harnessView.ts`; states-check (FR-6 part) | `studio/lib/api.ts`, `studio/lib/harnessView.ts`, `studio/components/SessionHeader.tsx`, `studio/scripts/states-check.mjs` | [x] |
 | 5 | A4a | Tests: ledger, hook invocation, adapter incl. mixed cases, store, refusal, plugin exclusion; README section; docs hooks row (FR-8) | `tests/test_harness_stamps.py`, `tests/test_adapter_claude_code.py`, `README.md`, `docs/…` | [x] |

@@ -96,7 +96,9 @@ CFG_BENCHMARK_RUNS_ROOT = "benchmark_runs_root"
 # The SessionStart hook harness-stamp.sh appends one JSON line per
 # session to the ledger; ingest joins it by session id. The key names
 # cross the hook (bash), the reader and the store, so they live here.
-CFG_HARNESS_STAMPS_PATH = "harness_stamps_path"
+# The ledger path has ONE control, CCT_HARNESS_STAMPS in the environment
+# (config.ENV_HARNESS_STAMPS): the hook is bash and reads no JSON config,
+# so a JSON key would move the reader and leave the writer behind.
 HARNESS_STAMPS_FILENAME = "harness-stamps.jsonl"
 HARNESS_KEY_SESSION_ID = "session_id"
 HARNESS_KEY_RECORDED_AT = "recorded_at"

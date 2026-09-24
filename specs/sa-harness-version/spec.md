@@ -83,7 +83,7 @@ compares aggregates across versions (A4 in
   `cli_version`; absent → `null`.
 - **FR-3 Ingest joins the stamp by session id: earliest valid stamp,
   plus mixed.** The Claude Code adapter reads the ledger once per
-  ingest run (path from config, default `~/.cct/harness-stamps.jsonl`),
+  ingest run (path from `CCT_HARNESS_STAMPS`, the one control the hook and the reader share; default `~/.cct/harness-stamps.jsonl`),
   indexes by `session_id`, sanitises on read (bounded strings, hex
   digests validated, malformed lines skipped with a warning, a missing
   file is a no-op — the `heartbeat.py` contract). A session's stamp is

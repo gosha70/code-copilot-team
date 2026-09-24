@@ -96,7 +96,8 @@ class TestLedgerReader(unittest.TestCase):
             _line("s1", "2026-01-01T00:00:00Z", cct_sha=SHA_A),
             _line("s1", "!", cct_sha=SHA_B),
         )
-        stamp = hs.read_ledger(path)["s1"]
+        with self.assertLogs(hs._log, level="WARNING"):
+            stamp = hs.read_ledger(path)["s1"]
         self.assertEqual((stamp.cct_sha, stamp.mixed), (SHA_A, False))
 
     def test_the_ledger_is_read_once_until_it_changes(self) -> None:
@@ -171,12 +172,34 @@ class TestHookInvocation(unittest.TestCase):
         self.assertEqual(self._run({"cwd": "/p"}), [])
 
 
+HOOK_COMMAND = "~/.claude/hooks/harness-stamp.sh"
+
+
+def _setup_functions() -> str:
+    """The pieces of setup.sh a settings merge runs: HOOKS_CONFIG (the
+    fresh-install file) and ensure_hook_command (the merge into an
+    existing file), extracted verbatim so the test runs the real code."""
+    text = _SETUP.read_text()
+    out = []
+    for start, end in (("HOOKS_CONFIG='{", "}'"), ("ensure_hook_command() {", "}")):
+        i = text.index(start)
+        j = text.index("\n" + end + "\n", i) + len(end) + 2
+        out.append(text[i:j])
+    return "\n".join(out)
+
+
+def _count_session_start(settings: dict) -> int:
+    return sum(
+        1 for group in settings.get("hooks", {}).get("SessionStart", [])
+        for h in group.get("hooks", []) if h.get("command") == HOOK_COMMAND
+    )
+
+
 class TestInstallSurface(unittest.TestCase):
     def test_registered_for_setup_and_excluded_from_the_plugin(self) -> None:
         settings = json.loads(_SETTINGS.read_text())
-        commands = [h["command"] for group in settings["hooks"]["SessionStart"] for h in group["hooks"]]
-        self.assertIn("~/.claude/hooks/harness-stamp.sh", commands)
-        self.assertEqual(_SETUP.read_text().count("harness-stamp.sh \\"), 2, "both hook lists in setup.sh")
+        self.assertEqual(_count_session_start(settings), 1, "the repo's settings.json")
+        self.assertEqual(_SETUP.read_text().count("harness-stamp.sh \\"), 2, "both hook copy lists in setup.sh")
         self.assertIn("write_harness_json", _SETUP.read_text())
         # A plugin-only session loads its instructions from CLAUDE_PLUGIN_ROOT:
         # the hook would hash the wrong tree, so it is not shipped there.
@@ -184,6 +207,35 @@ class TestInstallSurface(unittest.TestCase):
         plugin_hooks = next(l for l in _GENERATE.read_text().splitlines() if l.startswith("CC_PLUGIN_HOOKS="))
         self.assertNotIn("harness-stamp", plugin_hooks)
         self.assertTrue(os.access(_HOOK, os.X_OK))
+
+    @unittest.skipUnless(shutil.which("jq"), "jq not installed")
+    def test_setup_writes_the_hook_into_fresh_and_existing_settings_exactly_once(self) -> None:
+        """The install path Claude Code actually reads: setup.sh's own
+        HOOKS_CONFIG for a fresh ~/.claude/settings.json, and
+        ensure_hook_command for an existing one — run twice, so a second
+        --sync does not add it again. The repo's settings.json is not
+        what setup.sh installs."""
+        home = Path(tempfile.mkdtemp(prefix="cct-sa-setuphome-"))
+        fresh = home / "fresh.json"
+        existing = home / "existing.json"
+        existing.write_text(json.dumps({
+            "permissions": {"allow": ["Read"]},
+            "hooks": {"SessionStart": [{"matcher": "", "hooks": [
+                {"type": "command", "command": "~/.claude/hooks/reinject-context.sh", "timeout": 10000}]}]},
+        }))
+        script = _setup_functions() + f"""
+echo "$HOOKS_CONFIG" > "{fresh}"
+ensure_hook_command "{existing}" "SessionStart" "" "{HOOK_COMMAND}" 10000 && echo added-1
+ensure_hook_command "{existing}" "SessionStart" "" "{HOOK_COMMAND}" 10000 && echo added-2 || echo present-2
+"""
+        proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=dict(os.environ, HOME=str(home)))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.split(), ["added-1", "present-2"])
+        self.assertEqual(_count_session_start(json.loads(fresh.read_text())), 1, "fresh install")
+        merged = json.loads(existing.read_text())
+        self.assertEqual(_count_session_start(merged), 1, "existing settings, after two merges")
+        self.assertEqual(merged["permissions"], {"allow": ["Read"]}, "the merge keeps what was there")
+        self.assertEqual(len(merged["hooks"]["SessionStart"]), 1, "added to the existing matcher group, not a new one")
 
 
 class TestAdapterJoin(RegistryResetTestCase):
@@ -265,6 +317,28 @@ class TestStore(RegistryResetTestCase):
         self.assertEqual(db.query("SELECT id, cct_sha, harness_mixed FROM copilot_session"), [(sid, SHA_A, 1)])
         db.close()
 
+    def test_a_rotated_ledger_holding_only_a_later_line_cannot_relabel(self) -> None:
+        """Ingest under A; the ledger is replaced by one that holds only
+        B for the session; re-ingest keeps A and marks the session mixed
+        — the same rule the reader applies between lines, applied
+        between the store and the ledger."""
+        self._ingest(_ledger(_line(FIXTURE_SESSION, "2026-01-01T00:00:00Z", cct_sha=SHA_A,
+                                   instructions_digest=DIG_1)))
+        self._ingest(_ledger(_line(FIXTURE_SESSION, "2026-01-02T00:00:00Z", cct_sha=SHA_B,
+                                   instructions_digest=DIG_2, providers_digest=DIG_2)))
+        db = Database.connect(self.dsn)
+        row = db.query_one("SELECT cct_sha, instructions_digest, providers_digest, harness_mixed FROM copilot_session")
+        # A stays; the fact A never had (providers) is filled; mixed is set.
+        self.assertEqual(tuple(row), (SHA_A, DIG_1, DIG_2, 1))
+        db.close()
+        # A second identical B-only re-ingest changes nothing.
+        self._ingest(_ledger(_line(FIXTURE_SESSION, "2026-01-02T00:00:00Z", cct_sha=SHA_B,
+                                   instructions_digest=DIG_2, providers_digest=DIG_2)))
+        db = Database.connect(self.dsn)
+        self.assertEqual(tuple(db.query_one("SELECT cct_sha, instructions_digest, harness_mixed FROM copilot_session")),
+                         (SHA_A, DIG_1, 1))
+        db.close()
+
     def test_a_stored_stamp_is_sticky_when_the_ledger_line_goes_away(self) -> None:
         ledger = _ledger(_line(FIXTURE_SESSION, "2026-01-01T00:00:00Z", cct_sha=SHA_A,
                                instructions_digest=DIG_1))
@@ -292,6 +366,22 @@ class TestStore(RegistryResetTestCase):
         # The fixture carries a CLI version, so that alone is stamped, unmixed.
         self.assertEqual(tuple(row), ("2.1.0", None, 0))
         db.close()
+
+
+class TestLedgerPathControl(unittest.TestCase):
+    def test_the_environment_is_the_one_control(self) -> None:
+        """CCT_HARNESS_STAMPS moves the reader (here) and the hook (it
+        reads the same name); there is no JSON key, which the hook could
+        not see."""
+        from unittest import mock
+        from session_analytics.config import ENV_HARNESS_STAMPS, load_config
+        with mock.patch.dict("os.environ", {ENV_HARNESS_STAMPS: "/tmp/elsewhere.jsonl"}):
+            self.assertEqual(load_config().harness_stamps_path, "/tmp/elsewhere.jsonl")
+        with mock.patch.dict("os.environ", {}, clear=False):
+            os.environ.pop(ENV_HARNESS_STAMPS, None)
+            self.assertTrue(load_config().harness_stamps_path.endswith("/.cct/harness-stamps.jsonl"))
+        self.assertNotIn("harness_stamps_path", (_REPO / "scripts/session_analytics/config_data/defaults.json").read_text())
+        self.assertIn('LEDGER="${CCT_HARNESS_STAMPS:-', _HOOK.read_text())
 
 
 class TestSchemaRefusal(unittest.TestCase):

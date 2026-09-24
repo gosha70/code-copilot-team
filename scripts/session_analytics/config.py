@@ -338,8 +338,10 @@ class AnalyticsConfig:
     #: (the step reports a missing directory as its failure reason).
     benchmark_runs_root: str
     #: #371 A4: the harness-stamp ledger the Claude Code adapter joins at
-    #: ingest. Default ~/.cct/harness-stamps.jsonl; a missing file is a
-    #: no-op (every session unstamped), never an error.
+    #: ingest. Environment-only (CCT_HARNESS_STAMPS, the same name the
+    #: hook honours) or the default ~/.cct/harness-stamps.jsonl — never a
+    #: JSON key, which the hook could not see. A missing file is a no-op
+    #: (every session unstamped), never an error.
     harness_stamps_path: str
     redaction_mode: str
     judge: JudgeConfig
@@ -883,8 +885,7 @@ def load_config(
     raw_runs_root = env(ENV_BENCHMARK_RUNS_ROOT) or data.get(C.CFG_BENCHMARK_RUNS_ROOT) or ""
     runs_root = str(Path(raw_runs_root).expanduser()) if raw_runs_root else ""
     harness_stamps_path = str(Path(
-        env(ENV_HARNESS_STAMPS) or data.get(C.CFG_HARNESS_STAMPS_PATH)
-        or str(Path.home() / ".cct" / C.HARNESS_STAMPS_FILENAME)
+        env(ENV_HARNESS_STAMPS) or str(Path.home() / ".cct" / C.HARNESS_STAMPS_FILENAME)
     ).expanduser())
     resolved_redaction = (
         redaction_mode or env(ENV_REDACTION) or data.get(C.CFG_REDACTION) or C.REDACT_CODE

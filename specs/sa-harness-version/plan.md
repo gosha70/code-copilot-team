@@ -41,11 +41,11 @@ adapters/claude-code/.claude/settings.json               the hook registered und
 adapters/claude-code/setup.sh                            installs the hook; writes ~/.cct/harness.json (version, full sha, installed_at) on install and --sync
 scripts/session_analytics/config_data/ddl/postgres/001_core.sql   six nullable columns on copilot_session (five facts + harness_mixed)
 scripts/session_analytics/relational/db.py               _SCHEMA_VERSION 10; six entries in _REQUIRED_COLUMNS
-scripts/session_analytics/constants.py                   HARNESS_* column names, dimensions, ledger path config key + default, bounds
+scripts/session_analytics/constants.py                   HARNESS_* column names, dimensions, ledger filename, bounds
 scripts/session_analytics/contracts.py                   RawSession.harness: Optional[HarnessStamp]
 scripts/session_analytics/harness_stamps.py              read_ledger(path) → {session_id: (earliest HarnessStamp, mixed)}, sanitised on read
 scripts/session_analytics/adapters/claude_code.py        cli_version(s) from `version`; stamp attached by native session id; mixed when versions differ
-scripts/session_analytics/config.py                      the ledger path (env + config key), loader-resolved
+scripts/session_analytics/config.py                      the ledger path (CCT_HARNESS_STAMPS or the default; environment-only so the hook sees the same)
 scripts/session_analytics/relational/store.py            upsert_session writes the five columns
 scripts/session_analytics/api/dashboard.py               harness_aggregates(db, noise, by)
 scripts/session_analytics/api/server.py                  GET /api/dashboard/harness; /api/sessions gains the closed `harness=<dim>:<value>|mixed|unstamped` filter

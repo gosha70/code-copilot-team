@@ -195,22 +195,37 @@ def _upsert_session_row(
             duration_seconds=excluded.duration_seconds,
             redaction_mode=excluded.redaction_mode,
             content_redacted=excluded.content_redacted,
-            cli_version=COALESCE(excluded.cli_version, copilot_session.cli_version),
-            cct_version=COALESCE(excluded.cct_version, copilot_session.cct_version),
-            cct_sha=COALESCE(excluded.cct_sha, copilot_session.cct_sha),
-            instructions_digest=COALESCE(excluded.instructions_digest, copilot_session.instructions_digest),
-            providers_digest=COALESCE(excluded.providers_digest, copilot_session.providers_digest),
-            harness_mixed=CASE WHEN copilot_session.harness_mixed THEN copilot_session.harness_mixed
-                               ELSE COALESCE(excluded.harness_mixed, copilot_session.harness_mixed) END
+            cli_version=COALESCE(copilot_session.cli_version, excluded.cli_version),
+            cct_version=COALESCE(copilot_session.cct_version, excluded.cct_version),
+            cct_sha=COALESCE(copilot_session.cct_sha, excluded.cct_sha),
+            instructions_digest=COALESCE(copilot_session.instructions_digest, excluded.instructions_digest),
+            providers_digest=COALESCE(copilot_session.providers_digest, excluded.providers_digest),
+            harness_mixed=CASE
+                WHEN copilot_session.harness_mixed THEN copilot_session.harness_mixed
+                WHEN excluded.harness_mixed THEN excluded.harness_mixed
+                WHEN (copilot_session.cli_version IS NOT NULL AND excluded.cli_version IS NOT NULL
+                      AND copilot_session.cli_version <> excluded.cli_version)
+                  OR (copilot_session.cct_version IS NOT NULL AND excluded.cct_version IS NOT NULL
+                      AND copilot_session.cct_version <> excluded.cct_version)
+                  OR (copilot_session.cct_sha IS NOT NULL AND excluded.cct_sha IS NOT NULL
+                      AND copilot_session.cct_sha <> excluded.cct_sha)
+                  OR (copilot_session.instructions_digest IS NOT NULL AND excluded.instructions_digest IS NOT NULL
+                      AND copilot_session.instructions_digest <> excluded.instructions_digest)
+                  OR (copilot_session.providers_digest IS NOT NULL AND excluded.providers_digest IS NOT NULL
+                      AND copilot_session.providers_digest <> excluded.providers_digest)
+                  THEN TRUE
+                ELSE COALESCE(excluded.harness_mixed, copilot_session.harness_mixed) END
         RETURNING id
     """
-    # #371 A4: the stamp is re-derived from the ledger on every ingest,
-    # so a session stamped later (a ledger line that arrived after the
-    # first incremental ingest) picks it up on the next run. It is also
-    # STICKY: a fact already stored is never replaced by NULL (a ledger
-    # that was pruned or pointed elsewhere must not un-stamp a session —
-    # the stamp is a session-time fact, not a ledger-time one), and
-    # mixed, once true, stays true.
+    # #371 A4: the stamp is a session-time fact, and the STORE is where
+    # the earliest one lives once ingested. On re-ingest a fact already
+    # stored is kept — never replaced by the incoming value and never by
+    # NULL — so a ledger that was pruned, rotated or redirected to one
+    # holding only a later line cannot relabel the session; an incoming
+    # value that differs from the stored one marks the session mixed
+    # (the same rule the ledger reader applies between lines), and
+    # mixed, once true, stays true. A NULL already stored is filled by
+    # an incoming value: a line that arrived after the first ingest.
     h = raw.harness
     return db.insert_returning_id(
         sql,

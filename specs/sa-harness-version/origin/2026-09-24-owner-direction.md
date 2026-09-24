@@ -79,3 +79,26 @@ Checked before amending: `scripts/generate.sh:88-97` ships only the
 hooks in `CC_PLUGIN_HOOKS` and the plugin's `hooks.json` is authored,
 so exclusion is a no-op in generation; `session_kpi.avg_interaction_quality`
 exists (`002_analytics.sql:46`).
+
+2026-09-24, the owner's review of PR #375 at e9f5540 (pasted; all
+three adopted):
+
+> [P1] setup.sh never registers the new hook. The hook file is copied,
+> but neither the --sync settings merge nor the full-install
+> HOOKS_CONFIG/merge adds harness-stamp.sh. [...] Add it to HOOKS_CONFIG
+> and both ensure_hook_command paths, with a temp-HOME regression
+> proving fresh and existing settings contain it exactly once.
+>
+> [P1] Re-ingest can replace the earliest stored stamp. These COALESCE
+> expressions prefer the newly ingested value. [...] Prefer the existing
+> non-null fact, fill only existing NULLs, and set mixed when both
+> existing and incoming values are non-null and differ. Add the missing
+> regression: ingest A, replace the ledger with B only, re-ingest, and
+> assert A remains with mixed=true.
+>
+> [P2] JSON configuration moves only the reader. [...] Keep one shared
+> control: either make this environment-only and remove the JSON key,
+> or teach the hook to resolve the same configured path.
+>
+> The core design is otherwise aligned [...] Do not merge until these
+> three findings are fixed and pinned by tests.
