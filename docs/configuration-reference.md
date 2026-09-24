@@ -224,6 +224,7 @@ Read directly by the code that needs them (paths, ids, and the
 runtime toggles that have no stored default):
 
 - `CCT_DEVELOPER_ID`
+- `CCT_HARNESS_STAMPS`
 - `CCT_SA_DB`
 - `CCT_SA_DSN`
 - `CCT_SA_JUDGE_BACKEND`
