@@ -79,22 +79,33 @@ class TestLedgerReader(unittest.TestCase):
             _line("", "x"),                                   # no session id
             _line("bad-sha", "x", cct_sha="abc"),             # not 40 hex
             _line("bad-digest", "x", instructions_digest="Z" * 64),
-            _line("long", "x", cct_version="v" * 41),
+            _line("long", "2026-01-01T00:00:00Z", cct_version="v" * 41),
+            _line("bad-time", "yesterday", cct_version="1"),   # cannot be ordered
             _line("ok", "2026-01-01T00:00:00Z", providers_digest=DIG_1),
         )
         with self.assertLogs(hs._log, level="WARNING") as logs:
             stamps = hs.read_ledger(path)
         self.assertEqual(set(stamps), {"ok"})
         self.assertEqual(stamps["ok"].providers_digest, DIG_1)
-        self.assertIn("6 malformed line(s)", logs.output[0])
+        self.assertIn("7 malformed line(s)", logs.output[0])
+
+    def test_a_non_iso_timestamp_cannot_win_as_earliest(self) -> None:
+        # A hand-edited line whose recorded_at sorts before every real one
+        # ("!" < "2") is malformed, not earliest.
+        path = _ledger(
+            _line("s1", "2026-01-01T00:00:00Z", cct_sha=SHA_A),
+            _line("s1", "!", cct_sha=SHA_B),
+        )
+        stamp = hs.read_ledger(path)["s1"]
+        self.assertEqual((stamp.cct_sha, stamp.mixed), (SHA_A, False))
 
     def test_the_ledger_is_read_once_until_it_changes(self) -> None:
-        path = _ledger(_line("s1", "t", cct_version="1"))
+        path = _ledger(_line("s1", "2026-01-01T00:00:00Z", cct_version="1"))
         first = hs.read_ledger(path)
         self.assertIs(hs.read_ledger(path), first)
+        # An append within the same second is seen: the size changed.
         with open(path, "a", encoding="utf-8") as fh:
-            fh.write(_line("s2", "t") + "\n")
-        os.utime(path, (os.stat(path).st_atime, os.stat(path).st_mtime + 5))
+            fh.write(_line("s2", "2026-01-01T00:00:00Z") + "\n")
         self.assertIn("s2", hs.read_ledger(path))
 
 
@@ -188,8 +199,8 @@ class TestAdapterJoin(RegistryResetTestCase):
 
     def test_the_ledger_line_joins_by_session_id(self) -> None:
         ledger = _ledger(
-            _line("unrelated", "t", cct_sha=SHA_B),
-            _line(FIXTURE_SESSION, "t", cct_version="1.1.0", cct_sha=SHA_A, instructions_digest=DIG_1),
+            _line("unrelated", "2026-01-01T00:00:00Z", cct_sha=SHA_B),
+            _line(FIXTURE_SESSION, "2026-01-01T00:00:00Z", cct_version="1.1.0", cct_sha=SHA_A, instructions_digest=DIG_1),
         )
         h = self._load(ledger).harness
         self.assertEqual((h.cli_version, h.cct_version, h.cct_sha, h.instructions_digest, h.mixed),
@@ -231,7 +242,7 @@ class TestStore(RegistryResetTestCase):
             ingest(dsn=self.dsn, copilots=[C.COPILOT_CLAUDE_CODE], root=CLAUDE_CODE_ROOT, full=True)
 
     def test_columns_written_and_kept_across_reingest(self) -> None:
-        ledger = _ledger(_line(FIXTURE_SESSION, "t", cct_version="1.1.0", cct_sha=SHA_A,
+        ledger = _ledger(_line(FIXTURE_SESSION, "2026-01-01T00:00:00Z", cct_version="1.1.0", cct_sha=SHA_A,
                                instructions_digest=DIG_1, providers_digest=DIG_2))
         self._ingest(ledger)
         db = Database.connect(self.dsn)
@@ -247,12 +258,31 @@ class TestStore(RegistryResetTestCase):
         # A line that arrives later (a resume under a new harness) is
         # picked up by the next ingest, and re-ingest keeps the id.
         with open(ledger, "a", encoding="utf-8") as fh:
-            fh.write(_line(FIXTURE_SESSION, "u", cct_version="1.1.0", cct_sha=SHA_B,
+            fh.write(_line(FIXTURE_SESSION, "2026-01-02T00:00:00Z", cct_version="1.1.0", cct_sha=SHA_B,
                            instructions_digest=DIG_1, providers_digest=DIG_2) + "\n")
-        os.utime(ledger, (os.stat(ledger).st_atime, os.stat(ledger).st_mtime + 5))
         self._ingest(ledger)
         db = Database.connect(self.dsn)
         self.assertEqual(db.query("SELECT id, cct_sha, harness_mixed FROM copilot_session"), [(sid, SHA_A, 1)])
+        db.close()
+
+    def test_a_stored_stamp_is_sticky_when_the_ledger_line_goes_away(self) -> None:
+        ledger = _ledger(_line(FIXTURE_SESSION, "2026-01-01T00:00:00Z", cct_sha=SHA_A,
+                               instructions_digest=DIG_1))
+        self._ingest(ledger)
+        # The ledger was pruned (or CCT_HARNESS_STAMPS points elsewhere):
+        # the next ingest finds no line, and the stamp stays.
+        self._ingest("/nonexistent/ledger.jsonl")
+        db = Database.connect(self.dsn)
+        self.assertEqual(db.query("SELECT cct_sha, instructions_digest, harness_mixed FROM copilot_session"),
+                         [(SHA_A, DIG_1, 0)])
+        db.close()
+        # Mixed, once true, stays true even if the differing line is gone.
+        with open(ledger, "a", encoding="utf-8") as fh:
+            fh.write(_line(FIXTURE_SESSION, "2026-01-02T00:00:00Z", cct_sha=SHA_B, instructions_digest=DIG_1) + "\n")
+        self._ingest(ledger)
+        self._ingest("/nonexistent/ledger.jsonl")
+        db = Database.connect(self.dsn)
+        self.assertEqual(db.query("SELECT cct_sha, harness_mixed FROM copilot_session"), [(SHA_A, 1)])
         db.close()
 
     def test_unstamped_when_no_ledger(self) -> None:

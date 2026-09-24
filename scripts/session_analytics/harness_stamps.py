@@ -35,6 +35,10 @@ from . import constants as C
 _log = logging.getLogger(__name__)
 
 _HEX_RE = re.compile(r"^[0-9a-f]+$")
+# The shape the hook writes (`date -u +%Y-%m-%dT%H:%M:%SZ`), fractional
+# seconds allowed. Ordering is by this string, so a line that is not in
+# this shape cannot be allowed to sort at all: it is malformed.
+_ISO_RE = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$")
 
 
 @dataclass(frozen=True)
@@ -77,8 +81,8 @@ def _parse_line(obj: Any) -> Optional[tuple[str, str, tuple[Optional[str], ...]]
     ok, sid = _opt_text(obj.get(C.HARNESS_KEY_SESSION_ID), C.HARNESS_SESSION_ID_MAX_CHARS)
     if not ok or sid is None:
         return None
-    ok, recorded_at = _opt_text(obj.get(C.HARNESS_KEY_RECORDED_AT), C.HARNESS_VERSION_MAX_CHARS)
-    if not ok:
+    recorded_at = obj.get(C.HARNESS_KEY_RECORDED_AT)
+    if not isinstance(recorded_at, str) or not _ISO_RE.match(recorded_at):
         return None
     checks = (
         _opt_text(obj.get(C.HARNESS_KEY_CCT_VERSION), C.HARNESS_VERSION_MAX_CHARS),
@@ -88,7 +92,7 @@ def _parse_line(obj: Any) -> Optional[tuple[str, str, tuple[Optional[str], ...]]
     )
     if not all(ok for ok, _ in checks):
         return None
-    return sid, recorded_at or "", tuple(v for _, v in checks)
+    return sid, recorded_at, tuple(v for _, v in checks)
 
 
 def _read(path: Path) -> dict[str, LedgerStamp]:
@@ -126,13 +130,19 @@ def _read(path: Path) -> dict[str, LedgerStamp]:
     return out
 
 
-_cache: dict[str, tuple[tuple[float, int], dict[str, LedgerStamp]]] = {}
+# One entry: a process reads one ledger. Keyed on the nanosecond mtime
+# and size, so a rewrite within the same second is seen where the
+# filesystem records it; a same-size rewrite in the same nanosecond is
+# the one case this cannot tell apart, and it is not one a hook that
+# only appends can produce.
+_cache: Optional[tuple[str, tuple[int, int], dict[str, LedgerStamp]]] = None
 
 
 def read_ledger(path: str) -> dict[str, LedgerStamp]:
     """The ledger keyed by session id, read once per (path, mtime, size)
     so an ingest run that loads sessions one adapter instance at a time
     parses the file once. A missing path is an empty ledger."""
+    global _cache
     if not path:
         return {}
     p = Path(path).expanduser()
@@ -140,10 +150,9 @@ def read_ledger(path: str) -> dict[str, LedgerStamp]:
         st = os.stat(p)
     except OSError:
         return {}
-    key = (st.st_mtime, st.st_size)
-    cached = _cache.get(str(p))
-    if cached is not None and cached[0] == key:
-        return cached[1]
+    key = (st.st_mtime_ns, st.st_size)
+    if _cache is not None and _cache[0] == str(p) and _cache[1] == key:
+        return _cache[2]
     stamps = _read(p)
-    _cache[str(p)] = (key, stamps)
+    _cache = (str(p), key, stamps)
     return stamps

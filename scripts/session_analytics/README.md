@@ -495,7 +495,10 @@ capturing at session start cannot.
 span a `--sync`; its stamp is the earliest valid ledger line, and a
 later line that differs marks it `harness_mixed` rather than moving its
 earlier turns to the newer harness. Identical lines from a resume or
-compaction are not a difference. The session page shows the stamp
+compaction are not a difference. A stamp, once stored, is sticky: a
+re-ingest that finds no ledger line (a pruned ledger, or
+`CCT_HARNESS_STAMPS` pointing elsewhere) keeps the facts already
+recorded, and mixed stays mixed. The session page shows the stamp
 (digests and sha shortened, full on hover), "mixed — earliest stamp
 shown", or "Harness: unstamped".
 
