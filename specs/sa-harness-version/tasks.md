@@ -9,6 +9,6 @@
 | 4 | A4a | Session header stamp / mixed / unstamped; `harnessView.ts`; states-check (FR-6 part) | `studio/lib/api.ts`, `studio/lib/harnessView.ts`, `studio/components/SessionHeader.tsx`, `studio/scripts/states-check.mjs` | [x] |
 | 5 | A4a | Tests: ledger, hook invocation, adapter incl. mixed cases, store, refusal, plugin exclusion; README section; docs hooks row (FR-8) | `tests/test_harness_stamps.py`, `tests/test_adapter_claude_code.py`, `README.md`, `docs/…` | [x] |
 | 6 | A4a | Scratch-store verification with a real ledger from this machine on other ports; gates; alignment; `/review-submit`; PR (no close marker); CI | — | [ ] |
-| 7 | A4b | `harness_aggregates` + route + MCP tool; closed `harness` filter + facets (FR-5, FR-6) | `api/dashboard.py`, `api/server.py`, `mcp/tools.py`, `mcp/server.py` | [ ] |
-| 8 | A4b | `HarnessPanel` on the Dashboard, the filter in the bar, states-check; tests (aggregates, filter, API, MCP); README (FR-5, FR-6, FR-8) | `studio/…`, `tests/…`, `README.md` | [ ] |
+| 7 | A4b | `harness_aggregates` + route + MCP tool; closed `harness` filter + facets (FR-5, FR-6) | `api/dashboard.py`, `api/server.py`, `mcp/tools.py`, `mcp/server.py` | [x] |
+| 8 | A4b | `HarnessPanel` on the Dashboard, the filter in the bar, states-check; tests (aggregates, filter, API, MCP); README (FR-5, FR-6, FR-8) | `studio/…`, `tests/…`, `README.md` | [x] |
 | 9 | A4b | Scratch verification; gates; `/review-submit`; PR (no close marker); CI. After merge, on the owner's word: their store recreated + `ingest --full` | — | [ ] |

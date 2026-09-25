@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from ..config import load_config
+from .. import constants as C
 from ..relational.db import Database
 from . import resources, tools
 
@@ -36,13 +37,15 @@ def build_server(dsn: str, kuzu_path: str = ""):
         query: str = "", copilot: str = "", date_from: str = "",
         date_to: str = "", limit: int = 20, tag: str = "", developer: str = "",
         model: str = "", tool: str = "", min_cost: Optional[float] = None,
-        max_cost: Optional[float] = None, label: str = "",
+        max_cost: Optional[float] = None, label: str = "", harness: str = "",
     ) -> list[dict[str, Any]]:
         """Find sessions by keyword/workspace + optional filters (#371 A2):
         copilot; a date range (date_to names the whole day); tag (favorite,
         todo, analyzed); developer; model; tool (at least one call to it);
         min/max PRICED cost (a session with no priced turn matches neither);
-        label (a packaged-rubric boolean true on at least one turn)."""
+        label (a packaged-rubric boolean true on at least one turn);
+        harness (#371 A4b) as `mixed`, `unstamped`, `absent:<dimension>`
+        or `<dimension>:<value>`."""
         db = _db()
         try:
             return tools.search_sessions(
@@ -50,6 +53,26 @@ def build_server(dsn: str, kuzu_path: str = ""):
                 date_from=date_from or None, date_to=date_to or None, limit=limit,
                 tag=tag or None, developer=developer or None, model=model or None,
                 tool=tool or None, min_cost=min_cost, max_cost=max_cost, label=label or None,
+                harness=harness or None,
+            )
+        finally:
+            db.close()
+
+    @server.tool()
+    def compare_harness_versions(by: str = "") -> dict[str, Any]:
+        """#371 A4b: sessions grouped by one dimension of the harness they
+        ran under (instructions_digest, cct_sha, cct_version, cli_version,
+        providers_digest), with turns, errors, priced cost and the packaged
+        rubric's quality and rates per group. `mixed`, `absent` and
+        `unstamped` are named rows; judge figures are null, not zero,
+        without labels."""
+        from ..api import dashboard
+        from ..config import load_config
+
+        db = _db()
+        try:
+            return dashboard.harness_aggregates(
+                db, noise=load_config().noise, by=by or C.HARNESS_DIMENSIONS[0]
             )
         finally:
             db.close()

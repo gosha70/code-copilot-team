@@ -5,6 +5,7 @@
 // "Show excluded (n)" count take the same filters, so they agree.
 import type { SessionFacets, SessionFilters } from "@/lib/api";
 import { activeCount } from "@/lib/filterView";
+import { GROUP_ABSENT, GROUP_MIXED, GROUP_UNSTAMPED, dimensionLabel, short } from "@/lib/harnessView";
 
 const TAGS = [
   ["", "Any tag"],
@@ -59,6 +60,27 @@ export default function SessionFiltersBar({
       </select>
       <select className={select} value={filters.label ?? ""} onChange={(e) => set({ label: e.target.value })} aria-label="label" title="the packaged rubric marked it on at least one turn">
         {options(facets?.labels, "Any label")}
+      </select>
+      {/* #371 A4b: one closed control for every harness dimension, so a
+          row of the Dashboard's compare links to exactly its sessions.
+          The three named groups come first; then each dimension's values
+          under its own label. */}
+      <select className={select} value={filters.harness ?? ""} onChange={(e) => set({ harness: e.target.value })} aria-label="harness" title="the harness a session ran under, recorded when it started">
+        <option value="">Any harness</option>
+        <option value={GROUP_MIXED}>changed mid-session</option>
+        <option value={GROUP_UNSTAMPED}>no harness stamp</option>
+        {Object.entries(facets?.harness ?? {}).map(([dim, values]) => (
+          <optgroup key={dim} label={dimensionLabel(dim)}>
+            <option value={`${GROUP_ABSENT}:${dim}`}>
+              no {dimensionLabel(dim).toLowerCase()} recorded
+            </option>
+            {values.map((v) => (
+              <option key={v} value={`${dim}:${v}`}>
+                {short(v)}
+              </option>
+            ))}
+          </optgroup>
+        ))}
       </select>
       <select className={select} value={filters.tag ?? ""} onChange={(e) => set({ tag: e.target.value })} aria-label="tag">
         {TAGS.map(([v, l]) => (

@@ -517,6 +517,55 @@ is refused at startup with the same remedy as schema 8 (recreate, then
 `ingest --full`). Only sessions that ran after the hook was installed
 will carry a stamp after the rebuild.
 
+### Comparing harness versions (#371 A4b)
+
+The Dashboard's **Sessions by harness version** panel groups sessions by
+one dimension of the stamp — instructions, CCT commit, CCT release, CLI
+version or providers — and reports per group: sessions, median turns,
+median tool calls, errors per 100 turns, priced cost with its coverage,
+and from the packaged rubric the mean interaction quality, rework rate
+and correction rate. Also `GET /api/dashboard/harness?by=<dimension>`
+(an unknown dimension is a 400, never a column name from the caller) and
+the MCP tool `compare_harness_versions`. The matching filter on the
+sessions list takes one of four forms: `harness=<dimension>:<value>`,
+`harness=mixed`, `harness=unstamped` or `harness=absent:<dimension>`.
+
+Four kinds of row, and none is dropped or folded into another:
+
+| Row | Meaning |
+|---|---|
+| a value | sessions that ran under exactly that value |
+| `changed mid-session` | `harness_mixed`: the harness changed while the session ran, so it is evidence for neither version. **Checked first**, so a session whose earliest stamp happens to carry no facts is still mixed and not "unstamped" |
+| `no <dimension> recorded` | stamped, but not on this dimension — a session carrying only the transcript's `cli_version`, grouped by `cct_sha` |
+| `no harness stamp` | no fact at all: before the hook, plugin-only, Pi or Aider |
+
+What it refuses to do, inherited from the per-developer rollup: it does
+not rank (rows are ordered by value, named groups last — a table sorted
+by "best" reads a harness change as a verdict it has not earned); it
+does not report unknown cost as zero; and it does not hide the
+degenerate cases — one version, or a dimension nothing records yet, is
+explained in words instead of rendered as an empty-looking table.
+**Every judge figure is null, not zero, when no session in the group
+carries a label**, with `sessions_judged` as the denominator. The two
+**rates are weighted by labelled turns**, not averaged per session: one
+rework turn beside ninety-nine clean ones reads 0.01, not 0.50.
+Interaction quality is the mean of the per-session means, because a
+session is one reading of how the work went.
+
+A row reports its group *kind* separately from the dimension's value, so
+a `cli_version` that literally reads "mixed" stays an ordinary value row
+with its own link rather than merging into the named group.
+
+Each row links to exactly its sessions through one closed filter on the
+sessions list: `harness=<dimension>:<value>`, `harness=mixed`,
+`harness=unstamped` or `harness=absent:<dimension>`. A value filter
+excludes mixed sessions, and the filter bar offers only values that
+return sessions.
+
+These are observational groups, not an experiment: sessions differ in
+what they were asked to do as well as in their harness. The panel is a
+place to notice a difference worth investigating, not a proof of one.
+
 ## Feedback (#371 A3)
 
 A session page takes feedback from a person on the session, on any turn,

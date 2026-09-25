@@ -102,3 +102,55 @@ three adopted):
 >
 > The core design is otherwise aligned [...] Do not merge until these
 > three findings are fixed and pinned by tests.
+
+2026-09-24, A4b build note — one group the plan did not name.
+
+The owner's own store, rebuilt on schema 10, showed a case neither the
+plan nor the review anticipated: 144 of 145 sessions carry a
+`cli_version` from their transcripts while none carries a `cct_sha`
+(the hook was installed after they ran). Grouping by `cct_sha` would
+have folded all of them into `unstamped`, which is false — they ARE
+stamped, just not on that dimension.
+
+So the compare reports a third named group, `absent`, meaning "stamped,
+but this dimension was not recorded", with its own filter value
+`absent:<dimension>`. Grouped by `cct_sha` the owner's store reads: 0
+comparable values, 34 absent, 6 mixed, 1 unstamped — the honest answer
+instead of a fabricated comparison. This follows the owner's ruling
+that mixed sessions get a named row rather than being folded into a
+version; the same reasoning applies one level down.
+
+2026-09-24, the owner's review of the A4b build (pasted; all four
+adopted):
+
+> [P1] Mixed and unstamped groups overlap. A session whose earliest
+> stamp has every fact NULL but whose later stamp differs has
+> harness_mixed=true. This CASE classifies it as unstamped before
+> checking mixed, while harness_clause('mixed') and
+> harness_clause('unstamped') both select it. [...] Check mixed first,
+> exclude mixed from the unstamped predicate, and make harnessState
+> prefer mixed too.
+>
+> [P1] PostgreSQL rejects the facet predicate. harness_mixed is BOOLEAN
+> [...] `harness_mixed = 0` fails with `operator does not exist: boolean
+> = integer`. Because /api/sessions always computes facets, the Sessions
+> page fails on PostgreSQL. Use a cross-dialect boolean predicate such
+> as `harness_mixed IS NOT TRUE`.
+>
+> [P1] Rates use the wrong denominator. [...] With one session
+> containing 1 labelled rework turn and another containing 99 labelled
+> non-rework turns, the API reports 0.50 instead of 0.01. Weight
+> rework_rate and correction_rate by labeled_turn_count; keep
+> avg_interaction_quality as the explicitly specified mean of
+> per-session means.
+>
+> [P2] Real values collide with named groups. [...] I reproduced
+> cli_version='mixed': the panel row counted two sessions while its link
+> returned only the genuinely mixed one. Keep group kind separate from
+> dimension value internally/API-side, and key React rows by kind plus
+> value.
+
+Both P1 classification bugs were reproduced here before fixing: the
+all-NULL-plus-mixed session answered to both filters, and the literal
+`cli_version='mixed'` row linked to the wrong session. `IS NOT TRUE` was
+confirmed to behave on SQLite 3.48 as it does on PostgreSQL.

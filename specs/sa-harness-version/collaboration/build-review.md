@@ -1,6 +1,6 @@
 ---
 feature_id: sa-harness-version
-date: 2026-09-23
+date: 2026-09-24
 status: final
 phase: build
 mode: review
@@ -10,8 +10,8 @@ peer_profile: deepseek
 runner_fingerprint: ae8dc147cf1264834bab35d116b6ab96b06618f438763cde3a90621d78036dba
 verdict: PASS
 blocking_findings_open: 0
-target_ref: feat/371-a4-harness-version
-rounds_completed: 1
+target_ref: feat/371-a4b-harness-compare
+rounds_completed: 2
 attempt_count: 1
 bypass: false
 ---
@@ -20,20 +20,23 @@ bypass: false
 
 **Reviewer**: deepseek
 **Scope**: both
-**Rounds**: 1
+**Rounds**: 2
 **Verdict**: PASS
 
 ## Summary
 
-The A4a harness-stamp slice is well-designed and thoroughly tested: capture-at-SessionStart, earliest-wins-plus-mixed, sticky store semantics, and a single environment control for the ledger path are all correct and pinned by tests. The prior review's three P1/P2 findings (hook registration, re-ingest replacement, JSON-vs-env control) are genuinely fixed. Remaining issues are warnings and notes — a `harness_mixed` asymmetry, an unbounded single-entry cache, and a hook that hashes the profile without a size/symlink guard — none blocking.
+The A4b harness-compare build is well-structured and the four P1/P2 issues from the owner's review (mixed-first precedence, cross-dialect boolean predicate, turn-weighted rates, kind/value separation) are correctly fixed and pinned by tests. The remaining findings are minor: a few implicit invariants, one test that reads source text rather than exercising behavior, and some documentation gaps. No blocking issues.
 
 ## Findings
 
-- [warning] f-3b5b2f2c: Once a row has `harness_mixed = FALSE`, a later re-ingest with `raw.harness = None` passes `excluded.harness_mixed = NULL`; `COALESCE(NULL, FALSE) = FALSE`, so the row keeps `FALSE` while the other five facts are sticky-NULL. This is asymmetric with the other columns and untested. (scripts/session_analytics/relational/store.py)
-- [warning] f-c48ca0e4: The cache is a single entry keyed on `(path, mtime_ns, size)`. A long-lived MCP server or a test suite that alternates between two ledger paths re-parses the whole file on every call; the comment "a process reads one ledger" is not true for the MCP server. (scripts/session_analytics/harness_stamps.py)
-- [warning] f-39856af3: `-f` is true for a symlink to a regular file, so a symlinked multi-GB file (or a slow network mount) is read in full within the 10 s hook timeout. Bounded self-DoS, but the guard is cheap. (adapters/claude-code/.claude/hooks/harness-stamp.sh)
-- [note] f-18da71c5: The adapter iterates every record including sidechain records when collecting `cli_versions`; the invariant "sidechain records carry the same version as the parent" is assumed but not encoded. A future CLI that stamps subagents differently would mark the parent mixed. (scripts/session_analytics/adapters/claude_code.py)
-- [note] f-a4c40236: The documented blind spot (same-size, same-nanosecond rewrite) is not exercised; the cache key contract (`st_mtime_ns` included) is not pinned. (scripts/session_analytics/tests/test_harness_stamps.py)
-- [note] f-a510af87: The README states the sticky-stamp rule but not the `harness_mixed` asymmetry (a stored `FALSE` stays `FALSE` when the ledger line is later removed). (scripts/session_analytics/README.md)
-- [note] f-72273c1b: The nested `$(...)` quoting builds JSON by hand; a `"` or `\` in `$version` (from `package.json`) would produce malformed JSON and the hook would read `null`. Low risk since `package.json` is trusted. (adapters/claude-code/setup.sh)
-- [note] f-0bb86b1e: The test constructs a minimal `copilot_session` with only `id, copilot, session_id`; it does not exercise a store that has some of the six new columns (a partial migration). (scripts/session_analytics/tests/test_harness_stamps.py)
+- [note] f-47cc9d5e: The Round-1 concern about coupling to a private symbol is real, but the builder's resolution is sound: `test_the_median_is_the_package_s_one_percentile_rule` asserts the two agree, so a rename or signature change fails loudly rather than drifting. Acceptable as-is; a public re-export would be marginally cleaner. (scripts/session_analytics/api/dashboard.py)
+- [note] f-e795ae76: The `NOT (a IS NULL AND b IS NULL ...)` form is correct on both dialects and the partition test proves it over all five dimensions. The Round-1 fragility note stands only if `HARNESS_FACTS` ever gains a nullable-by-design column; today it is a closed set of stamp facts. (scripts/session_analytics/mcp/tools.py)
+- [note] f-e9cac879: The gate reads `harnessView.ts` as text and regex-matches `GROUP_*` declarations. This catches drift in the literal values but not in usage (e.g. a component that hardcodes `"mixed"` instead of `GROUP_MIXED`). It is a reasonable cheap gate; note the limitation. (scripts/session_analytics/tests/test_harness_compare.py)
+- [note] f-4a646d43: The rename from `TestPostgresDialect` is honest and the docstring says what it does. The test still only greps generated SQL; a real Postgres run remains the integration suite's job, as stated. (scripts/session_analytics/tests/test_harness_compare.py)
+- [note] f-72a98188: The `str()` coercion is safe today because the CASE guarantees `_KIND_VALUE` only when `s.{by} IS NOT NULL`. The implicit invariant is documented in the comment above `kind_sql`; acceptable. (scripts/session_analytics/api/dashboard.py)
+- [note] f-29baa2e2: The README now lists all four filter forms in prose, addressing the Round-1 finding. The row table and the prose agree. (scripts/session_analytics/README.md)
+- [note] f-143a7d3d: The function is dense but the three sub-queries are separate statements with their own comments, and the builder's argument that splitting them would add indirection without a testable seam is reasonable. The partition test exercises the whole path. (scripts/session_analytics/api/dashboard.py)
+- [note] f-af1376e5: `keep_clause` is built for the session alias and used identically in both queries; the Round-1 concern about turn-column predicates is not applicable because `keep_clause` is session-only by construction. The `priceable_turns` semantics (model present, cost may be NULL) match the documented pricing contract. (scripts/session_analytics/api/dashboard.py)
+- [note] f-f587e355: The absent branch correctly requires `wanted IS NULL AND NOT (no_facts) AND NOT mixed`, matching the aggregate's CASE order. The facet query excludes mixed and NULL, so offered values round-trip. Consistent. (scripts/session_analytics/mcp/tools.py)
+- [note] f-506b9902: The test mutates the store mid-test (adds `s-empty`, deletes `s-b`/`s-b2`) and re-queries. The builder notes each test gets a fresh store from `setUp`, so cross-test contamination is not a concern; within-test ordering is intentional. (scripts/session_analytics/tests/test_harness_compare.py)
+- [note] f-e665007c: The origin file records the owner's review and the four adopted fixes with reproduction notes. This is good provenance; the alignment records at 2330 and 0100 are consistent with the code. (specs/sa-harness-version/origin/2026-09-24-owner-direction.md)

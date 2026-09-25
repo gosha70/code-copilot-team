@@ -524,3 +524,208 @@ def latency(db: Database, noise: Optional[NoiseConfig] = None) -> dict[str, Any]
         "basis": "seconds from the previous turn to each assistant turn; "
                  "turns without a timestamp on both sides are not measured",
     }
+
+
+# ── harness compare (#371 A4b) ─────────────────────────────────────────
+
+
+#: The kind of an ordinary row: a real value of the chosen dimension,
+#: as opposed to one of the named groups.
+_KIND_VALUE = "value"
+
+
+def _median(values: list[float]) -> Optional[float]:
+    """The median, by the package's ONE percentile rule (nearest rank,
+    never interpolated). Reused rather than reimplemented: a second copy
+    of the rule is a second thing to keep in step, and the two would
+    disagree on even samples the first time one was edited."""
+    from ..predict import _percentile
+
+    return _percentile(values, 0.5)
+
+
+def _mean(values: list[float]) -> Optional[float]:
+    """The mean, or None for an empty sample — never 0.0, which would
+    report "no judgement" as "judged badly"."""
+    return (sum(values) / len(values)) if values else None
+
+
+def _weighted_mean(pairs: list[tuple[Optional[float], int]]) -> Optional[float]:
+    """A rate over the TURNS it was measured on, not over sessions.
+
+    A rate per session averaged equally lets a session with one labelled
+    turn outvote one with ninety-nine: 1 rework turn and 99 clean ones
+    would read 0.50 rather than 0.01. The spec defines these rates over
+    labelled turns, so each session's rate is weighted by the turns that
+    earned it. None (never 0.0) when nothing was labelled."""
+    usable = [(rate, weight) for rate, weight in pairs if rate is not None and weight > 0]
+    total = sum(weight for _, weight in usable)
+    if not total:
+        return None
+    return sum(rate * weight for rate, weight in usable) / total
+
+
+def harness_aggregates(
+    db: Database, noise: Optional[NoiseConfig] = None, by: str = C.HARNESS_DIMENSIONS[0],
+) -> dict[str, Any]:
+    """#371 A4b: sessions grouped by one dimension of the harness they
+    ran under, so two harness versions can be put side by side.
+
+    ``by`` is one of ``constants.HARNESS_DIMENSIONS`` — a CLOSED set,
+    because the value names a column. Anything else raises ValueError.
+
+    Four kinds of row, and none of them is dropped:
+
+    * one per distinct value of ``by`` among stamped, unmixed sessions;
+    * ``mixed`` — the harness changed while the session ran, so it
+      belongs to neither version and is never counted under one;
+    * ``absent`` — stamped, but this dimension was not recorded (a
+      session carrying only the transcript's ``cli_version`` grouped by
+      ``cct_sha``, say);
+    * ``unstamped`` — no stamp at all: a session from before the hook
+      was installed, a plugin-only session, Pi or Aider.
+
+    It inherits ``developer_aggregates``' three refusals. It does not
+    rank: rows are ordered by value, with the named groups last, because
+    a table sorted by "best" invites reading a harness change as a
+    verdict it has not earned. It does not report unknown cost as zero —
+    ``cost_usd`` is None without a priced turn, and the coverage behind
+    it is published. And it does not hide the degenerate case:
+    ``single_group`` says when everything landed in one row, which is
+    what a store has before a second harness version has ever run.
+
+    Every judge-derived figure is None, never 0.0, when no session in
+    the row carries a label from the packaged rubric; ``sessions_judged``
+    is the denominator that earned it.
+    """
+    if by not in C.HARNESS_DIMENSIONS:
+        raise ValueError(
+            f"cannot group sessions by {by!r}; one of: {', '.join(C.HARNESS_DIMENSIONS)}"
+        )
+    keep_sql, keep_params = keep_clause(noise, "s") if noise else ("1=1", ())
+    no_facts_sql = " AND ".join(f"s.{f} IS NULL" for f in C.HARNESS_FACTS)
+    # The KIND of row a session belongs to, decided in SQL so the CASE
+    # order is the definition, and kept SEPARATE from the dimension's
+    # value. Two reasons the order and the separation are load-bearing:
+    #
+    # * MIXED FIRST. A session whose harness changed mid-run is evidence
+    #   for no version, even when its earliest stamp carries no facts at
+    #   all — testing "no facts" first put such a session in `unstamped`
+    #   while `harness_clause` answered it for `mixed` too, so the groups
+    #   overlapped and the row's own link disagreed with it.
+    # * KIND, NOT THE STRING. A cli_version or cct_version is untrusted
+    #   text that may legitimately BE "mixed" or "unstamped"; folding the
+    #   kind into the value merged that real version into the named group
+    #   and mislabelled the row.
+    kind_sql = (
+        f"CASE WHEN s.{C.HARNESS_KEY_MIXED} IS TRUE THEN '{C.HARNESS_GROUP_MIXED}' "
+        f"WHEN {no_facts_sql} THEN '{C.HARNESS_GROUP_UNSTAMPED}' "
+        f"WHEN s.{by} IS NULL THEN '{C.HARNESS_GROUP_ABSENT}' "
+        f"ELSE '{_KIND_VALUE}' END"
+    )
+    sessions = db.query(
+        f"""
+        SELECT {kind_sql}, s.{by}, s.id, s.turn_count, s.tool_call_count,
+               s.error_count, s.started_at
+        FROM copilot_session s WHERE {keep_sql}
+        """,
+        keep_params,
+    )
+    # Cost per session: the same eligibility rule developer_aggregates
+    # documents — priceable means HAVING A MODEL, which is the pricing
+    # contract itself, not "has tokens".
+    cost_by_session = {
+        int(r[0]): (float(r[1]) if r[1] is not None else None, int(r[2] or 0), int(r[3] or 0))
+        for r in db.query(
+            f"""
+            SELECT t.session_id, SUM(t.cost_usd), COUNT(t.cost_usd),
+                   SUM(CASE WHEN t.model IS NOT NULL AND t.model <> '' THEN 1 ELSE 0 END)
+            FROM copilot_turn t JOIN copilot_session s ON s.id = t.session_id
+            WHERE {keep_sql} GROUP BY t.session_id
+            """,
+            keep_params,
+        )
+    }
+    # The judge's per-session rollup under the PACKAGED rubric — its own
+    # name (heuristic-v1), which is what the rows are stored under, never
+    # a configuration key (the #371 A2 lesson).
+    from ..judge.rubric import load_rubric
+
+    kpi_by_session = {
+        int(r[0]): (r[1], r[2], r[3], int(r[4] or 0))
+        for r in db.query(
+            f"""
+            SELECT k.session_id, k.avg_interaction_quality, k.rework_rate,
+                   k.correction_rate, k.labeled_turn_count
+            FROM session_kpi k JOIN copilot_session s ON s.id = k.session_id
+            WHERE {keep_sql} AND k.rubric_name = ?
+            """,
+            tuple(keep_params) + (load_rubric().name,),
+        )
+    }
+
+    # Keyed by (kind, value): a named group has no value, and a real
+    # value that spells "mixed" stays its own row.
+    grouped: dict[tuple[str, Optional[str]], list[tuple]] = {}
+    for row in sessions:
+        kind = str(row[0])
+        grouped.setdefault((kind, str(row[1]) if kind == _KIND_VALUE else None), []).append(row)
+
+    rows: list[dict[str, Any]] = []
+    for (kind, value), members in grouped.items():
+        ids = [int(m[2]) for m in members]
+        costs = [cost_by_session.get(i, (None, 0, 0)) for i in ids]
+        priced = [c[0] for c in costs if c[0] is not None]
+        kpis = [kpi_by_session[i] for i in ids if i in kpi_by_session]
+        judged = [k for k in kpis if k[3] > 0]
+        turns = sum(int(m[3] or 0) for m in members)
+        rows.append({
+            "kind": kind,
+            # None for a named group: the row is that group, not a value
+            # that happens to be spelled like one.
+            "value": value,
+            "is_group": kind != _KIND_VALUE,
+            "sessions": len(members),
+            "turns": turns,
+            "median_turns": _median([float(m[3] or 0) for m in members]),
+            "median_tool_calls": _median([float(m[4] or 0) for m in members]),
+            "errors": sum(int(m[5] or 0) for m in members),
+            # Per 100 turns, like the session header; None when the row
+            # has no turns to divide by rather than a spurious 0.
+            "errors_per_100_turns": (
+                (sum(int(m[5] or 0) for m in members) / turns * 100) if turns else None
+            ),
+            "cost_usd": sum(priced) if priced else None,
+            "priced_turns": sum(c[1] for c in costs),
+            "priceable_turns": sum(c[2] for c in costs),
+            "first_seen": min((m[6] for m in members if m[6]), default=None),
+            "last_seen": max((m[6] for m in members if m[6]), default=None),
+            # Judge figures: None without labels, never zero. Quality is
+            # the mean of the per-session means, as specified — a session
+            # is one reading of how the work went. The two RATES are over
+            # the labelled turns that produced them, so a one-turn
+            # session cannot outvote a hundred-turn one.
+            "avg_interaction_quality": _mean(
+                [float(k[0]) for k in judged if k[0] is not None]
+            ),
+            "rework_rate": _weighted_mean([(k[1], k[3]) for k in judged]),
+            "correction_rate": _weighted_mean([(k[2], k[3]) for k in judged]),
+            "sessions_judged": len(judged),
+            "labeled_turns": sum(k[3] for k in judged),
+        })
+    # Ordered by value, named groups last: stable, and not a leaderboard.
+    rows.sort(key=lambda r: (r["is_group"], r["value"] or r["kind"]))
+    value_rows = [r for r in rows if not r["is_group"]]
+    return {
+        "by": by,
+        "dimensions": list(C.HARNESS_DIMENSIONS),
+        "rows": rows,
+        # One comparable value (or none) is not a comparison; say so
+        # rather than letting a one-row table imply one.
+        "single_group": len(value_rows) <= 1,
+        "comparable_values": len(value_rows),
+        "basis": (
+            "sessions grouped by the harness stamp recorded when each session started; "
+            "mixed, absent and unstamped are named rows, never folded into a version"
+        ),
+    }
