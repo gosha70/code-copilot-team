@@ -816,3 +816,44 @@ class TestReadSurfaceContract(LedgerFixture):
             self.assertIsNone(ab.run_detail(db, cfg, "g1")["expectations"])
         finally:
             db.close()
+
+
+class TestRescanCost(LedgerFixture):
+    """Recovery shells out per run; a rescan must not pay that again for
+    runs whose statements are already held."""
+
+    def test_a_fully_recovered_run_is_not_re_recovered(self) -> None:
+        base = TestStatementDurability.BASE
+        feature = TestStatementDurability.FEATURE
+        text = subprocess.run(
+            ["git", "-C", str(REPO), "show", f"{base}:specs/{feature}/spec.md"],
+            capture_output=True, text=True)
+        parsed = subprocess.run(
+            ["bash", "-c",
+             f"source {REPO}/scripts/lib/verification-common.sh && vc_extract_frs /dev/stdin"],
+            input=text.stdout, capture_output=True, text=True)
+        fr, _, statement = parsed.stdout.splitlines()[0].partition("\t")
+        ledger = self.write_run("auto-build", feature, feature=feature, attempt="rescan",
+                                frs=(fr,), base=base)
+        state = json.loads((ledger / "state.json").read_text())
+        state["preflight"]["contract"]["verifiers"]["set"][0]["statement_sha"] = \
+            E.statement_sha(fr, statement)
+        (ledger / "state.json").write_text(json.dumps(state))
+
+        first = E.ingest_runs(self.db, self.root, project_dir=REPO)
+        self.assertEqual(first.statements_recovered, 1)
+        stored = self.db.query_one(
+            f"SELECT statement, statement_source FROM {C.TBL_EXPECTATION}")
+
+        calls = []
+        real = E.recover_statements
+        E.recover_statements = lambda *a, **k: (calls.append(a), real(*a, **k))[1]
+        try:
+            second = E.ingest_runs(self.db, self.root, project_dir=REPO)
+        finally:
+            E.recover_statements = real
+        self.assertEqual(calls, [], "a fully recovered run must not re-shell out")
+        self.assertEqual(self.db.query_one(
+            f"SELECT statement, statement_source FROM {C.TBL_EXPECTATION}"), stored)
+        self.assertEqual(second.statements_recovered, 1, "still counted as held")
+        self.assertEqual(second.statements_unavailable, 0)

@@ -561,13 +561,26 @@ def _store_run(db, run: LedgerRun, fingerprint: str, project: Path, stats: Inges
              run.ledger_root, run_ref),
         )
 
-    statements = recover_statements(project, run.feature_id, run.branch_base_ref)
+    # Recovery shells out to `git show` plus the parser, so a rescan of
+    # a large archive would pay that per run every pass. A run whose
+    # statements are ALL already recovered can never gain from another
+    # attempt — they are never demoted — so it is skipped.
+    if _all_statements_recovered(db, run_ref, len(_verifier_set(run.contract))):
+        statements: dict[str, str] = {}
+        already_recovered = True
+    else:
+        statements = recover_statements(project, run.feature_id, run.branch_base_ref)
+        already_recovered = False
     for verifier in _verifier_set(run.contract):
         fr = verifier.get("fr")
         frozen_sha = verifier.get("statement_sha")
         if not isinstance(fr, str) or not isinstance(frozen_sha, str):
             continue
         text, source = accept_statement(fr, statements.get(fr), frozen_sha)
+        if already_recovered:
+            # Nothing was re-read; the stored text stands and is counted
+            # as held, which the preserve branch below would do anyway.
+            source = C.STATEMENT_SOURCE_UNAVAILABLE
         if source == C.STATEMENT_SOURCE_RECOVERED:
             stats.statements_recovered += 1
         else:
@@ -609,6 +622,18 @@ def _store_run(db, run: LedgerRun, fingerprint: str, project: Path, stats: Inges
         stats.results_stored += _store_results(db, exp_ref, rows, now)
     stats.sessions_recorded += _store_sessions(db, run_ref, run, now, stats)
     return True
+
+
+def _all_statements_recovered(db, run_ref: int, expected: int) -> bool:
+    """True when this run already holds a recovered statement for every
+    requirement its contract names — the common case on a rescan."""
+    if expected <= 0:
+        return False
+    stored = db.query_one(
+        f"SELECT COUNT(*) FROM {C.TBL_EXPECTATION} WHERE run_ref = ? AND statement_source = ?",
+        (run_ref, C.STATEMENT_SOURCE_RECOVERED),
+    )
+    return bool(stored) and int(stored[0]) == expected
 
 
 def _store_results(db, exp_ref: int, rows: list[ResultRow], now: str) -> int:
