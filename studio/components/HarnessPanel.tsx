@@ -20,6 +20,8 @@ import type { HarnessAggregates } from "@/lib/api";
 import {
   compareState,
   dimensionLabel,
+  exclusionNote,
+  expectationCell,
   judged,
   rowHref,
   rowKey,
@@ -93,6 +95,7 @@ export default function HarnessPanel({
                 <Th>Tools (median)</Th>
                 <Th>Errors / 100 turns</Th>
                 <Th>Priced cost</Th>
+                <Th>Expectations</Th>
                 <Th>Quality</Th>
                 <Th>Rework</Th>
                 <Th>Correction</Th>
@@ -134,6 +137,15 @@ export default function HarnessPanel({
                       <span className="text-xs text-slate-400"> (partial)</span>
                     )}
                   </Td>
+                  {/* ONE column: the rate is meaningless without the
+                      evidence behind it, so the counts ride with it
+                      instead of widening the table (#371 A5). */}
+                  <Td title={expectationCell(r).title}>
+                    {expectationCell(r).primary}
+                    <div className="text-[11px] text-slate-400">
+                      {expectationCell(r).secondary}
+                    </div>
+                  </Td>
                   <Td
                     title={
                       r.sessions_judged === 0
@@ -150,6 +162,11 @@ export default function HarnessPanel({
             </tbody>
           </table>
         </div>
+      )}
+      {exclusionNote(data.runs_spanning_groups, data.runs_with_unmatched_sessions) && (
+        <p className="mt-3 text-xs text-amber-700">
+          {exclusionNote(data.runs_spanning_groups, data.runs_with_unmatched_sessions)}
+        </p>
       )}
       <p className="mt-3 text-xs text-slate-400">{data.basis}</p>
     </Card>

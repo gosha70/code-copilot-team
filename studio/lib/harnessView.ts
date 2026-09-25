@@ -160,3 +160,103 @@ export function stateLine(state: string, dimension: string): string {
     return `Every stamped session ran under one ${dimensionLabel(dimension)}. A comparison needs a second one — the figures below are this version's, not a difference.`;
   return "";
 }
+
+
+// ── expectations on a harness row (#371 A5) ───────────────────────────
+
+/** What one row's Expectations cell shows. ONE column, not three: the
+ *  rate is meaningless without the evidence behind it, so the counts
+ *  ride with it rather than widening the table. */
+export interface ExpectationCell {
+  /** The SUCCESS rate — met/evaluated — as a percentage, or "—" when
+   *  nothing was evaluated. Never "0%" for absent evidence, which would
+   *  claim every expectation failed; and never "100%" unless every
+   *  evaluated expectation was met. */
+  primary: string;
+  /** EVALUATION COVERAGE — evaluated out of every expectation the runs
+   *  carried — plus what was not established. A different ratio from
+   *  the percentage above, and deliberately so: "4/4 evaluated · 22
+   *  unevaluated" contradicts itself, "4/26 evaluated · 22 unevaluated"
+   *  does not. */
+  secondary: string;
+  /** Runs, distinct sessions and the full counts. */
+  title: string;
+}
+
+/** met/evaluated as a percentage, preserving one invariant: 100% means
+ *  EVERY evaluated expectation was met. Rounding alone would render
+ *  999/1000 as "100%", so a rate below 1 is capped just under it. */
+export function successPercent(rate: number): string {
+  if (rate >= 1) return "100%";
+  return `${Math.min(99, Math.round(rate * 100))}%`;
+}
+
+type ExpectationFields = Pick<
+  HarnessRow,
+  | "expectations_met"
+  | "expectations_evaluated"
+  | "expectations_unknown"
+  | "expectations_unevaluated"
+  | "runs_with_expectations"
+  | "sessions_with_expectations"
+  | "expectation_rate"
+>;
+
+export function expectationCell(row: ExpectationFields): ExpectationCell {
+  const {
+    expectations_met: met,
+    expectations_evaluated: evaluated,
+    expectations_unknown: unknown,
+    expectations_unevaluated: unevaluated,
+    runs_with_expectations: runs,
+    sessions_with_expectations: sessions,
+    expectation_rate: rate,
+  } = row;
+  const notEstablished: string[] = [];
+  if (unevaluated > 0) notEstablished.push(`${unevaluated} unevaluated`);
+  if (unknown > 0) notEstablished.push(`${unknown} unknown`);
+
+  if (runs === 0) {
+    return {
+      primary: "—",
+      secondary: "no runs",
+      title: "No auto-build run is attributed to this harness version.",
+    };
+  }
+  const primary = rate == null ? "—" : successPercent(rate);
+  // COVERAGE, not the success ratio: how many of the expectations these
+  // runs carried were actually evaluated at all.
+  const carried = evaluated + unknown + unevaluated;
+  const evaluatedPart = `${evaluated}/${carried} evaluated`;
+  return {
+    primary,
+    secondary: [evaluatedPart, ...notEstablished].join(" · "),
+    title:
+      `${runs} run${runs === 1 ? "" : "s"}, ` +
+      `${sessions} session${sessions === 1 ? "" : "s"}. ` +
+      `${met} met, ${evaluated - met} not met, ${unknown} unknown, ` +
+      `${unevaluated} unevaluated. The rate is met/evaluated; unknown and ` +
+      `unevaluated are in neither side of it.`,
+  };
+}
+
+/** The note under the table: runs that belong to no row at all. Shown
+ *  only when there are any, and it says what each exclusion means —
+ *  "unmatched" covers a session that was never ingested AND one that
+ *  falls outside the list's current noise population. */
+export function exclusionNote(
+  spanning: number,
+  unmatched: number,
+): string | null {
+  if (spanning === 0 && unmatched === 0) return null;
+  const parts: string[] = [];
+  if (spanning > 0)
+    parts.push(
+      `${spanning} run${spanning === 1 ? "" : "s"} spanned more than one harness version`,
+    );
+  if (unmatched > 0)
+    parts.push(
+      `${unmatched} run${unmatched === 1 ? "" : "s"} could not be placed (a session was never ingested, is outside the current noise population, or the run recorded none)`,
+    );
+  return `Not counted in any row: ${parts.join("; ")}.`;
+}

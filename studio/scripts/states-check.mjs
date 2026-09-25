@@ -1194,8 +1194,8 @@ try {
 
   // ── harness compare (#371 A4b) ──────────────────────────────────────
   console.log("\nharness compare:");
-  const a4bRow = (over) => ({ kind: "value", value: "v1", is_group: false, sessions: 3, turns: 300, median_turns: 90, median_tool_calls: 12, errors: 6, errors_per_100_turns: 2, cost_usd: 1.5, priced_turns: 10, priceable_turns: 10, first_seen: null, last_seen: null, avg_interaction_quality: 4.25, rework_rate: 0.1, correction_rate: 0.2, sessions_judged: 2, labeled_turns: 40, ...over });
-  const a4bAgg = (rows, over) => ({ by: "cli_version", dimensions: ["instructions_digest", "cct_sha", "cct_version", "cli_version", "providers_digest"], rows, single_group: rows.filter((r) => !r.is_group).length <= 1, comparable_values: rows.filter((r) => !r.is_group).length, basis: "sessions grouped by the harness stamp", ...over });
+  const a4bRow = (over) => ({ kind: "value", value: "v1", is_group: false, sessions: 3, turns: 300, median_turns: 90, median_tool_calls: 12, errors: 6, errors_per_100_turns: 2, cost_usd: 1.5, priced_turns: 10, priceable_turns: 10, first_seen: null, last_seen: null, avg_interaction_quality: 4.25, rework_rate: 0.1, correction_rate: 0.2, sessions_judged: 2, labeled_turns: 40, expectations_met: 0, expectations_evaluated: 0, expectations_unknown: 0, expectations_unevaluated: 0, runs_with_expectations: 0, sessions_with_expectations: 0, expectation_rate: null, ...over });
+  const a4bAgg = (rows, over) => ({ by: "cli_version", dimensions: ["instructions_digest", "cct_sha", "cct_version", "cli_version", "providers_digest"], rows, single_group: rows.filter((r) => !r.is_group).length <= 1, comparable_values: rows.filter((r) => !r.is_group).length, runs_spanning_groups: 0, runs_with_unmatched_sessions: 0, basis: "sessions grouped by the harness stamp", ...over });
   const a4bKind = (kind, value = null) => ({ kind, value });
   if (a4hv.dimensionLabel("cct_sha") !== "CCT commit" || a4hv.dimensionLabel("nope") !== "nope") fail("dimensionLabel");
   else if (a4hv.rowLabel(a4bKind("value", "a".repeat(64)), "cct_sha") !== "a".repeat(12)) fail("a digest row is shortened");
@@ -1243,6 +1243,46 @@ try {
   const a4bPartial = render(a4bp.default, { data: a4bAgg([a4bRow({ value: "2.1.1", priced_turns: 3, priceable_turns: 10 })]) });
   if (!/\(partial\)/.test(a4bPartial) || !/3 of 10 priceable turns priced/.test(a4bPartial)) fail("partial pricing not disclosed");
   else console.log("  ok  a priced subtotal is marked partial with its coverage, never passed off as the total");
+
+  // ── expectations on the compare (#371 A5) ───────────────────────────
+  console.log("\nexpectations:");
+  const a5cell = (over) => a4hv.expectationCell({ expectations_met: 4, expectations_evaluated: 4, expectations_unknown: 0, expectations_unevaluated: 0, runs_with_expectations: 1, sessions_with_expectations: 2, expectation_rate: 1, ...over });
+  if (a5cell({}).primary !== "100%" || !/4\/4 evaluated/.test(a5cell({}).secondary)) fail(`cell: ${JSON.stringify(a5cell({}))}`);
+  else if (a5cell({ expectations_met: 1, expectations_evaluated: 4, expectation_rate: 0.25 }).primary !== "25%") fail("percentage");
+  else console.log("  ok  a judged row reads a success percentage with evaluation coverage beneath it");
+  // The two ratios are DIFFERENT numbers and must not be confused: the
+  // percentage is met/evaluated, the coverage is evaluated/carried.
+  const a5distinct = a5cell({ expectations_met: 1, expectations_evaluated: 4, expectations_unknown: 2, expectations_unevaluated: 20, expectation_rate: 0.25 });
+  if (a5distinct.primary !== "25%") fail(`success rate: ${a5distinct.primary}`);
+  else if (!/4\/26 evaluated/.test(a5distinct.secondary)) fail(`coverage must be evaluated/carried: ${a5distinct.secondary}`);
+  else if (/1\/4 evaluated/.test(a5distinct.secondary)) fail("coverage must not repeat the success ratio");
+  else if (!/20 unevaluated/.test(a5distinct.secondary) || !/2 unknown/.test(a5distinct.secondary)) fail(`not-established parts: ${a5distinct.secondary}`);
+  else console.log("  ok  with a not-met case the two ratios differ: 25% met of the evaluated, 4 of 26 evaluated at all");
+  // 100% must mean COMPLETE success, so a rate just under 1 never rounds up.
+  if (a4hv.successPercent(999 / 1000) === "100%") fail("999/1000 must not read 100%");
+  else if (a4hv.successPercent(999 / 1000) !== "99%") fail(`near-complete: ${a4hv.successPercent(999 / 1000)}`);
+  else if (a4hv.successPercent(1) !== "100%" || a4hv.successPercent(0) !== "0%") fail("exact bounds");
+  else console.log("  ok  100% only when every evaluated expectation was met; 999/1000 reads 99%");
+  const a5none = a5cell({ runs_with_expectations: 0, expectations_evaluated: 0, expectation_rate: null, expectations_met: 0 });
+  if (a5none.primary !== "—" || !/no runs/.test(a5none.secondary)) fail(`no runs: ${JSON.stringify(a5none)}`);
+  else console.log("  ok  a row with no attributed run reads '—', never 0%");
+  const a5unevaluated = a5cell({ expectations_met: 0, expectations_evaluated: 0, expectations_unevaluated: 22, expectation_rate: null });
+  if (a5unevaluated.primary !== "—") fail("unevaluated must not read 0%");
+  else if (!/0\/22 evaluated/.test(a5unevaluated.secondary) || !/22 unevaluated/.test(a5unevaluated.secondary)) fail(`unevaluated not shown: ${a5unevaluated.secondary}`);
+  else console.log("  ok  nothing evaluated reads '—' and says how much was not established");
+  const a5mixed = a5cell({ expectations_met: 1, expectations_evaluated: 1, expectations_unknown: 1, expectations_unevaluated: 22, expectation_rate: 1 });
+  if (!/1\/24 evaluated/.test(a5mixed.secondary) || !/22 unevaluated/.test(a5mixed.secondary) || !/1 unknown/.test(a5mixed.secondary)) fail(`mixed secondary: ${a5mixed.secondary}`);
+  else if (!/in neither side/.test(a5mixed.title) || !/1 run/.test(a5mixed.title) || !/2 sessions/.test(a5mixed.title)) fail(`tooltip: ${a5mixed.title}`);
+  else console.log("  ok  unknown and unevaluated ride beside the rate, and the tooltip says they are in neither side of it");
+  if (a4hv.exclusionNote(0, 0) !== null) fail("no exclusions must render no note");
+  else if (!/spanned more than one harness version/.test(a4hv.exclusionNote(2, 0))) fail("spanning note");
+  else if (!/never ingested/.test(a4hv.exclusionNote(0, 3)) || !/noise population/.test(a4hv.exclusionNote(0, 3)) || !/recorded none/.test(a4hv.exclusionNote(0, 3))) fail(`unmatched note must cover all three causes: ${a4hv.exclusionNote(0, 3)}`);
+  else console.log("  ok  the exclusion note appears only when runs were excluded, and names every cause");
+  const a5panel = render(a4bp.default, { data: a4bAgg([a4bRow({ value: "2.1.1", expectations_met: 4, expectations_evaluated: 4, expectations_unevaluated: 22, runs_with_expectations: 6, sessions_with_expectations: 6, expectation_rate: 1 })], { runs_spanning_groups: 1, runs_with_unmatched_sessions: 2 }) });
+  if (!/<th[^>]*>Expectations<\/th>/.test(a5panel)) fail("the Expectations column is missing");
+  else if (!/100%/.test(a5panel) || !/4\/26 evaluated/.test(a5panel) || !/22 unevaluated/.test(a5panel)) fail("cell contents");
+  else if (!/Not counted in any row/.test(a5panel) || !/1 run spanned/.test(a5panel) || !/2 runs could not be placed/.test(a5panel)) fail("the exclusion note is missing from the panel");
+  else console.log("  ok  one Expectations column in the table, with the excluded runs named in a note below it");
 
   if (!process.exitCode) console.log("\nstates-check: all states asserted");
 } finally {

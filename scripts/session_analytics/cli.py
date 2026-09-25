@@ -343,6 +343,25 @@ def _build_parser() -> argparse.ArgumentParser:
         "--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB)."
     )
 
+    p_exp = sub.add_parser(
+        "expectations",
+        help="Store what auto-build runs were required to achieve, and how it came out (#371 A5).",
+    )
+    p_exp.add_argument(
+        "--ledger-root", type=Path, default=None,
+        help="The .cct directory holding auto-build/ and auto-build-archive/ "
+             "(else the configured auto_build.ledger_root).",
+    )
+    p_exp.add_argument(
+        "--project-dir", type=Path, default=None,
+        help="The repository the ledgers belong to, used to recover each admitted "
+             "requirement's text at the run's base commit (else the ledger root's parent).",
+    )
+    p_exp.add_argument(
+        "--db", "--dsn", dest="dsn", default=None,
+        help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB).",
+    )
+
     p_arch = sub.add_parser(
         "archive",
         help="Archive full REDACTED trace text for opted-in projects (E10).",
@@ -690,6 +709,49 @@ def _export_one(exp, db, table: str, fmt: str, dest: Path) -> None:
     else:
         with open(dest, "w", newline="", encoding="utf-8") as fp:
             exp.write_csv(db, table, fp)
+
+
+def _cmd_expectations(args: argparse.Namespace) -> int:
+    """#371 A5: read every auto-build ledger under the root and store
+    its expectations, results and session associations.
+
+    A separate pass, not part of ingest: a ledger is completed at the
+    landing gate, long after the transcripts it refers to were ingested,
+    so binding the two rates of change together would make each wait for
+    the other."""
+    from . import expectations as exp
+    from .relational.db import Database, apply_ddl, SchemaMismatch
+    from .setup_cmd import ensure_initialized
+
+    if not ensure_initialized(args.dsn):
+        return C.EXIT_USAGE
+    cfg = load_config(dsn=args.dsn)
+    if not cfg.dsn:
+        print(
+            "error: no database configured. Run setup, pass --db, or set CCT_SA_DB.",
+            file=sys.stderr,
+        )
+        return C.EXIT_USAGE
+
+    root = args.ledger_root or Path(cfg.auto_build.ledger_root)
+    if not root.is_dir():
+        # A plain file or a missing path would walk to nothing and
+        # masquerade as an all-zero success (the correlate rule).
+        print(f"error: --ledger-root is not a directory: {root}", file=sys.stderr)
+        return C.EXIT_USAGE
+
+    db = Database.connect(cfg.dsn)
+    try:
+        apply_ddl(db)
+        stats = exp.ingest_runs(db, root, project_dir=args.project_dir)
+    except SchemaMismatch:
+        raise
+    finally:
+        db.close()
+    print(json.dumps(stats.as_dict(), indent=2))
+    for skip in stats.skipped:
+        print(f"[skip] {skip.path}: {skip.reason}", file=sys.stderr)
+    return C.EXIT_OK
 
 
 def _cmd_correlate(args: argparse.Namespace) -> int:
@@ -1432,6 +1494,7 @@ _HANDLERS = {
     "serve": _cmd_serve,
     "export": _cmd_export,
     "correlate": _cmd_correlate,
+    "expectations": _cmd_expectations,
     "archive": _cmd_archive,
     "search": _cmd_search,
     "watch": _cmd_watch,

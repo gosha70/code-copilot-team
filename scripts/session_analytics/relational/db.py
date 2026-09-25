@@ -94,6 +94,7 @@ _DDL_FILES = (
     "ddl/postgres/008_session_flag.sql",
     "ddl/postgres/009_auto_build_verdict.sql",
     "ddl/postgres/010_feedback.sql",
+    "ddl/postgres/011_expectation.sql",
 )
 # 3: + local_heartbeat (Slice B1, #187)
 # 4: + trace search index (E10 Slice B, #65). NOTE that apply_ddl creates
@@ -116,7 +117,14 @@ _DDL_FILES = (
 #    instructions_digest, providers_digest, harness_mixed} (#371 A4, the
 #    harness stamp). COLUMNS on an existing table: a pre-10 store is
 #    refused with the recreate remedy, as for 8.
-_SCHEMA_VERSION = 10
+# 11: + expectation_run, expectation, expectation_result,
+#    expectation_session (#371 A5). FOUR NEW TABLES and no column on any
+#    existing one, so create-if-absent is the whole migration and a
+#    schema-10 store gains them in place. Deliberate: the columns this
+#    slice first proposed would have forced a recreate, and a recreate
+#    permanently drops every session whose transcript has since been
+#    pruned.
+_SCHEMA_VERSION = 11
 
 _PK_SQL = {
     DIALECT_POSTGRES: "BIGSERIAL PRIMARY KEY",

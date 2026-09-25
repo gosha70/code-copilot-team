@@ -1008,6 +1008,27 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         finally:
             conn.close()
 
+    @app.get("/api/expectations")
+    def expectations_list(
+        feature_id: str = "", attempt_id: str = "", limit: int = 50
+    ) -> dict[str, Any]:
+        """#371 A5: what each stored auto-build run was required to
+        achieve, and how it came out. `rate` is met/evaluated and is
+        null — never 0 — when nothing was evaluated; `unknown` and
+        `unevaluated` are counted beside it, never inside it."""
+        from .. import expectations as exp
+
+        conn = db()
+        try:
+            return {
+                "runs": exp.list_runs(
+                    conn, feature_id=feature_id or None,
+                    attempt_id=attempt_id or None, limit=max(1, min(int(limit), 500)),
+                )
+            }
+        finally:
+            conn.close()
+
     @app.get("/api/dashboard/harness")
     def dashboard_harness(by: str = C.HARNESS_DIMENSIONS[0]) -> dict[str, Any]:
         """#371 A4b: sessions grouped by one dimension of the harness they

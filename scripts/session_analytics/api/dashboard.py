@@ -667,9 +667,14 @@ def harness_aggregates(
     # Keyed by (kind, value): a named group has no value, and a real
     # value that spells "mixed" stays its own row.
     grouped: dict[tuple[str, Optional[str]], list[tuple]] = {}
+    #: session id -> the row it belongs to, so an expectation's run can
+    #: be attributed only when ALL of its sessions agree (#371 A5).
+    group_of_session: dict[int, tuple[str, Optional[str]]] = {}
     for row in sessions:
         kind = str(row[0])
-        grouped.setdefault((kind, str(row[1]) if kind == _KIND_VALUE else None), []).append(row)
+        key = (kind, str(row[1]) if kind == _KIND_VALUE else None)
+        grouped.setdefault(key, []).append(row)
+        group_of_session[int(row[2])] = key
 
     rows: list[dict[str, Any]] = []
     for (kind, value), members in grouped.items():
@@ -713,6 +718,7 @@ def harness_aggregates(
             "sessions_judged": len(judged),
             "labeled_turns": sum(k[3] for k in judged),
         })
+    exclusions = _attach_expectations(db, rows, group_of_session)
     # Ordered by value, named groups last: stable, and not a leaderboard.
     rows.sort(key=lambda r: (r["is_group"], r["value"] or r["kind"]))
     value_rows = [r for r in rows if not r["is_group"]]
@@ -720,12 +726,99 @@ def harness_aggregates(
         "by": by,
         "dimensions": list(C.HARNESS_DIMENSIONS),
         "rows": rows,
+        # Runs that belong to NO row. Top-level, not per row: reporting
+        # an excluded run inside a row would contradict the exclusion.
+        **exclusions,
         # One comparable value (or none) is not a comparison; say so
         # rather than letting a one-row table imply one.
         "single_group": len(value_rows) <= 1,
         "comparable_values": len(value_rows),
         "basis": (
             "sessions grouped by the harness stamp recorded when each session started; "
-            "mixed, absent and unstamped are named rows, never folded into a version"
+            "mixed, absent and unstamped are named rows, never folded into a version. "
+            "Expectation figures are attributed at RUN grain: a run counts in a row only "
+            "when every session it discovered is linked and all of them fall in that row"
         ),
     }
+
+
+def _attach_expectations(
+    db: Database, rows: list[dict[str, Any]], group_of_session: dict[int, tuple[str, Optional[str]]]
+) -> dict[str, int]:
+    """#371 A5: expectation outcomes per harness row, at RUN grain.
+
+    A run is the unit that was evaluated — one verifier gate, one set of
+    results — so it is the unit that counts. Attributing per session
+    would copy one run's single outcome into every version its sessions
+    touched.
+
+    A run is attributable to a row only when BOTH hold:
+
+    * every session the ingest pass discovered for it is linked
+      (`session_ref` is not NULL) and falls in the population being
+      grouped; and
+    * all of those sessions fall in the SAME row.
+
+    Two boundary cases are decided here rather than left to emerge:
+
+    * A run with ZERO discovered sessions is unattributable, not
+      vacuously attributable. "All its sessions agree" is trivially
+      true of an empty set, which would otherwise place a sessionless
+      run in whichever row happened to be considered first.
+    * `sessions_with_expectations` counts DISTINCT resolved sessions,
+      not association rows, so a session that appears in several runs
+      cannot inflate a row's session coverage.
+
+    Every judge-style discipline of this module carries over: `unknown`
+    and `unevaluated` expectations are in NEITHER side of the rate, and
+    the rate is None — never 0.0 — when nothing was evaluated.
+    """
+    from .. import expectations as exp
+
+    for row in rows:
+        row.update({
+            "expectations_met": 0, "expectations_evaluated": 0,
+            "expectations_unknown": 0, "expectations_unevaluated": 0,
+            "runs_with_expectations": 0, "sessions_with_expectations": 0,
+            "expectation_rate": None,
+        })
+    by_key = {(r["kind"], r["value"]): r for r in rows}
+    # Distinct sessions per row, so repeated runs cannot inflate coverage.
+    row_sessions: dict[tuple[str, Optional[str]], set[int]] = {k: set() for k in by_key}
+    spanning = unmatched = 0
+
+    # EVERY stored run: this aggregate is defined over all of them, and
+    # a cap would drop later runs out of the row totals and out of the
+    # exclusion counters alike — an omission that looks like nothing.
+    for run in exp.list_runs(db, limit=None):
+        links = run.get("sessions") or []
+        refs = [s.get("session_ref") for s in links]
+        placed = {group_of_session.get(ref) for ref in refs if ref is not None}
+        if (
+            not links                       # no session recorded at all
+            or any(ref is None for ref in refs)   # discovered but not ingested
+            or None in placed               # ingested but outside this population
+        ):
+            unmatched += 1
+            continue
+        if len(placed) != 1:
+            spanning += 1
+            continue
+        key = placed.pop()
+        row = by_key.get(key)
+        if row is None:
+            unmatched += 1
+            continue
+        row["runs_with_expectations"] += 1
+        row["expectations_met"] += run["expectations_met"]
+        row["expectations_evaluated"] += run["expectations_evaluated"]
+        row["expectations_unknown"] += run["expectations_unknown"]
+        row["expectations_unevaluated"] += run["expectations_unevaluated"]
+        row_sessions[key].update(ref for ref in refs if ref is not None)
+
+    for key, row in by_key.items():
+        row["sessions_with_expectations"] = len(row_sessions[key])
+        evaluated = row["expectations_evaluated"]
+        # Exactly met / evaluated, over `met` and `not_met` only.
+        row["expectation_rate"] = (row["expectations_met"] / evaluated) if evaluated else None
+    return {"runs_spanning_groups": spanning, "runs_with_unmatched_sessions": unmatched}

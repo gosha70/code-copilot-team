@@ -475,7 +475,39 @@ def run_detail(db: Database, cfg: AutoBuildConfig, key: str, *, now: Optional[da
         run["triage_report"] = (ledger / C.LEDGER_TRIAGE_FILE).read_text(encoding="utf-8")
     except OSError:
         run["triage_report"] = None
+    run["expectations"] = _stored_expectations(db, run)
     return run
+
+
+def _stored_expectations(db: Database, run: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """#371 A5: the requirement TEXT and its three-state outcome, from
+    the store — an ENRICHMENT of a run whose ledger is still here.
+
+    Everything else in this module is derived from the ledger on each
+    request, and the counts under `verifiers` still are. This one part
+    is read from the store because the frozen contract never carried the
+    statement text: it is recovered at ingest from spec.md at the run's
+    base commit and hash-verified there.
+
+    None means exactly one thing — this run was never ingested by
+    `session-analytics expectations`. It is NOT an error channel: the
+    tables exist by the time the API serves (create_app applies the DDL),
+    so a database failure or a defect here is a real fault and is left
+    to surface rather than being flattened into the same `null` a
+    never-ingested run produces.
+
+    The DURABLE post-pruning surface is `GET /api/expectations`, which
+    reads the store alone. This function cannot serve that role: the run
+    detail is found by scanning ledgers, so it is unreachable once the
+    directory is gone.
+    """
+    from .. import expectations as exp
+
+    feature_id, attempt_id = run.get("feature_id"), run.get("key")
+    if not isinstance(feature_id, str) or not isinstance(attempt_id, str):
+        return None
+    runs = exp.list_runs(db, feature_id=feature_id, attempt_id=attempt_id, limit=1)
+    return runs[0] if runs else None
 
 
 def set_verdict(

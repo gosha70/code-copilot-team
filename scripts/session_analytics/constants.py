@@ -380,6 +380,53 @@ LABEL_BOOL_NAMES = (
 )
 LABEL_SOURCE_HUMAN = "human"
 
+# ── Expectations (#371 A5) ─────────────────────────────────────────────
+# What an unattended auto-build run was required to achieve, and how it
+# came out. Every name here crosses the ledger reader, the store and the
+# API, so it lives in one place.
+TBL_EXPECTATION_RUN = "expectation_run"
+TBL_EXPECTATION = "expectation"
+TBL_EXPECTATION_RESULT = "expectation_result"
+TBL_EXPECTATION_SESSION = "expectation_session"
+
+#: The three-state normalization of a verifier outcome. `unknown` is
+#: "the outcome establishes neither answer" — a waived entry, a bound
+#: that was hit, a run that could not be bounded, a visual `unreached`.
+EXPECTATION_MET = "met"
+EXPECTATION_NOT_MET = "not_met"
+EXPECTATION_UNKNOWN = "unknown"
+EXPECTATION_STATES = (EXPECTATION_MET, EXPECTATION_NOT_MET, EXPECTATION_UNKNOWN)
+#: An expectation with no result row: no recoverable consolidated
+#: result. NOT a stored state — the absence of rows is the fact.
+EXPECTATION_UNEVALUATED = "unevaluated"
+
+#: Whether the admitted requirement text could be recovered from
+#: spec.md at the run's branch_base_ref and hash-verified.
+STATEMENT_SOURCE_RECOVERED = "recovered"
+STATEMENT_SOURCE_UNAVAILABLE = "unavailable"
+STATEMENT_SOURCES = (STATEMENT_SOURCE_RECOVERED, STATEMENT_SOURCE_UNAVAILABLE)
+
+#: The driver's verifier kinds (shared/schemas/verification.schema.json).
+VERIFIER_KIND_DETERMINISTIC = "deterministic"
+VERIFIER_KIND_CONFORMANCE = "runtime_conformance"
+VERIFIER_KIND_VISUAL = "visual"
+VERIFIER_KINDS = (
+    VERIFIER_KIND_DETERMINISTIC, VERIFIER_KIND_CONFORMANCE, VERIFIER_KIND_VISUAL,
+)
+#: The visual harness's verdicts; `skip` is green only under a frozen
+#: waiver and `unreached` is always red (auto-build-loop.sh).
+VISUAL_VERDICT_UNREACHED = "unreached"
+#: Ledger files A5 reads that have no constant yet.
+LEDGER_FROZEN_CONTRACT_FILE = "frozen-contract.json"
+LEDGER_EVENT_INIT = "init"
+LEDGER_EVENT_VERIFIER_GATE = "verifier_gate"
+LEDGER_BUILD_RESULT_GLOB = "build-result-*.json"
+#: Bounds on the text A5 copies out of a ledger so it survives pruning.
+EXPECTATION_STATEMENT_MAX_CHARS = 4000
+EXPECTATION_DETAIL_MAX_CHARS = 4000
+EXPECTATION_EVIDENCE_MAX_CHARS = 8000
+EXPECTATION_VERIFIER_MAX_CHARS = 2000
+
 # ── Feedback (#371 A3) ─────────────────────────────────────────────────
 # A named, typed judgement on a session, a turn or a tool call. The
 # source types cross store / API / Studio; the vocabulary is the list the

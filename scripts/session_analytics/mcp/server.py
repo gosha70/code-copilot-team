@@ -59,6 +59,26 @@ def build_server(dsn: str, kuzu_path: str = ""):
             db.close()
 
     @server.tool()
+    def list_expectations(feature_id: str = "", attempt_id: str = "", limit: int = 20) -> dict[str, Any]:
+        """#371 A5: what each stored auto-build run was required to achieve
+        (its spec's FRs, frozen at admission) and how it came out. Each
+        expectation is met / not_met / unknown, or unevaluated when the run
+        left no recoverable consolidated result. `rate` is met/evaluated
+        and is null — never 0 — when nothing was evaluated."""
+        from .. import expectations as exp
+
+        db = _db()
+        try:
+            return {
+                "runs": exp.list_runs(
+                    db, feature_id=feature_id or None,
+                    attempt_id=attempt_id or None, limit=max(1, min(int(limit), 200)),
+                )
+            }
+        finally:
+            db.close()
+
+    @server.tool()
     def compare_harness_versions(by: str = "") -> dict[str, Any]:
         """#371 A4b: sessions grouped by one dimension of the harness they
         ran under (instructions_digest, cct_sha, cct_version, cli_version,
