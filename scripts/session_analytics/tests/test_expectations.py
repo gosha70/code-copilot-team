@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -54,6 +55,31 @@ REAL_REPO = REAL_LEDGER_ROOT.parent
 
 SHA_1 = "sha256:" + "1" * 64
 SHA_2 = "sha256:" + "2" * 64
+
+
+def _spec_repo(feature: str, statements: dict[str, str]) -> tuple[Path, str]:
+    """A throwaway git repo holding `specs/<feature>/spec.md`, returning
+    its path and the commit sha.
+
+    Statement recovery reads a spec at a run's base commit, so a test of
+    it needs a reachable commit. Borrowing this repository's history
+    would depend on clone depth — CI checks out shallow, where an older
+    commit simply does not exist — so the fixture makes its own.
+    """
+    repo = Path(tempfile.mkdtemp(prefix="cct-sa-specrepo-"))
+    (repo / "specs" / feature).mkdir(parents=True)
+    body = "\n".join(f"- **{fr}** {text}" for fr, text in statements.items())
+    (repo / "specs" / feature / "spec.md").write_text(
+        f"# Spec\n\n## Requirements\n\n{body}\n", encoding="utf-8"
+    )
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
+    for args in (["init", "-q"], ["add", "-A"], ["commit", "-qm", "spec"]):
+        subprocess.run(["git", "-C", str(repo)] + args, check=True, env=env,
+                       capture_output=True)
+    sha = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                         capture_output=True, text=True, env=env).stdout.strip()
+    return repo, sha
 
 
 def _contract(*frs: str) -> dict:
@@ -411,8 +437,6 @@ class TestAgainstTheRealLedgers(RegistryResetTestCase):
             db.close()
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestHarnessAttribution(LedgerFixture):
@@ -621,56 +645,35 @@ class TestResultFreshness(LedgerFixture):
 
 class TestStatementDurability(LedgerFixture):
     """A recovered statement is the durable record this table exists to
-    keep: it must survive the base commit going away.
+    keep: it must survive a later recovery failing."""
 
-    The fixture uses a spec that really is committed at a real base —
-    `specs/team-developer-aliases/spec.md` at the commit that run
-    branched from — because recovery is only meaningful against a
-    reachable commit."""
+    STATEMENT = "the system MUST record what a run was required to achieve"
 
-    BASE = "f75ebaa5a09eab39a98497f6ab827f241501b46b"
-    FEATURE = "team-developer-aliases"
-
-    def _real_fr(self):
-        text = subprocess.run(
-            ["git", "-C", str(REPO), "show", f"{self.BASE}:specs/{self.FEATURE}/spec.md"],
-            capture_output=True, text=True,
-        )
-        self.assertEqual(text.returncode, 0, "the base commit must be reachable")
-        parsed = subprocess.run(
-            ["bash", "-c",
-             f"source {REPO}/scripts/lib/verification-common.sh && vc_extract_frs /dev/stdin"],
-            input=text.stdout, capture_output=True, text=True,
-        )
-        fr, _, statement = parsed.stdout.splitlines()[0].partition("\t")
-        return fr, statement
-
-    def _write(self, *, base, attempt):
-        fr, statement = self._real_fr()
-        ledger = self.write_run("auto-build", self.FEATURE, feature=self.FEATURE,
-                                attempt=attempt, frs=(fr,), base=base)
+    def _prepare(self, *, attempt):
+        repo, sha = _spec_repo("feat", {"FR-1": self.STATEMENT})
+        ledger = self.write_run("auto-build", "feat", feature="feat", attempt=attempt,
+                                frs=("FR-1",), base=sha)
         state = json.loads((ledger / "state.json").read_text())
         state["preflight"]["contract"]["verifiers"]["set"][0]["statement_sha"] = \
-            E.statement_sha(fr, statement)
+            E.statement_sha("FR-1", self.STATEMENT)
         (ledger / "state.json").write_text(json.dumps(state))
-        return ledger, state
+        return repo
 
     def _stored(self):
         return self.db.query_one(
             f"SELECT statement, statement_source FROM {C.TBL_EXPECTATION}")
 
     def test_a_later_unavailable_recovery_never_erases_a_recovered_statement(self) -> None:
-        """The LEDGER is unchanged — only recovery fails. That is what
-        a garbage-collected base commit, a wrong --project-dir or a
-        missing parser all look like. (Editing `branch_base_ref` would
-        instead change the run fingerprint, and the pass would correctly
-        refuse it as a different run.)"""
-        self._write(base=self.BASE, attempt="dur")
-        first = E.ingest_runs(self.db, self.root, project_dir=REPO)
+        """The LEDGER is unchanged — only recovery fails. That is what a
+        garbage-collected base commit, a wrong --project-dir or a missing
+        parser all look like. (Editing `branch_base_ref` would instead
+        change the run fingerprint, and the pass would correctly refuse
+        it as a different run.)"""
+        repo = self._prepare(attempt="dur")
+        first = E.ingest_runs(self.db, self.root, project_dir=repo)
         self.assertEqual(first.statements_recovered, 1, "pass 1 must recover the text")
         stored = self._stored()
-        self.assertEqual(stored[1], C.STATEMENT_SOURCE_RECOVERED)
-        self.assertIsNotNone(stored[0])
+        self.assertEqual(stored, (self.STATEMENT, C.STATEMENT_SOURCE_RECOVERED))
 
         # Pass 2 from a directory that is not the project: recovery
         # cannot succeed, and the stored text must survive it.
@@ -682,15 +685,46 @@ class TestStatementDurability(LedgerFixture):
         self.assertEqual(second.statements_recovered, 1, "still held, not lost")
 
     def test_an_unavailable_statement_is_promoted_when_recovery_later_succeeds(self) -> None:
-        self._write(base=self.BASE, attempt="promote")
+        repo = self._prepare(attempt="promote")
         elsewhere = Path(tempfile.mkdtemp(prefix="cct-sa-not-a-repo-"))
         E.ingest_runs(self.db, self.root, project_dir=elsewhere)
-        self.assertEqual(self._stored()[1], C.STATEMENT_SOURCE_UNAVAILABLE)
+        self.assertEqual(self._stored(), (None, C.STATEMENT_SOURCE_UNAVAILABLE))
         # The same ledger, now scanned from the real project.
-        E.ingest_runs(self.db, self.root, project_dir=REPO)
-        row = self._stored()
-        self.assertEqual(row[1], C.STATEMENT_SOURCE_RECOVERED)
-        self.assertIsNotNone(row[0])
+        E.ingest_runs(self.db, self.root, project_dir=repo)
+        self.assertEqual(self._stored(), (self.STATEMENT, C.STATEMENT_SOURCE_RECOVERED))
+
+
+class TestRescanCost(LedgerFixture):
+    """Recovery shells out per run; a rescan must not pay that again for
+    runs whose statements are already held."""
+
+    def test_a_fully_recovered_run_is_not_re_recovered(self) -> None:
+        statement = "the pass MUST not re-read what it already holds"
+        repo, sha = _spec_repo("feat", {"FR-1": statement})
+        ledger = self.write_run("auto-build", "feat", feature="feat", attempt="rescan",
+                                frs=("FR-1",), base=sha)
+        state = json.loads((ledger / "state.json").read_text())
+        state["preflight"]["contract"]["verifiers"]["set"][0]["statement_sha"] = \
+            E.statement_sha("FR-1", statement)
+        (ledger / "state.json").write_text(json.dumps(state))
+
+        first = E.ingest_runs(self.db, self.root, project_dir=repo)
+        self.assertEqual(first.statements_recovered, 1)
+        stored = self.db.query_one(
+            f"SELECT statement, statement_source FROM {C.TBL_EXPECTATION}")
+
+        calls = []
+        real = E.recover_statements
+        E.recover_statements = lambda *a, **k: (calls.append(a), real(*a, **k))[1]
+        try:
+            second = E.ingest_runs(self.db, self.root, project_dir=repo)
+        finally:
+            E.recover_statements = real
+        self.assertEqual(calls, [], "a fully recovered run must not re-shell out")
+        self.assertEqual(self.db.query_one(
+            f"SELECT statement, statement_source FROM {C.TBL_EXPECTATION}"), stored)
+        self.assertEqual(second.statements_recovered, 1, "still counted as held")
+        self.assertEqual(second.statements_unavailable, 0)
 
 
 def _tool_payload(result):
@@ -818,42 +852,5 @@ class TestReadSurfaceContract(LedgerFixture):
             db.close()
 
 
-class TestRescanCost(LedgerFixture):
-    """Recovery shells out per run; a rescan must not pay that again for
-    runs whose statements are already held."""
-
-    def test_a_fully_recovered_run_is_not_re_recovered(self) -> None:
-        base = TestStatementDurability.BASE
-        feature = TestStatementDurability.FEATURE
-        text = subprocess.run(
-            ["git", "-C", str(REPO), "show", f"{base}:specs/{feature}/spec.md"],
-            capture_output=True, text=True)
-        parsed = subprocess.run(
-            ["bash", "-c",
-             f"source {REPO}/scripts/lib/verification-common.sh && vc_extract_frs /dev/stdin"],
-            input=text.stdout, capture_output=True, text=True)
-        fr, _, statement = parsed.stdout.splitlines()[0].partition("\t")
-        ledger = self.write_run("auto-build", feature, feature=feature, attempt="rescan",
-                                frs=(fr,), base=base)
-        state = json.loads((ledger / "state.json").read_text())
-        state["preflight"]["contract"]["verifiers"]["set"][0]["statement_sha"] = \
-            E.statement_sha(fr, statement)
-        (ledger / "state.json").write_text(json.dumps(state))
-
-        first = E.ingest_runs(self.db, self.root, project_dir=REPO)
-        self.assertEqual(first.statements_recovered, 1)
-        stored = self.db.query_one(
-            f"SELECT statement, statement_source FROM {C.TBL_EXPECTATION}")
-
-        calls = []
-        real = E.recover_statements
-        E.recover_statements = lambda *a, **k: (calls.append(a), real(*a, **k))[1]
-        try:
-            second = E.ingest_runs(self.db, self.root, project_dir=REPO)
-        finally:
-            E.recover_statements = real
-        self.assertEqual(calls, [], "a fully recovered run must not re-shell out")
-        self.assertEqual(self.db.query_one(
-            f"SELECT statement, statement_source FROM {C.TBL_EXPECTATION}"), stored)
-        self.assertEqual(second.statements_recovered, 1, "still counted as held")
-        self.assertEqual(second.statements_unavailable, 0)
+if __name__ == "__main__":
+    unittest.main()
