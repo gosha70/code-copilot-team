@@ -115,6 +115,24 @@ HARNESS_LEDGER_FACTS = (
 )
 #: The five facts on copilot_session, in column order.
 HARNESS_FACTS = (HARNESS_KEY_CLI_VERSION,) + HARNESS_LEDGER_FACTS
+#: The dimensions the compare groups by and the sessions list filters on
+#: (#371 A4b). A CLOSED set: the value names a column, so it never comes
+#: from a caller. Order = the order the picker offers them.
+HARNESS_DIMENSIONS = (
+    HARNESS_KEY_INSTRUCTIONS_DIGEST, HARNESS_KEY_CCT_SHA, HARNESS_KEY_CCT_VERSION,
+    HARNESS_KEY_CLI_VERSION, HARNESS_KEY_PROVIDERS_DIGEST,
+)
+#: The two groups that are not a dimension value: a session whose harness
+#: changed mid-run, and one with no stamp at all. Both are named rows in
+#: the compare and accepted by the filter, never silently dropped.
+HARNESS_GROUP_MIXED = "mixed"
+HARNESS_GROUP_UNSTAMPED = "unstamped"
+#: Stamped, but THIS dimension was not recorded — e.g. a session that
+#: carries a cli_version from its transcript while the hook had not yet
+#: been installed, grouped by cct_sha. Folding these into "unstamped"
+#: would claim they carry no stamp at all, which is false.
+HARNESS_GROUP_ABSENT = "absent"
+HARNESS_GROUPS = (HARNESS_GROUP_MIXED, HARNESS_GROUP_UNSTAMPED, HARNESS_GROUP_ABSENT)
 HARNESS_VERSION_MAX_CHARS = 40
 HARNESS_SHA_HEX_CHARS = 40
 HARNESS_DIGEST_HEX_CHARS = 64

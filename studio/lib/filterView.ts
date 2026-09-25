@@ -4,7 +4,7 @@ import type { SessionFilters } from "@/lib/api";
 
 export const FILTER_KEYS = [
   "query", "copilot", "date_from", "date_to", "tag", "developer", "model", "tool",
-  "min_cost", "max_cost", "label",
+  "min_cost", "max_cost", "label", "harness",
 ] as const;
 
 export function filtersFromParams(get: (k: string) => string | null): SessionFilters {

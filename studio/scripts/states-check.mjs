@@ -87,6 +87,7 @@ try {
         join(STUDIO, "components/FeedbackControl.tsx"),
         join(STUDIO, "components/SessionHeader.tsx"),
         join(STUDIO, "lib/harnessView.ts"),
+        join(STUDIO, "components/HarnessPanel.tsx"),
         join(STUDIO, "components/SessionTags.tsx"),
         join(STUDIO, "lib/graphView.ts"),
         join(STUDIO, "lib/askView.ts"),
@@ -1190,6 +1191,58 @@ try {
   const a3replace = render(a3fc.FeedbackForm, { vocabulary: a3vocab, supersedes: a3row({ name: "rating", value: 3 }), target: "this session", onCancel: () => {}, onSubmit: async () => {} });
   if (!/replace rating on this session/.test(a3replace) || /<select[^>]*aria-label="feedback name"/.test(a3replace) || !/placeholder="1–5"/.test(a3replace)) fail(`replace form: ${a3replace}`);
   else console.log("  ok  replacing keeps the name fixed and asks for a value of its type");
+
+  // ── harness compare (#371 A4b) ──────────────────────────────────────
+  console.log("\nharness compare:");
+  const a4bRow = (over) => ({ kind: "value", value: "v1", is_group: false, sessions: 3, turns: 300, median_turns: 90, median_tool_calls: 12, errors: 6, errors_per_100_turns: 2, cost_usd: 1.5, priced_turns: 10, priceable_turns: 10, first_seen: null, last_seen: null, avg_interaction_quality: 4.25, rework_rate: 0.1, correction_rate: 0.2, sessions_judged: 2, labeled_turns: 40, ...over });
+  const a4bAgg = (rows, over) => ({ by: "cli_version", dimensions: ["instructions_digest", "cct_sha", "cct_version", "cli_version", "providers_digest"], rows, single_group: rows.filter((r) => !r.is_group).length <= 1, comparable_values: rows.filter((r) => !r.is_group).length, basis: "sessions grouped by the harness stamp", ...over });
+  const a4bKind = (kind, value = null) => ({ kind, value });
+  if (a4hv.dimensionLabel("cct_sha") !== "CCT commit" || a4hv.dimensionLabel("nope") !== "nope") fail("dimensionLabel");
+  else if (a4hv.rowLabel(a4bKind("value", "a".repeat(64)), "cct_sha") !== "a".repeat(12)) fail("a digest row is shortened");
+  else if (a4hv.rowLabel(a4bKind("mixed"), "cct_sha") !== "changed mid-session") fail("mixed label");
+  else if (a4hv.rowLabel(a4bKind("absent"), "cct_sha") !== "no cct commit recorded") fail("absent label");
+  else if (a4hv.rowLabel(a4bKind("unstamped"), "cct_sha") !== "no harness stamp") fail("unstamped label");
+  else console.log("  ok  a value row shows a short digest; each named group reads as a sentence, not a value");
+  if (a4hv.rowFilter(a4bKind("value", "2.1.5"), "cli_version") !== "cli_version:2.1.5") fail("value filter");
+  else if (a4hv.rowFilter(a4bKind("absent"), "cct_sha") !== "absent:cct_sha") fail("absent filter carries its dimension");
+  else if (a4hv.rowFilter(a4bKind("mixed"), "cct_sha") !== "mixed") fail("mixed filter");
+  else if (a4hv.rowHref(a4bKind("absent"), "cct_sha") !== "/sessions?harness=absent%3Acct_sha") fail("href encoding");
+  else console.log("  ok  every row — value, mixed, absent, unstamped — links to exactly its sessions");
+  // A real cli_version may BE "mixed": it must stay a value row with its
+  // own link and its own React key (A4b review P2).
+  const a4bLiteral = a4bKind("value", "mixed");
+  if (a4hv.rowLabel(a4bLiteral, "cli_version") !== "mixed") fail("a version spelled 'mixed' is shown as itself");
+  else if (a4hv.rowFilter(a4bLiteral, "cli_version") !== "cli_version:mixed") fail("a version spelled 'mixed' links to its own sessions");
+  else if (a4hv.rowKey(a4bLiteral) === a4hv.rowKey(a4bKind("mixed"))) fail("a value and a group that share a name must not share a React key");
+  else console.log("  ok  a version string that spells a group name stays a value, with its own link and key");
+  // The header badge uses the same precedence as the compare.
+  if (a4hv.harnessState({ ...a4none, harness_mixed: true }) !== "mixed") fail("a mixed session with no facts must not read as unstamped");
+  else console.log("  ok  mixed wins over unstamped on the header, as it does in the compare and the filter");
+  if (a4hv.judged(null, 0) !== "—" || a4hv.judged(0.0, 0) !== "—" || a4hv.judged(0.0, 2) !== "0.00" || a4hv.judged(4.25, 2) !== "4.25") fail("judged");
+  else console.log("  ok  no labels reads '—', never 0.00; a real zero still reads 0.00");
+  const a4bState = (n) => a4hv.compareState(n === 0 ? [] : Array.from({ length: n }, (_, i) => a4bRow({ value: `v${i}` })), n);
+  if (a4bState(0) !== "empty" || a4hv.compareState([a4bRow({ value: "mixed", is_group: true })], 0) !== "none-recorded" || a4bState(1) !== "single" || a4bState(2) !== "comparable") fail("compareState");
+  else if (!/second one/.test(a4hv.stateLine("single", "cli_version")) || a4hv.stateLine("comparable", "cli_version") !== "") fail("stateLine");
+  // The empty state must be true whether or not the hook is installed:
+  // it explains that only sessions started after the install carry it,
+  // rather than telling someone who has already installed it to install it.
+  else if (!/after the stamp hook was installed/.test(a4hv.stateLine("none-recorded", "cct_sha")) || !/if you have not/.test(a4hv.stateLine("none-recorded", "cct_sha"))) fail("none-recorded wording");
+  else console.log("  ok  empty, nothing-recorded, one version and a real comparison are told apart and explained");
+  const a4bp = await import(pathToFileURL(join(out, "components/HarnessPanel.js")));
+  const a4bTwo = render(a4bp.default, { data: a4bAgg([a4bRow({ value: "2.1.1" }), a4bRow({ value: "2.1.2" }), a4bRow({ kind: "mixed", value: null, is_group: true, sessions: 2, avg_interaction_quality: null, sessions_judged: 0, cost_usd: null })]) });
+  if (!/2 comparable values/.test(a4bTwo) || !/4\.25/.test(a4bTwo)) fail("two versions compared");
+  else if (!/changed mid-session/.test(a4bTwo) || !/harness=mixed/.test(a4bTwo)) fail("the mixed row is present and linked");
+  else if (/>0\.00</.test(a4bTwo.split("changed mid-session")[1] ?? "")) fail("an unjudged group must not read 0.00");
+  else console.log("  ok  two versions side by side, the mixed group named and linked, its unjudged figures blank");
+  const a4bNone = render(a4bp.default, { data: a4bAgg([a4bRow({ kind: "absent", value: null, is_group: true })], { by: "cct_sha" }) });
+  if (!/No session records CCT commit yet/.test(a4bNone) || !/after the stamp hook was installed/.test(a4bNone)) fail(`nothing recorded: ${a4bNone.slice(0, 300)}`);
+  else console.log("  ok  a dimension nothing records yet says so and names the fix, instead of an empty table");
+  const a4bOne = render(a4bp.default, { data: a4bAgg([a4bRow({ value: "2.1.1" })]) });
+  if (!/A comparison needs a second one/.test(a4bOne)) fail("single version not explained");
+  else console.log("  ok  one version explains that the figures are not a difference");
+  const a4bPartial = render(a4bp.default, { data: a4bAgg([a4bRow({ value: "2.1.1", priced_turns: 3, priceable_turns: 10 })]) });
+  if (!/\(partial\)/.test(a4bPartial) || !/3 of 10 priceable turns priced/.test(a4bPartial)) fail("partial pricing not disclosed");
+  else console.log("  ok  a priced subtotal is marked partial with its coverage, never passed off as the total");
 
   if (!process.exitCode) console.log("\nstates-check: all states asserted");
 } finally {

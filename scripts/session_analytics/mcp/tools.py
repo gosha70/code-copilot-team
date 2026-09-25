@@ -185,6 +185,7 @@ def search_sessions(
     min_cost: Optional[float] = None,
     max_cost: Optional[float] = None,
     label: Optional[str] = None,
+    harness: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Find sessions by keyword (project path / model) + optional filters.
 
@@ -210,7 +211,7 @@ def search_sessions(
     where, params = _session_filters(
         query, copilot, date_from, date_to,
         tag=tag, developer=developer, model=model, tool=tool,
-        min_cost=min_cost, max_cost=max_cost, label=label,
+        min_cost=min_cost, max_cost=max_cost, label=label, harness=harness,
     )
     if noise is not None and not include_noise:
         keep_sql, keep_params = keep_clause(noise, "copilot_session")
@@ -243,6 +244,7 @@ def count_noise_sessions(
     min_cost: Optional[float] = None,
     max_cost: Optional[float] = None,
     label: Optional[str] = None,
+    harness: Optional[str] = None,
 ) -> int:
     """How many sessions the same filters would list if noise were shown —
     the number behind the Sessions page's "Show excluded (n)". Takes every
@@ -250,7 +252,7 @@ def count_noise_sessions(
     where, params = _session_filters(
         query, copilot, date_from, date_to,
         tag=tag, developer=developer, model=model, tool=tool,
-        min_cost=min_cost, max_cost=max_cost, label=label,
+        min_cost=min_cost, max_cost=max_cost, label=label, harness=harness,
     )
     noise_sql, noise_params = noise_clause(noise, "copilot_session")
     where.append(noise_sql)
@@ -260,6 +262,10 @@ def count_noise_sessions(
         tuple(params),
     )
     return int((row or (0,))[0] or 0)
+
+
+class UnknownHarnessError(ValueError):
+    """A harness filter outside the closed dimension set (#371 A4b)."""
 
 
 class UnknownLabelError(ValueError):
@@ -279,6 +285,58 @@ _PRICED_COST_SQL = (
 )
 
 
+#: A session carries no harness stamp at all: every fact NULL. The same
+#: rule the Studio's isUnstamped() applies, written once here (#371 A4b).
+_HARNESS_NO_FACTS_SQL = " AND ".join(f"{f} IS NULL" for f in C.HARNESS_FACTS)
+#: "not a mixed session", in SQL both dialects accept. NOT `= 0`:
+#: harness_mixed is BOOLEAN, and PostgreSQL refuses `boolean = integer`
+#: ("operator does not exist"), which would have failed every sessions
+#: list on a Postgres store because the facets run on every request.
+#: `IS NOT TRUE` also covers NULL, which is what an unstamped row has.
+_HARNESS_NOT_MIXED_SQL = f"{C.HARNESS_KEY_MIXED} IS NOT TRUE"
+
+
+def harness_clause(value: str) -> tuple[str, list[Any]]:
+    """SQL for one ``harness`` filter value (#371 A4b): ``mixed``,
+    ``unstamped``, or ``<dimension>:<value>`` where the dimension is one
+    of ``C.HARNESS_DIMENSIONS``. The dimension names a COLUMN, so it is
+    matched against the closed set and never interpolated from a caller;
+    the value is always a parameter. Raises UnknownHarnessError."""
+    # MIXED FIRST, and every other group excludes it: a session whose
+    # harness changed mid-run belongs to that group and no other, even
+    # when its earliest stamp happens to carry no facts at all. Checking
+    # unstamped first let one session answer to both filters.
+    if value == C.HARNESS_GROUP_MIXED:
+        return f"{C.HARNESS_KEY_MIXED} IS TRUE", []
+    if value == C.HARNESS_GROUP_UNSTAMPED:
+        return f"({_HARNESS_NO_FACTS_SQL} AND {_HARNESS_NOT_MIXED_SQL})", []
+    dimension, sep, wanted = value.partition(":")
+    if dimension == C.HARNESS_GROUP_ABSENT:
+        # Stamped, but this one dimension was not recorded.
+        if wanted not in C.HARNESS_DIMENSIONS:
+            raise UnknownHarnessError(
+                f"cannot filter sessions by harness {value!r}; "
+                f"{C.HARNESS_GROUP_ABSENT}: takes one of: {', '.join(C.HARNESS_DIMENSIONS)}"
+            )
+        return (
+            f"({wanted} IS NULL AND NOT ({_HARNESS_NO_FACTS_SQL}) "
+            f"AND {_HARNESS_NOT_MIXED_SQL})",
+            [],
+        )
+    if not sep or dimension not in C.HARNESS_DIMENSIONS:
+        raise UnknownHarnessError(
+            f"cannot filter sessions by harness {value!r}; expected "
+            f"{C.HARNESS_GROUP_MIXED}, {C.HARNESS_GROUP_UNSTAMPED}, "
+            f"{C.HARNESS_GROUP_ABSENT}:<dimension>, or <dimension>:<value> "
+            f"with a dimension of: {', '.join(C.HARNESS_DIMENSIONS)}"
+        )
+    if not wanted:
+        raise UnknownHarnessError(f"harness {dimension!r} filter needs a value after the colon")
+    # A session whose harness changed mid-run belongs to neither version:
+    # it is reported under `mixed`, so it is excluded here too.
+    return f"({dimension} = ? AND {_HARNESS_NOT_MIXED_SQL})", [wanted]
+
+
 def _session_filters(
     query: Optional[str], copilot: Optional[str],
     date_from: Optional[str], date_to: Optional[str],
@@ -290,6 +348,7 @@ def _session_filters(
     min_cost: Optional[float] = None,
     max_cost: Optional[float] = None,
     label: Optional[str] = None,
+    harness: Optional[str] = None,
 ) -> tuple[list[str], list[Any]]:
     where: list[str] = []
     params: list[Any] = []
@@ -350,6 +409,10 @@ def _session_filters(
             f"WHERE lt.session_id = copilot_session.id AND hl.rubric_name = ? AND hl.{label} = ?)"
         )
         params += [load_rubric().name, True]
+    if harness:
+        clause, harness_params = harness_clause(harness)
+        where.append(clause)
+        params += harness_params
     return where, params
 
 
@@ -411,6 +474,23 @@ def session_facets(
             "ORDER BY tc.tool_name"
         ),
         "labels": list(C.LABEL_BOOL_NAMES),
+        # #371 A4b: every dimension the compare can group by, with the
+        # values actually present, so each panel row links to exactly its
+        # sessions. The column names come from the closed set, never a
+        # caller. Mixed and unstamped are counted, not listed as values.
+        "harness": {
+            dimension: col(
+                f"SELECT DISTINCT {dimension} FROM copilot_session WHERE {keep_sql} "
+                f"AND {dimension} IS NOT NULL "
+                # A value carried only by sessions whose harness changed
+                # mid-run is not offered: the filter reports those under
+                # `mixed`, so offering it would mean a dropdown entry that
+                # returns nothing.
+                f"AND {_HARNESS_NOT_MIXED_SQL} "
+                f"ORDER BY {dimension}"
+            )
+            for dimension in C.HARNESS_DIMENSIONS
+        },
     }
 
 

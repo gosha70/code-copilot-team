@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { api } from "@/lib/api";
 import {
   Bar,
@@ -13,6 +14,7 @@ import {
   useApi,
 } from "@/components/ui";
 import DevelopersPanel from "@/components/DevelopersPanel";
+import HarnessPanel from "@/components/HarnessPanel";
 import {
   CostByOutcomeCard,
   EmptyStore,
@@ -30,6 +32,11 @@ export default function DashboardPage() {
   // E1 (#65): fetched separately so a failure here cannot blank the
   // whole dashboard — the panel is additive, not a prerequisite.
   const devs = useApi(() => api.developers(), [], REFRESH_MS);
+  // #371 A4b: the harness compare, its own fetch for the same reason.
+  // The dimension is component state, not a URL param: the dashboard is
+  // a glance, and the sessions list is where a chosen group is explored.
+  const [harnessBy, setHarnessBy] = useState("");
+  const harness = useApi(() => api.harness(harnessBy || undefined), [harnessBy], REFRESH_MS);
   // #307: each additional card is its own fetch for the same reason —
   // a card that cannot load says so in its own space.
   const latency = useApi(() => api.latency(), [], REFRESH_MS);
@@ -218,6 +225,21 @@ export default function DashboardPage() {
           first-load failure says so instead of the panel vanishing, and
           a failed REFRESH keeps the last good data with a staleness
           warning rather than presenting it as current. */}
+      {harness.data ? (
+        <HarnessPanel
+          data={harness.data}
+          stale={harness.error}
+          onDimension={setHarnessBy}
+        />
+      ) : harness.error ? (
+        <Card title="Sessions by harness version">
+          <p className="text-sm text-slate-700">
+            The harness comparison could not be loaded.
+          </p>
+          <p className="text-xs text-slate-500 mt-2">{harness.error}</p>
+        </Card>
+      ) : null}
+
       {devs.data ? (
         <DevelopersPanel data={devs.data} stale={devs.error} />
       ) : devs.error ? (

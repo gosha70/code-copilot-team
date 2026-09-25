@@ -1008,6 +1008,19 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         finally:
             conn.close()
 
+    @app.get("/api/dashboard/harness")
+    def dashboard_harness(by: str = C.HARNESS_DIMENSIONS[0]) -> dict[str, Any]:
+        """#371 A4b: sessions grouped by one dimension of the harness they
+        ran under. `by` is a closed set; anything else is a 400, never a
+        column name from the caller."""
+        conn = db()
+        try:
+            return dashboard.harness_aggregates(conn, noise=load_config().noise, by=by)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        finally:
+            conn.close()
+
     @app.get("/api/dashboard/developers")
     def dashboard_developers() -> dict[str, Any]:
         # E1 (#65): per-developer rollup. Read-only, no ranking — see
@@ -1338,7 +1351,7 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         query: str = "", copilot: str = "", limit: int = 50, include_noise: bool = False,
         sort: str = mcp_tools.SESSION_SORT_DEFAULT, order: str = "desc",
         date_from: str = "", date_to: str = "", tag: str = "",
-        developer: str = "", model: str = "", tool: str = "",
+        developer: str = "", model: str = "", tool: str = "", harness: str = "",
         min_cost: Optional[float] = None, max_cost: Optional[float] = None,
         label: str = "",
     ) -> dict[str, Any]:
@@ -1354,6 +1367,7 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         filters = dict(
             copilot=copilot or None, date_from=date_from or None, date_to=date_to or None,
             tag=tag or None, developer=developer or None, model=model or None,
+            harness=harness or None,
             tool=tool or None, min_cost=min_cost, max_cost=max_cost, label=label or None,
         )
         conn = db()
@@ -1368,6 +1382,7 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             except (
                 mcp_tools.UnknownSortError, mcp_tools.UnknownTagError,
                 mcp_tools.UnknownLabelError, mcp_tools.InvalidDateError,
+                mcp_tools.UnknownHarnessError,
             ) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from None
             return {

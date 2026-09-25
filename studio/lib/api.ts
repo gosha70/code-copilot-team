@@ -298,11 +298,55 @@ export interface SessionsResponse {
   facets: SessionFacets;
 }
 
+/** One dimension of the harness stamp, or a named group (#371 A4b). */
+export interface HarnessRow {
+  /** "value" for a real value of the chosen dimension, else the named
+   *  group: mixed | absent | unstamped. Read this, never the string in
+   *  `value`, which may itself spell a group's name. */
+  kind: string;
+  /** The dimension's value; null for a named group. */
+  value: string | null;
+  /** True for `mixed`, `absent` and `unstamped` — not a version. */
+  is_group: boolean;
+  sessions: number;
+  turns: number;
+  median_turns: number | null;
+  median_tool_calls: number | null;
+  errors: number;
+  errors_per_100_turns: number | null;
+  /** Null when no session in the row has a priced turn — never 0. */
+  cost_usd: number | null;
+  priced_turns: number;
+  priceable_turns: number;
+  first_seen: string | null;
+  last_seen: string | null;
+  /** Judge figures: null (not zero) when the row carries no labels. */
+  avg_interaction_quality: number | null;
+  rework_rate: number | null;
+  correction_rate: number | null;
+  sessions_judged: number;
+  labeled_turns: number;
+}
+
+export interface HarnessAggregates {
+  by: string;
+  dimensions: string[];
+  rows: HarnessRow[];
+  /** One comparable value or none: not a comparison, and it says so. */
+  single_group: boolean;
+  comparable_values: number;
+  basis: string;
+}
+
 export interface SessionFacets {
   developers: string[];
   models: string[];
   tools: string[];
   labels: string[];
+  /** Per harness dimension, the values present (#371 A4b). A value
+   *  carried only by mixed sessions is left out, because filtering by it
+   *  would return nothing. */
+  harness: Record<string, string[]>;
 }
 
 /** The sessions list's filters (#371 A2). Every field is optional; an
@@ -322,6 +366,9 @@ export interface SessionFilters {
   max_cost?: number | null;
   /** One of facets.labels: the packaged rubric marked it true on at least one turn. */
   label?: string;
+  /** #371 A4b, a closed value: `mixed`, `unstamped`, `absent:<dimension>`
+   *  or `<dimension>:<value>`. */
+  harness?: string;
 }
 
 export interface SearchHit {
@@ -1729,6 +1776,9 @@ export const api = {
    *  archive's coverage. */
   search: (q: string, limit = 50) =>
     get<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}&limit=${limit}`),
+  /** #371 A4b: sessions grouped by one dimension of the harness stamp. */
+  harness: (by?: string) =>
+    get<HarnessAggregates>(`/api/dashboard/harness${by ? `?by=${encodeURIComponent(by)}` : ""}`),
   session: (id: number) => get<SessionDetail>(`/api/sessions/${id}`),
   /** Set or clear a hand-set tag; returns the session's tags after. */
   setSessionTag: async (id: number, tag: "favorite" | "todo", on: boolean) => {
