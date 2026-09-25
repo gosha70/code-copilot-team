@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import constants as C
+from .relational.db import now_iso
 
 _log = logging.getLogger(__name__)
 
@@ -59,7 +60,10 @@ _VERIFICATION_LIB = _PACKAGE_REPO / "scripts" / "lib" / "verification-common.sh"
 #: Defaulting to `unknown` makes the same drift show up as missing
 #: coverage instead, which is visible and harmless.
 _NEGATIVE_CONFORMANCE_DETAIL = "fail"
-_EXIT_DETAIL_RE = re.compile(r"^exit\s+(-?\d+)$")
+#: The driver writes `exit $rc` where $rc is a shell exit status, so a
+#: leading sign is not a shape it produces; anything else falls through
+#: to `unknown` rather than being read as a failure.
+_EXIT_DETAIL_RE = re.compile(r"^exit\s+(\d+)$")
 
 
 @dataclass(frozen=True)
@@ -530,7 +534,7 @@ def _store_run(db, run: LedgerRun, fingerprint: str, project: Path, stats: Inges
         )
         return False
 
-    now = _now_iso()
+    now = now_iso()
     contract_fp = contract_fingerprint(run.contract)
     if existing is None:
         run_ref = db.insert_returning_id(
@@ -608,6 +612,21 @@ def _store_run(db, run: LedgerRun, fingerprint: str, project: Path, stats: Inges
 
 
 def _store_results(db, exp_ref: int, rows: list[ResultRow], now: str) -> int:
+    """Upsert this expectation's verifier outcomes, and REMOVE any row
+    beyond the current count.
+
+    Results are keyed by position, so a later pass that sees fewer
+    verifiers would otherwise leave the surplus behind — and `roll_up`
+    reads every stored row, so one stale `not_met` turns a requirement
+    that is now met into a failure. Deleting the tail keeps the stored
+    outcomes equal to the ledger's, which is the only thing they are
+    allowed to be.
+    """
+    db.execute(
+        f"DELETE FROM {C.TBL_EXPECTATION_RESULT} "
+        "WHERE expectation_ref = ? AND verifier_ordinal >= ?",
+        (exp_ref, len(rows)),
+    )
     stored = 0
     for ordinal, row in enumerate(rows):
         present = db.query_one(
@@ -679,10 +698,7 @@ def _store_sessions(db, run_ref: int, run: LedgerRun, now: str, stats: IngestSta
     return recorded
 
 
-def _now_iso() -> str:
-    from .relational.db import now_iso
 
-    return now_iso()
 
 
 # ── reading ────────────────────────────────────────────────────────────

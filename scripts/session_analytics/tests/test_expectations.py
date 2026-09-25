@@ -376,18 +376,37 @@ class TestAgainstTheRealLedgers(RegistryResetTestCase):
         try:
             stats = E.ingest_runs(db, REAL_LEDGER_ROOT, project_dir=REAL_REPO)
             self.assertGreater(stats.runs_seen, 0)
-            self.assertEqual(stats.runs_skipped, 0, [s.reason for s in stats.skipped])
-            # Every admitted statement recovers from its base commit and
-            # hashes to the sha frozen at admission.
-            self.assertEqual(stats.statements_unavailable, 0)
-            self.assertEqual(stats.statements_recovered, stats.expectations_stored)
-            # Only a run that reached the landing gate has results.
-            gated = db.query_one(
-                f"SELECT COUNT(*) FROM {C.TBL_EXPECTATION_RUN} WHERE evaluated_at IS NOT NULL")[0]
-            with_results = db.query_one(
-                f"SELECT COUNT(DISTINCT e.run_ref) FROM {C.TBL_EXPECTATION} e "
-                f"JOIN {C.TBL_EXPECTATION_RESULT} r ON r.expectation_ref = e.id")[0]
-            self.assertEqual(gated, with_results)
+            # INVARIANTS, not properties of whichever ledgers happen to
+            # be on this machine. Asserting "0 unavailable" would fail
+            # for an environmental reason — an archived run whose base
+            # commit has since been garbage-collected is legitimate.
+            #
+            # A statement is present exactly when it was hash-verified.
+            for statement, source in db.query(
+                f"SELECT statement, statement_source FROM {C.TBL_EXPECTATION}"
+            ):
+                self.assertIn(source, C.STATEMENT_SOURCES)
+                self.assertEqual(
+                    statement is not None, source == C.STATEMENT_SOURCE_RECOVERED,
+                    "text and provenance must agree",
+                )
+            # Every stored run carries a fingerprint, and a run with
+            # results is exactly a run that reached the landing gate.
+            for fingerprint, evaluated_at, run_ref in db.query(
+                f"SELECT run_fingerprint, evaluated_at, id FROM {C.TBL_EXPECTATION_RUN}"
+            ):
+                self.assertTrue(fingerprint)
+                has_results = db.query_one(
+                    f"SELECT COUNT(*) FROM {C.TBL_EXPECTATION} e "
+                    f"JOIN {C.TBL_EXPECTATION_RESULT} r ON r.expectation_ref = e.id "
+                    "WHERE e.run_ref = ?", (run_ref,))[0]
+                self.assertEqual(
+                    bool(has_results), evaluated_at is not None,
+                    "verifier_gate is journalled only after an all-green gate",
+                )
+            # And a skip, if any, always carries its reason.
+            for skip in stats.skipped:
+                self.assertTrue(skip.reason, skip.path)
         finally:
             db.close()
 
@@ -564,6 +583,40 @@ class TestUncappedInternalPath(LedgerFixture):
         self.assertEqual(row["runs_with_expectations"], runs,
                          "every stored run must reach the aggregate")
         self.assertEqual(row["expectations_evaluated"], runs * 2)
+
+
+class TestResultFreshness(LedgerFixture):
+    """Results are keyed by position, so a pass that sees fewer
+    verifiers must not leave the surplus behind: `roll_up` reads every
+    stored row, and one stale `not_met` turns a met requirement into a
+    failure."""
+
+    def _write_results(self, ledger, verifier_count):
+        (ledger / "verification-results.json").write_text(json.dumps({
+            "schema_version": 1, "green": True,
+            "frs": {"FR-1": {"green": True, "verifiers": [
+                {"fr": "FR-1", "kind": "deterministic", "verifier": f"v{i}",
+                 "green": i == 0, "detail": "exit 0" if i == 0 else "exit 1"}
+                for i in range(verifier_count)]}},
+        }))
+
+    def test_a_later_pass_with_fewer_verifiers_removes_the_surplus(self) -> None:
+        ledger = self.write_run("auto-build", "f", feature="f", attempt="a", frs=("FR-1",))
+        self._write_results(ledger, 3)
+        E.ingest_runs(self.db, self.root, project_dir=REPO)
+        self.assertEqual(self.db.query_one(
+            f"SELECT COUNT(*) FROM {C.TBL_EXPECTATION_RESULT}")[0], 3)
+
+        self._write_results(ledger, 1)
+        E.ingest_runs(self.db, self.root, project_dir=REPO)
+        states = [r[0] for r in self.db.query(
+            f"SELECT state FROM {C.TBL_EXPECTATION_RESULT} ORDER BY verifier_ordinal")]
+        self.assertEqual(states, [C.EXPECTATION_MET], "the surplus rows must be gone")
+        self.assertEqual(E.roll_up(states), C.EXPECTATION_MET,
+                         "a stale not_met would report a met requirement as failed")
+        self.assertEqual(self.db.query_one(
+            f"SELECT verifier_count FROM {C.TBL_EXPECTATION}")[0], len(states),
+            "verifier_count must agree with the rows that exist")
 
 
 class TestStatementDurability(LedgerFixture):

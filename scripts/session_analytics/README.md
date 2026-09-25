@@ -596,9 +596,10 @@ place through the create-if-absent DDL, so an existing store keeps
 working and needs no recreate — which matters, because a recreate
 permanently drops any session whose transcript has since been pruned.
 
-**Coverage is small and accrues forward.** Only 3 of 85 spec bundles
-carry a `verification.yaml`, and only a run admitted under the
-unattended profile has a contract to freeze. Expectations exist for
+**Coverage is small and accrues forward.** As measured on 2026-09-25,
+only 3 of 85 spec bundles carried a `verification.yaml`, and only a run
+admitted under the unattended profile has a contract to freeze — those
+counts move as the repository does. Expectations exist for
 those runs and no others; manual sessions have no run identity and are
 out of scope.
 
