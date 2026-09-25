@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from session_analytics import constants as C
 from session_analytics.adapters import claude_code
@@ -140,10 +141,15 @@ class TestGroupsPartitionTheStore(RegistryResetTestCase):
                 self.assertIsNone(row["value"], row["kind"])
 
 
-class TestPostgresDialect(unittest.TestCase):
+class TestGeneratedSqlIsDialectNeutral(unittest.TestCase):
     """harness_mixed is BOOLEAN: `= 0` is valid SQLite and an error on
-    PostgreSQL, and the facets run on EVERY sessions request (A4b review
-    P1). The generated SQL must not compare it to an integer."""
+    PostgreSQL ("operator does not exist"), and the facets run on EVERY
+    sessions request (A4b review P1).
+
+    This reads the SQL the code generates; it does NOT run PostgreSQL,
+    and is named for what it actually does. A real Postgres run is the
+    integration suite's job.
+    """
 
     def test_no_boolean_to_integer_comparison_is_generated(self) -> None:
         import re
@@ -186,6 +192,30 @@ class TestPostgresDialect(unittest.TestCase):
             self.assertIn("IS NOT TRUE", q)
             self.assertNotIn(f"{C.HARNESS_KEY_MIXED} = 0", q)
         db.close()
+
+
+class TestTheStudioAgreesOnTheGroupNames(unittest.TestCase):
+    """The group names cross the Python/TypeScript boundary: the server
+    decides a row's kind, the Studio turns it back into a filter value.
+    They are declared in both places, so drift would silently break the
+    round trip with nothing failing (A4b review). This is the gate."""
+
+    def test_harness_view_declares_the_same_groups_as_constants(self) -> None:
+        import re
+
+        source = (
+            Path(__file__).resolve().parents[3] / "studio" / "lib" / "harnessView.ts"
+        ).read_text(encoding="utf-8")
+        declared = dict(
+            re.findall(r'export const GROUP_([A-Z]+) = "([a-z]+)";', source)
+        )
+        self.assertEqual(
+            {v for v in declared.values()},
+            set(C.HARNESS_GROUPS),
+            "studio/lib/harnessView.ts GROUP_* must match constants.HARNESS_GROUPS",
+        )
+        for name, value in declared.items():
+            self.assertEqual(value, name.lower(), f"GROUP_{name} should read {name.lower()!r}")
 
 
 class HarnessStoreBase(RegistryResetTestCase):

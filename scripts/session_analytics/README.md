@@ -526,7 +526,9 @@ median tool calls, errors per 100 turns, priced cost with its coverage,
 and from the packaged rubric the mean interaction quality, rework rate
 and correction rate. Also `GET /api/dashboard/harness?by=<dimension>`
 (an unknown dimension is a 400, never a column name from the caller) and
-the MCP tool `compare_harness_versions`.
+the MCP tool `compare_harness_versions`. The matching filter on the
+sessions list takes one of four forms: `harness=<dimension>:<value>`,
+`harness=mixed`, `harness=unstamped` or `harness=absent:<dimension>`.
 
 Four kinds of row, and none is dropped or folded into another:
 
