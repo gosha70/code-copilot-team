@@ -326,12 +326,29 @@ export interface HarnessRow {
   correction_rate: number | null;
   sessions_judged: number;
   labeled_turns: number;
+  /** Expectation outcomes attributed at RUN grain (#371 A5): a run
+   *  counts here only when every session it discovered is linked and
+   *  all of them fall in this row. `expectation_rate` is exactly
+   *  met/evaluated and is null — never 0 — when nothing was evaluated;
+   *  unknown and unevaluated are in neither side of it. */
+  expectations_met: number;
+  expectations_evaluated: number;
+  expectations_unknown: number;
+  expectations_unevaluated: number;
+  runs_with_expectations: number;
+  /** Distinct resolved sessions, not association rows. */
+  sessions_with_expectations: number;
+  expectation_rate: number | null;
 }
 
 export interface HarnessAggregates {
   by: string;
   dimensions: string[];
   rows: HarnessRow[];
+  /** Runs that belong to NO row, reported at the top level because an
+   *  excluded run cannot be shown inside one (#371 A5). */
+  runs_spanning_groups: number;
+  runs_with_unmatched_sessions: number;
   /** One comparable value or none: not a comparison, and it says so. */
   single_group: boolean;
   comparable_values: number;

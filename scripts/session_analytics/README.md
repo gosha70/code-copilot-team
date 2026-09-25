@@ -517,6 +517,95 @@ is refused at startup with the same remedy as schema 8 (recreate, then
 `ingest --full`). Only sessions that ran after the hook was installed
 will carry a stamp after the rebuild.
 
+## Expectations (#371 A5)
+
+What an unattended auto-build run was **required** to achieve, and how
+it came out — so success is declared rather than inferred.
+
+The declaration already exists: a run is admitted only after
+`validate-spec.sh --unattended` proves every `FR-N` in
+`specs/<feature>/spec.md` maps to an executable verifier, and the driver
+freezes each requirement's `statement_sha` into the ledger. A5 stores
+that pair so it **outlives the ledger directory**, which is archived and
+pruned — the same reason `auto_build_verdict` exists.
+
+```bash
+# Read every ledger under a .cct root (live and archive) into the store.
+./scripts/session-analytics expectations
+./scripts/session-analytics expectations --ledger-root /path/to/.cct --project-dir /path/to/repo
+```
+
+A separate pass, not part of ingest: a ledger is completed at the
+landing gate, long after the transcripts it refers to were ingested.
+It is idempotent, and it writes **nothing** for a run whose identity it
+cannot establish — no `attempt_id`, no frozen contract, or no `init`
+event — reporting each skip with its reason.
+
+**The requirement text is recovered, or recorded as unavailable.** The
+frozen contract carries `statement_sha` but no text. The pass reads
+`spec.md` at the run's `branch_base_ref`, re-extracts with the same
+`vc_extract_frs` admission used, and accepts a statement **only when
+its recomputed hash equals the frozen one**. Otherwise `statement` is
+NULL with `statement_source = unavailable` — today's working-tree text
+is never substituted, because presenting a later edit as what was
+admitted is exactly the history-rewriting admission exists to prevent.
+
+**Three states, and a fourth that is the absence of rows:**
+
+| State | Meaning |
+|---|---|
+| `met` | the verifier reported green, and it was not waived |
+| `not_met` | a shape known to mean a real negative: deterministic `exit <nonzero>`, or a conformance/visual `fail` |
+| `unknown` | the outcome establishes neither answer — **waived** (the driver writes those `green: true`, and waived means *not verified*), a bound that was hit, a run that could not be bounded, a visual `unreached`, a malformed detail, or **any wording this code has not seen** |
+| *unevaluated* | no result row at all: **no recoverable consolidated result**. Not the same as "no verifier ran" — an unwaived visual `skip` aborts the gate before anything is written |
+
+The fallback direction is deliberate and is the opposite of the obvious
+one. The exit code is never stored, so the negative test reads prose; if
+unrecognised wording became `not_met`, a reword in `auto-build-loop.sh`
+would silently report requirements as **failed that were never judged**.
+Falling back to `unknown` turns the same drift into visible missing
+coverage. The driver's raw `green` and `detail` are stored beside the
+normalized state so the derivation stays auditable.
+
+**Identity.** A run is `(feature_id, attempt_id)`. `attempt_id` is the
+driver's `$$-$RANDOM$RANDOM`, so two runs of one feature can share it —
+and with an unchanged spec they share a contract digest too. A
+`run_fingerprint` over the first `init` event, the base commit and the
+contract digest tells them apart; a key match with a different
+fingerprint is **reported and skipped**, never upserted over.
+
+**Sessions associate separately**, in `expectation_session`, keyed by
+the identity the ledger recorded (`run_ref, copilot, session_id`) with a
+**nullable** `session_ref`. A session the store does not hold yet is
+recorded with NULL and resolved by a later pass, so a transcript
+ingested after the first scan is not lost — and coverage can tell
+"recorded but not ingested" from "no session recorded".
+
+**Read surfaces — one durable, one enrichment:**
+
+- `GET /api/expectations?feature_id=&attempt_id=&limit=` and the MCP
+  tool `list_expectations` read the **store alone**, so they keep
+  answering after the ledger is pruned.
+- The auto-build run detail (`GET /api/runs/{key}`) is **enriched**
+  with the stored requirement text and states. It is *not* a
+  post-pruning fallback: that route finds a run by scanning ledger
+  directories, so it is unreachable once the directory is gone.
+
+**Schema 11 adds four tables and refuses nothing.** All of them land in
+place through the create-if-absent DDL, so an existing store keeps
+working and needs no recreate — which matters, because a recreate
+permanently drops any session whose transcript has since been pruned.
+
+**Coverage is small and accrues forward.** Only 3 of 85 spec bundles
+carry a `verification.yaml`, and only a run admitted under the
+unattended profile has a contract to freeze. Expectations exist for
+those runs and no others; manual sessions have no run identity and are
+out of scope.
+
+**Not delivered here:** a judge that *scores* against an expectation.
+This slice records what was required and what happened; expectation-aware
+judge scoring is an explicit successor.
+
 ### Comparing harness versions (#371 A4b)
 
 The Dashboard's **Sessions by harness version** panel groups sessions by
@@ -555,6 +644,17 @@ session is one reading of how the work went.
 A row reports its group *kind* separately from the dimension's value, so
 a `cli_version` that literally reads "mixed" stays an ordinary value row
 with its own link rather than merging into the named group.
+
+Since #371 A5 each row also carries **Expectations**, attributed at
+**run grain**: a run counts in a row only when every session it
+discovered is linked *and* all of them fall in that row. The cell shows
+the success rate (`met/evaluated`, or `—` when nothing was evaluated,
+and `100%` only when every evaluated expectation was met) over the
+evaluation coverage (`evaluated` out of every expectation those runs
+carried) with what was not established beside it. Runs that belong to no
+row — one spanning two harness versions, or one whose sessions could not
+all be placed — are reported in a note **below** the table, never inside
+a row.
 
 Each row links to exactly its sessions through one closed filter on the
 sessions list: `harness=<dimension>:<value>`, `harness=mixed`,
