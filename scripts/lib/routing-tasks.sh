@@ -427,7 +427,9 @@ rk_validate() {
 
     ids="$(rk_task_ids)"
 
-    # verification.yaml binding: FR -> has at least one `test` verifier
+    # verification.yaml binding: FR -> has at least one verifier of kind
+    # `deterministic` (the kind that carries an executable `test:`; the
+    # kind name is `deterministic`, the field name is `test`)
     local fr_test_index=""
     if [[ "$verif" != "-" && -r "$verif" ]]; then
         # source lazily to keep this lib dependency-free for callers
@@ -436,7 +438,7 @@ rk_validate() {
         . "$(dirname "${BASH_SOURCE[0]}")/verification-common.sh"
         fr_test_index="$(vc_parse_artifact "$verif" | awk -F'\t' '
             $1 == "FR"  { known[$2] = 1 }
-            $1 == "VER" && $3 == "test" { hastest[$2] = 1 }
+            $1 == "VER" && $3 == "deterministic" { hastest[$2] = 1 }
             END { for (f in known) printf "%s %d\n", f, (f in hastest) ? 1 : 0 }')"
     fi
 

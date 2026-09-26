@@ -371,7 +371,7 @@ class SupervisorRunner:
                 "FR-1:\n"
                 f"  statement_sha: \"sha256:{prompt_sha}\"\n"
                 "  verifiers:\n"
-                "    - kind: test\n"
+                "    - kind: deterministic\n"
                 f"      test: \"{bridge}\"\n",
                 encoding="utf-8",
             )

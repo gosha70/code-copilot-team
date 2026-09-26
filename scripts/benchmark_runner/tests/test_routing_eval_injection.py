@@ -1,14 +1,19 @@
 # tests/test_routing_eval_injection.py — routing-eval (E1 of #109) T2.
 #
-# Two load-bearing suites here. TestClassificationParity shells out to
-# the REAL, unmodified rr_classify (scripts/lib/routing-result.sh) and
-# asserts an injected transcript classifies exactly like the equivalent
-# real provider response — the injected usage-limit shape is the same
-# envelope the recovery suite's own capture fixtures use. And
-# TestNoProductionRoutingFileTouched is the diff guard plan.md decision
-# 2 promises: passing suites alone does not prove runtime behaviour was
-# untouched; this test fails the moment the increment's diff reaches a
-# production routing file.
+# The load-bearing suite here is TestClassificationParity: it shells out
+# to the REAL, unmodified rr_classify (scripts/lib/routing-result.sh)
+# and asserts an injected transcript classifies exactly like the
+# equivalent real provider response — the injected usage-limit shape is
+# the same envelope the recovery suite's own capture fixtures use.
+#
+# What keeps the eval out of production routing is the seam contract,
+# asserted below: the scenario drives ONLY CCT_SUPERVISOR_HARNESS_CMD
+# and CCT_ROUTING_PROBE_CMD, and any other seam name fails closed. A
+# further class here, TestNoProductionRoutingFileTouched, once asserted
+# plan.md decision 2 by diffing the caller's whole branch; it was
+# retired on 2026-09-25 (see specs/routing-eval/plan.md) because that
+# constraint held at E1's merge and afterwards only blocked unrelated
+# maintenance of the routing libraries.
 
 from __future__ import annotations
 
@@ -612,54 +617,6 @@ class TestClassificationParity(unittest.TestCase):
             ["grep", "-qiE", pattern], input=text, text=True
         )
         self.assertEqual(proc.returncode, 0)
-
-
-class TestNoProductionRoutingFileTouched(unittest.TestCase):
-    """plan.md decision 2's diff guard, as an executable test."""
-
-    _FORBIDDEN = (
-        "scripts/routing-cli.sh",
-        "scripts/cooldown-supervisor.sh",
-    )
-    _FORBIDDEN_PREFIX = "scripts/lib/routing-"
-
-    def _changed_files(self) -> list[str] | None:
-        try:
-            base = subprocess.run(
-                ["git", "merge-base", "origin/master", "HEAD"],
-                capture_output=True, text=True, cwd=REPO_ROOT,
-            )
-            if base.returncode != 0:
-                return None
-            diff = subprocess.run(
-                ["git", "diff", "--name-only", base.stdout.strip(), "HEAD"],
-                capture_output=True, text=True, cwd=REPO_ROOT,
-            )
-            tree = subprocess.run(
-                ["git", "status", "--porcelain"],
-                capture_output=True, text=True, cwd=REPO_ROOT,
-            )
-            if diff.returncode != 0 or tree.returncode != 0:
-                return None
-        except OSError:
-            return None
-        files = [f for f in diff.stdout.splitlines() if f]
-        files += [line[3:] for line in tree.stdout.splitlines() if line]
-        return files
-
-    def test_increment_diff_reaches_no_production_routing_file(self) -> None:
-        changed = self._changed_files()
-        if changed is None:
-            self.skipTest("git history unavailable — guard runs where it exists")
-        offenders = [
-            f for f in changed
-            if f in self._FORBIDDEN or f.startswith(self._FORBIDDEN_PREFIX)
-        ]
-        self.assertEqual(
-            offenders, [],
-            "E1 must not modify production routing files (plan.md decision 2); "
-            f"diff reaches: {offenders}",
-        )
 
 
 if __name__ == "__main__":  # pragma: no cover

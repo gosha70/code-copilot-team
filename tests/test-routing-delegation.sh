@@ -357,17 +357,17 @@ status: finalized
 FR-7:
   statement_sha: "sha256:aaaa"
   verifiers:
-    - kind: test
+    - kind: deterministic
       test: "bash checks/v1.sh"
 FR-8:
   statement_sha: "sha256:bbbb"
   verifiers:
-    - kind: test
+    - kind: deterministic
       test: "grep -q MAGIC2 src/target.py"
 FR-9:
   statement_sha: "sha256:cccc"
   verifiers:
-    - kind: test
+    - kind: deterministic
       test: "grep -q MAGIC3 src/target.py"
 VEOF
     cat > "$root/wr/specs/dfeat/routing-tasks.yaml" <<'TEOF'
