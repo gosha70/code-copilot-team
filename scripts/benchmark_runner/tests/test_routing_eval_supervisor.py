@@ -597,6 +597,12 @@ class TestFullArcThroughTheRealSupervisor(unittest.TestCase):
         verification_yaml = (del_wt / "specs" / "hybrid-bounded-fix-trial0"
                              / "verification.yaml").read_text(encoding="utf-8")
         self.assertIn("bash checks/adapter-verify.sh", verification_yaml)
+        # The generated artifact must declare the SCHEMA's kind for an
+        # executable verifier. Production routing selects commands by
+        # kind == "deterministic" (routing-tasks.sh binding index,
+        # routing-packet.sh fr_refs), so any other kind name here makes
+        # the packet build refuse the generated task metadata outright.
+        self.assertIn("- kind: deterministic", verification_yaml)
         bridge_script = (del_wt / "checks" / "adapter-verify.sh").read_text(
             encoding="utf-8"
         )

@@ -50,7 +50,7 @@ status: finalized
 FR-7:
   statement_sha: "sha256:aaaa"
   verifiers:
-    - kind: test
+    - kind: deterministic
       test: "pytest tests/test_scorer.py"
 FR-8:
   statement_sha: "sha256:bbbb"

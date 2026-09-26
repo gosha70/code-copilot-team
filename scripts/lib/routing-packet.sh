@@ -290,7 +290,10 @@ EOF_DEPS
         [[ -z "$ref" ]] && continue
         local sha tests_json
         sha=$(printf '%s\n' "$verif_tsv" | awk -F'\t' -v f="$ref" '$1 == "SHA" && $2 == f { print $3; exit }')
-        tests_json=$(printf '%s\n' "$verif_tsv" | awk -F'\t' -v f="$ref" '$1 == "VER" && $2 == f && $3 == "test" { print $4 }' | jq -R . | jq -s .)
+        # kind `deterministic` ONLY: that is the one kind whose target is
+        # an executable command (runtime_conformance/visual carry a judged
+        # criterion, which must never enter a packet as a command to run).
+        tests_json=$(printf '%s\n' "$verif_tsv" | awk -F'\t' -v f="$ref" '$1 == "VER" && $2 == f && $3 == "deterministic" { print $4 }' | jq -R . | jq -s .)
         fr_json=$(jq -n --argjson acc "$fr_json" --arg id "$ref" --arg sha "$sha" --argjson t "$tests_json" \
             '$acc + [{id: $id, statement_sha: $sha, tests: $t}]')
     done <<EOF_REFS

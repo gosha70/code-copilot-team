@@ -484,7 +484,7 @@ the runner's existing package layout in T1 before any code is written.
 - **Injection seam**: the scenario drives only
   `CCT_SUPERVISOR_HARNESS_CMD` and `CCT_ROUTING_PROBE_CMD`; a guard
   test asserts the increment's diff touches no production routing
-  file (decision 2).
+  file (decision 2). **Retired 2026-09-25** — see the note below.
 - **Redaction**: a run seeded with a known credential value, an
   authorization header, and a sensitive absolute path emits artifacts
   containing none of them; a venv, a `__pycache__`, and a generated
@@ -499,3 +499,41 @@ the runner's existing package layout in T1 before any code is written.
   failover, delegation, config) pass unmodified *and* the diff-guard
   above holds. Passing suites alone does not prove runtime behaviour
   was untouched — the guard is what proves decision 10.
+
+## Note — the decision-2 diff guard, retired 2026-09-25
+
+`TestNoProductionRoutingFileTouched`
+(`scripts/benchmark_runner/tests/test_routing_eval_injection.py`) was
+removed. It was a **merge-time constraint on E1**, not a durable
+repository invariant, and it held when E1 merged: E1 shipped without
+touching a single production routing file, which is what decisions 2
+and 10 promised.
+
+What the test actually inspected was the caller's entire branch diff
+against `origin/master`, plus the working tree. Once E1 was on master
+that subject no longer existed, so the guard simply forbade any later
+branch from editing `scripts/lib/routing-*`, `scripts/routing-cli.sh`
+or `scripts/cooldown-supervisor.sh` whenever that branch also touched
+`scripts/benchmark_runner/**` (the path filter that runs
+`benchmark-smoke`). It fired on exactly such a change: the fix that
+corrected both libraries' verifier-kind match from the non-schema
+`"test"` to the schema's `deterministic`, which had to move the
+routing-eval bridge generator in the same commit. Narrowing the guard
+would have kept the same branch-context-dependent design without
+protecting any runtime property.
+
+The durable safeguards are unchanged and remain asserted in code:
+
+- the scenario drives only `CCT_SUPERVISOR_HARNESS_CMD` and
+  `CCT_ROUTING_PROBE_CMD`;
+- any other seam name fails closed
+  (`test_unknown_seam_is_refused_by_name`);
+- the real, unmodified `rr_classify` and `rb_probe` do the real work on
+  injected transcripts (`TestClassificationParity`, `TestRealProbeContract`);
+- the supervisor integration test drives the generated packet through
+  production routing end to end and now asserts the generated
+  `verification.yaml` declares `kind: deterministic`
+  (`TestFullArcThroughTheRealSupervisor`).
+
+The origin and origin-alignment records for this feature are historical
+and were left unchanged.

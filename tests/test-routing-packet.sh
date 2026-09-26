@@ -45,14 +45,14 @@ status: finalized
 FR-7:
   statement_sha: "sha256:aaaa"
   verifiers:
-    - kind: test
+    - kind: deterministic
       test: "pytest  -q tests/test_scorer.py"
-    - kind: test
+    - kind: deterministic
       test: "ruff check src/scorer.py"
 FR-8:
   statement_sha: "sha256:bbbb"
   verifiers:
-    - kind: test
+    - kind: deterministic
       test: "make check"
 EOF
 cat > specs/featx/routing-tasks.yaml <<'EOF'
@@ -289,7 +289,7 @@ status: finalized
 FR-1:
   statement_sha: "sha256:gggg"
   verifiers:
-    - kind: test
+    - kind: deterministic
       test: "$1"
 GEOF
     cat > "$ROOT/specs/featg/routing-tasks.yaml" <<'GEOF'
@@ -392,6 +392,49 @@ assert_eq "derivation: direct path form protects the path" \
     "./verify.sh" "$(rp rp_verifier_script './verify.sh --strict')"
 assert_eq "derivation: bare tool protects nothing (checked targets stay workable)" \
     "" "$(rp rp_verifier_script 'grep -q MAGIC src/g.py')"
+
+echo ""
+echo "== T2.8: only kind 'deterministic' becomes a packet command =="
+
+# The schema's three kinds (shared/schemas/verification.schema.json):
+# `deterministic` carries an executable `test:`, while
+# runtime_conformance and visual carry a judged `criterion:`. A packet's
+# tests[] is EXECUTED by the driver, so it must carry the first kind and
+# only the first kind — matching any other kind name would either strip
+# every real verifier (a packet verified without running anything) or
+# hand the executor a criterion sentence to run as a command.
+mkdir -p "$ROOT/specs/featk"
+cat > "$ROOT/specs/featk/verification.yaml" <<'KEOF'
+status: finalized
+FR-1:
+  statement_sha: "sha256:kkkk"
+  verifiers:
+    - kind: deterministic
+      test: "bash checks/k1.sh"
+    - kind: runtime_conformance
+      criterion: "the endpoint responds 200 under load"
+    - kind: visual
+      criterion: "the panel matches DESIGN.md"
+KEOF
+cat > "$ROOT/specs/featk/routing-tasks.yaml" <<'KEOF'
+schema_version: 1
+tasks:
+  ktask:
+    route_class: tier2_preferred
+    outcome: mixed-kind probe
+    reorderable: true
+    allowed_files:
+      - src/k.py
+    fr_refs:
+      - FR-1
+KEOF
+KPKT=$(rp rp_build featk ktask "$ROOT/specs" "$ROOT" -)
+assert_eq "the schema's deterministic kind IS carried (packets are not empty for real artifacts)" \
+    "bash checks/k1.sh" "$(jq -r '.fr_refs[0].tests[0] // "MISSING"' "$KPKT" 2>/dev/null)"
+assert_eq "exactly one command for an FR with one deterministic + two judged verifiers" \
+    "1" "$(jq -r '.fr_refs[0].tests | length' "$KPKT" 2>/dev/null)"
+assert_eq "no judged criterion anywhere in the packet (a criterion is never a command)" \
+    "no" "$(grep -q "responds 200 under load\|matches DESIGN.md" "$KPKT" && echo yes || echo no)"
 
 echo ""
 echo "== T2.6: the closed packet-reason enum =="
