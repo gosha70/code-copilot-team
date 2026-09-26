@@ -366,6 +366,12 @@ class SupervisorRunner:
             )
             bridge_script.chmod(0o755)
             bridge = "bash checks/adapter-verify.sh"
+            # `deterministic` is a member of the closed verifier-kind
+            # enum in shared/schemas/verification.schema.json, and the
+            # one kind whose target is an executable command. Keep this
+            # string in step with that enum: production routing selects
+            # commands by it, so a kind outside the vocabulary makes the
+            # packet build refuse this generated artifact.
             (spec_dir / "verification.yaml").write_text(
                 "status: finalized\n"
                 "FR-1:\n"
