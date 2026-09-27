@@ -1752,8 +1752,13 @@ def thread_view(db, session_ref: int) -> dict:
     known = len(known_keys)
     assessed = len(assessed_keys)
     #: `complete`   — every known source was assessed and readable
-    #: `unassessed` — a known source has no member row: detection never
-    #:                ran for it (a pre-A6 session awaiting a backfill)
+    #: `unassessed` — a known source has no member row, so NO COMPLETED
+    #:                ASSESSMENT IS STORED. Usually a pre-A6 session
+    #:                awaiting a backfill, but the same durable state
+    #:                results when a pass began and was rolled back
+    #:                before it committed. The distinction A5 drew
+    #:                applies: the claim is about what is recoverable
+    #:                from the store, not about what was attempted.
     #: `incomplete` — assessed, but a source could not be read
     if known and assessed >= known and unavailable == 0:
         assessment = "complete"

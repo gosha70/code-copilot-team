@@ -92,10 +92,10 @@ def build_server(dsn: str, kuzu_path: str = ""):
         Read three fields before concluding anything from an empty
         answer. `lineage_support` says whether this source can express
         lineage at all — an `aider` session cannot, so a blank is not a
-        finding. `assessment` says whether the known sources were
-        actually looked at: `unassessed` means detection never ran (a
-        pre-A6 session awaiting `threads --backfill`), `incomplete`
-        means a source could not be read. `no_ancestor_found` is true
+        finding. `assessment` says what the store can show for the known
+        sources: `unassessed` means no completed assessment is stored
+        (usually a pre-A6 session awaiting `threads --backfill`),
+        `incomplete` means a source could not be read. `no_ancestor_found` is true
         ONLY when native lineage was fully assessed and readable and
         nothing was found.
 

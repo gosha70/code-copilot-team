@@ -1318,7 +1318,7 @@ try {
   });
   const A6_STATES = [
     ["unsupported", a6view({ copilot: "aider", lineage_support: "unsupported" }), /no per-turn identifier/],
-    ["unassessed", a6view({ assessment: "unassessed", sources_known: 2, sources_assessed: 0 }), /has not been assessed yet/],
+    ["unassessed", a6view({ assessment: "unassessed", sources_known: 2, sources_assessed: 0 }), /No completed lineage assessment is stored/],
     ["incomplete", a6view({ assessment: "incomplete", sources_unavailable: 1 }), /could not be read/],
     ["no-ancestor", a6view({ no_ancestor_found: true }), /No ancestor found/],
     ["ambiguous", a6view({ ambiguous: true, thread_refs: [1, 2] }), /separate threads/],

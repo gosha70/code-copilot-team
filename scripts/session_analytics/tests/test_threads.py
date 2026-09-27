@@ -2852,7 +2852,10 @@ class TestThreadView(StoreCase):
             self.assertIn(key, view, "coverage must not vanish on the early return")
 
     def test_a_pre_A6_session_is_known_but_UNASSESSED(self) -> None:
-        """An ingest_state row with no member: detection never ran."""
+        """An ingest_state row with no member: no completed assessment
+        is stored. Usually detection never ran; the same durable state
+        results from a pass rolled back before it committed, which is
+        why the claim is about the store, not about what was tried."""
         base = ids(30, "h")
         path = self._write("hist", base)
         session = self._session(C.COPILOT_CLAUDE_CODE, "hist-sess", base)
@@ -3015,11 +3018,14 @@ class TestThreadMcpTool(unittest.TestCase):
         except ImportError:  # pragma: no cover
             self.skipTest("mcp is not installed")
         tool = build_server("sqlite:///:memory:")._tool_manager._tools["session_thread"]
-        text = (tool.description or "")
-        # the docstring wraps, so match on the words rather than a
-        # phrase that spans a line break
+        # Whitespace-NORMALIZED before matching. The raw description
+        # wraps, and whether it arrives dedented depends on the mcp
+        # version — asserting on a phrase that spans a line break made
+        # this pass locally and fail in CI.
+        text = " ".join((tool.description or "").split())
         for phrase in ("lineage_support", "assessment", "no_ancestor_found",
-                       "inferred from timing", "not a\nfinding"):
+                       "inferred from timing", "a blank is not a finding",
+                       "no completed assessment is stored"):
             self.assertIn(phrase, text)
 
     def test_startup_lands_schema_12_BEFORE_any_tool_call(self) -> None:

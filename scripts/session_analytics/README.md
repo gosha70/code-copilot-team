@@ -1473,8 +1473,9 @@ that ever existed.
 **An empty answer is not a finding.** Read three fields in order:
 `lineage_support` (an `aider` or `pi` session carries no per-turn
 identifier, so lineage is unknowable rather than absent), `assessment`
-(`unassessed` means detection never ran, `incomplete` means a source
-could not be read), and only then `no_ancestor_found`, which is true
+(`unassessed` means no completed assessment is stored — usually a
+pre-A6 session awaiting the backfill, but also a pass that was rolled
+back before committing; `incomplete` means a source could not be read), and only then `no_ancestor_found`, which is true
 only when native lineage was fully assessed and readable.
 
 Surfaces: `GET /api/sessions/{id}/thread`, the `session_thread` MCP

@@ -107,7 +107,7 @@ export function lineageMessage(view: LineageView): string {
     case "unsupported":
       return `${view.copilot} transcripts carry no per-turn identifier, so lineage cannot be determined for this source.`;
     case "unassessed":
-      return `Lineage has not been assessed yet: ${view.sources_assessed} of ${view.sources_known} known sources were examined. Run \`session-analytics threads --backfill\`.`;
+      return `No completed lineage assessment is stored: ${view.sources_assessed} of ${view.sources_known} known sources have a result. Run \`session-analytics threads --backfill\`.`;
     case "incomplete":
       return `Lineage is incomplete: ${view.sources_unavailable} of ${view.sources_known} known sources could not be read, so an absence cannot be confirmed.`;
     case "no-ancestor":
