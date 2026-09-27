@@ -84,6 +84,8 @@ try {
         join(STUDIO, "lib/filterView.ts"),
         join(STUDIO, "components/SessionFilters.tsx"),
         join(STUDIO, "lib/feedbackView.ts"),
+        join(STUDIO, "lib/lineageView.ts"),
+        join(STUDIO, "components/LineagePanel.tsx"),
         join(STUDIO, "components/FeedbackControl.tsx"),
         join(STUDIO, "components/SessionHeader.tsx"),
         join(STUDIO, "lib/harnessView.ts"),
@@ -1283,6 +1285,95 @@ try {
   else if (!/100%/.test(a5panel) || !/4\/26 evaluated/.test(a5panel) || !/22 unevaluated/.test(a5panel)) fail("cell contents");
   else if (!/Not counted in any row/.test(a5panel) || !/1 run spanned/.test(a5panel) || !/2 runs could not be placed/.test(a5panel)) fail("the exclusion note is missing from the panel");
   else console.log("  ok  one Expectations column in the table, with the excluded runs named in a note below it");
+
+  // ── #371 A6: session lineage ────────────────────────────────────────
+  // Six mutually exclusive states. The first assertion is that no
+  // state's distinguishing marker appears in another state's render:
+  // without it, "no ancestor" and "not assessed yet" could share a
+  // sentence and the panel would conflate an absence with a question
+  // nobody asked.
+  console.log("\nlineage panel:");
+  const a6lv = await import(pathToFileURL(join(out, "lib/lineageView.js")));
+  const a6panel = await import(pathToFileURL(join(out, "components/LineagePanel.js")));
+  const a6render = (view) =>
+    renderToStaticMarkup(React.createElement(a6panel.default, { view }));
+  const a6member = (o = {}) => ({
+    member_ref: 1, source_key: "/p/one.jsonl", native_session_id: "s",
+    session_ref: 1, source_available: true, turn_uuid_count: 10,
+    is_root: true, is_terminal: false, join_suspected: false, children: [], ...o,
+  });
+  const a6view = (o = {}) => ({
+    session_ref: 1, copilot: "claude-code", lineage_support: "native",
+    assessment: "complete", no_ancestor_found: false, ambiguous: false,
+    thread_refs: [], sources_known: 1, sources_assessed: 1,
+    sources_available: 1, sources_unavailable: 0, relation_candidates: [],
+    thread: null, ...o,
+  });
+  const a6thread = (o = {}) => ({
+    thread_id: "abc", fork_suspected: false, terminal_ambiguous: false,
+    root_ambiguous: false, member_count: 2,
+    roots: [a6member({ children: [a6member({ member_ref: 2, source_key: "/p/two.jsonl", is_root: false, is_terminal: true })] })],
+    edges: [{ ancestor: 1, descendant: 2, provenance: "uuid_containment", shared_uuids: 100, ancestor_containment: 1, descendant_containment: 0.7, ancestor_only: 0, descendant_only: 40, rule_version: "containment-net-growth-v1" }],
+    joins: [], ...o,
+  });
+  const A6_STATES = [
+    ["unsupported", a6view({ copilot: "aider", lineage_support: "unsupported" }), /no per-turn identifier/],
+    ["unassessed", a6view({ assessment: "unassessed", sources_known: 2, sources_assessed: 0 }), /has not been assessed yet/],
+    ["incomplete", a6view({ assessment: "incomplete", sources_unavailable: 1 }), /could not be read/],
+    ["no-ancestor", a6view({ no_ancestor_found: true }), /No ancestor found/],
+    ["ambiguous", a6view({ ambiguous: true, thread_refs: [1, 2] }), /separate threads/],
+    ["thread", a6view({ thread_refs: [1], thread: a6thread() }), /Resumed lineage across/],
+  ];
+  const a6rendered = new Map();
+  for (const [name, view, marker] of A6_STATES) {
+    const html = a6render(view);
+    a6rendered.set(name, html);
+    if (!marker.test(html)) fail(`A6 state ${name}: its own marker is missing`);
+    if (a6lv.lineageState(view) !== name) fail(`A6 lineageState(${name}) disagrees with the panel`);
+  }
+  for (const [name, , marker] of A6_STATES) {
+    for (const [other, html] of a6rendered) {
+      if (other !== name && marker.test(html)) {
+        fail(`A6 marker for ${name} also appears in ${other} — the states are not distinguishable`);
+      }
+    }
+  }
+  if (process.exitCode) { /* reported above */ }
+  else console.log("  ok  six lineage states, each with a marker that appears in no other");
+
+  // The tree must never render as a sequence.
+  const forked = a6view({ thread_refs: [1], thread: a6thread({
+    fork_suspected: true, member_count: 3,
+    roots: [a6member({ children: [
+      a6member({ member_ref: 2, source_key: "/p/left.jsonl", is_root: false, is_terminal: true }),
+      a6member({ member_ref: 3, source_key: "/p/right.jsonl", is_root: false, is_terminal: true }),
+    ] })],
+  }) });
+  const forkHtml = a6render(forked);
+  for (const [name, html] of a6rendered) {
+    if (/<ol[\s>]/.test(html)) fail(`A6 ${name}: an <ol> announces a SEQUENCE, which the lineage is not`);
+  }
+  if (!/role="tree"/.test(a6rendered.get("thread")) || !/aria-level="1"/.test(a6rendered.get("thread"))) {
+    fail("the lineage must be a tree with explicit levels, not a list");
+  } else console.log("  ok  the lineage is a tree with levels, and no ordered list anywhere");
+
+  const termHtml = a6render(a6view({ thread_refs: [1], thread: a6thread({ terminal_ambiguous: true }) }));
+  if (!/none was chosen as the latest/.test(termHtml)) fail("terminal ambiguity is silent in the panel");
+  else console.log("  ok  multiple live continuations are named, and none is chosen");
+
+  const depths = [...forkHtml.matchAll(/data-depth="(\d+)"/g)].map((m) => m[1]);
+  if (/<ol[\s>]/.test(forkHtml)) fail("the forked tree must not be an ordered list");
+  else if (depths.join(",") !== "0,1,1") fail(`a fork must render two SIBLINGS at one depth, got ${depths}`);
+  else if (!/nothing orders them/.test(forkHtml)) fail("the fork note is missing");
+  else console.log("  ok  a fork renders as siblings at equal depth, with nothing ordering them");
+
+  // A direction-ambiguous candidate must not read as a merge proposal.
+  const candHtml = a6render(a6view({
+    relation_candidates: [{ member_a: 1, member_b: 2, shared_uuids: 9, a_only: 3, b_only: 3, candidate_kind: "direction_ambiguous", rule_version: "containment-net-growth-v1" }],
+  }));
+  if (!/not a suggestion to merge/.test(candHtml)) fail("a direction-ambiguous candidate must say it is not a merge proposal");
+  else console.log("  ok  a direction-ambiguous candidate is not presented as a merge");
+
 
   if (!process.exitCode) console.log("\nstates-check: all states asserted");
 } finally {

@@ -79,6 +79,42 @@ def build_server(dsn: str, kuzu_path: str = ""):
             db.close()
 
     @server.tool()
+    def session_thread(session_ref: int) -> dict[str, Any]:
+        """#371 A6: a session's lineage — which session it was resumed
+        from — proven by turn identifiers the transcript preserves, never
+        inferred from timing.
+
+        The thread is a TREE over the edges, not a list: comparable
+        members nest, and two incomparable descendants are siblings with
+        no ordering between them, because the order is partial. A member
+        with several ancestors is listed apart, in `joins`.
+
+        Read three fields before concluding anything from an empty
+        answer. `lineage_support` says whether this source can express
+        lineage at all — an `aider` session cannot, so a blank is not a
+        finding. `assessment` says whether the known sources were
+        actually looked at: `unassessed` means detection never ran (a
+        pre-A6 session awaiting `threads --backfill`), `incomplete`
+        means a source could not be read. `no_ancestor_found` is true
+        ONLY when native lineage was fully assessed and readable and
+        nothing was found.
+
+        `relation_candidates` are pairs the rule could not order, or
+        could not tell apart; they are session-level because such a pair
+        creates no edge and no thread. A `direction_ambiguous` candidate
+        is NOT a proposal to merge — the two sources genuinely differ."""
+        from .. import threads as th
+
+        db = _db()
+        try:
+            return th.thread_view(db, int(session_ref))
+        except th.SessionNotFound:
+            # Distinct from a session that cannot be threaded.
+            return {"error": "session not found", "session_ref": int(session_ref)}
+        finally:
+            db.close()
+
+    @server.tool()
     def compare_harness_versions(by: str = "") -> dict[str, Any]:
         """#371 A4b: sessions grouped by one dimension of the harness they
         ran under (instructions_digest, cct_sha, cct_version, cli_version,
@@ -196,5 +232,20 @@ def run(dsn: str = "", kuzu_path: str = "") -> None:
         resolved_kuzu = resolved_kuzu or cfg.kuzu_path
     if not resolved:
         raise ValueError("no DSN configured for the MCP server (see --dsn).")
+
+    # ONCE, at startup, exactly as create_app does. Every tool here only
+    # OPENS the store, so without this a server started against an older
+    # store comes up healthy and then fails inside a tool with "no such
+    # table" — a schema problem reported as a query error, long after the
+    # moment that could have explained it. SchemaMismatch is deliberately
+    # not caught: the CLI's centralized handler prints the one remedy.
+    from ..relational.db import Database, apply_ddl
+
+    bootstrap = Database.connect(resolved)
+    try:
+        apply_ddl(bootstrap)
+    finally:
+        bootstrap.close()
+
     server = build_server(resolved, resolved_kuzu)
     server.run()  # FastMCP defaults to stdio transport

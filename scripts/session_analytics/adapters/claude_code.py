@@ -41,6 +41,13 @@ _SLASH_RE = re.compile(r"<command-name>\s*(/?[\w:-]+)\s*</command-name>")
 
 class ClaudeCodeAdapter:
     copilot_id = COPILOT_ID
+    #: #371 A6 — whether this source exposes a STABLE PER-TURN IDENTITY
+    #: that survives a resume. Claude Code replays the ancestor's
+    #: records and preserves their `uuid`, which is what makes lineage
+    #: provable rather than inferred; another source carries no such
+    #: identifier, so a thread is not merely absent for it, it is
+    #: unknowable. The two must never render alike.
+    exposes_turn_identity = True
 
     def __init__(
         self, default_root: Optional[Path] = None, harness_stamps_path: Optional[str] = None

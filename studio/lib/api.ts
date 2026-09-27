@@ -1,6 +1,8 @@
 // Typed client for the session-analytics FastAPI backend.
 // The Studio is pure presentation — it never touches a DB directly.
 
+import type { LineageView } from "@/lib/lineageView";
+
 export const BASE =
   process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8765";
 
@@ -1834,6 +1836,10 @@ export const api = {
     get<{ id: number; feedback: FeedbackRow[] }>(`/api/sessions/${id}/feedback`),
   sessionAnalysis: (id: number) =>
     get<SessionAnalysisResponse>(`/api/sessions/${id}/analysis`),
+  // #371 A6: which session this one was resumed from, proven by turn
+  // identifiers the transcript preserves — never inferred from timing.
+  sessionThread: (id: number) =>
+    get<LineageView>(`/api/sessions/${id}/thread`),
   runSessionAnalysis: (
     id: number,
     kind: AnalysisKind,

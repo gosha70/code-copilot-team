@@ -43,6 +43,13 @@ _USER_PREFIX = "#### "
 
 class AiderAdapter:
     copilot_id = COPILOT_ID
+    #: #371 A6 — whether this source exposes a STABLE PER-TURN IDENTITY
+    #: that survives a resume. Claude Code replays the ancestor's
+    #: records and preserves their `uuid`, which is what makes lineage
+    #: provable rather than inferred; Aider carries no such
+    #: identifier, so a thread is not merely absent for it, it is
+    #: unknowable. The two must never render alike.
+    exposes_turn_identity = False
 
     def __init__(self, default_root: Optional[Path] = None) -> None:
         self._default_root = default_root
