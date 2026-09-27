@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Iterable, Optional, Sequence
 
 from . import constants as C
+from .relational.db import now_iso
 
 __all__ = [
     "SourceRef",
@@ -250,9 +251,9 @@ def classify_pair(
                   equal -> no edge, an unresolved candidate
 
     Comparing the two containment ratios cannot express the real data:
-    the deepest real link in the corpus is 0.958 one way and 0.905 the
+    the deepest real link in the corpus is 0.953 one way and 0.897 the
     other, so a symmetric test calls it a duplicate, and no threshold
-    repairs it — raising one above 0.905 destroys the 0.846 edges. Net
+    repairs it — raising one above 0.897 destroys the 0.750 edges. Net
     growth decides it correctly and for the right reason: a resume after
     a compaction drops some turns and adds more.
 
@@ -641,14 +642,27 @@ def register_source(
     ))
 
 
+def _stamp(now: Optional[str]) -> str:
+    """The audit timestamp, normalized.
+
+    Every production caller omits `now`, so a bare default of None wrote
+    `detected_at = NULL` at creation and then erased `updated_at` on
+    every later pass. These are AUDIT metadata and never an input to
+    lineage — nothing in the rule reads them — but "when was this
+    thread first seen" is exactly the question a null cannot answer.
+    """
+    return now or now_iso()
+
+
 def allocate_thread(db, *, now: Optional[str] = None) -> int:
     """Issue one surrogate. The only place a thread_id is created."""
+    stamp = _stamp(now)
     return int(db.insert_returning_id(
         """
         INSERT INTO session_thread (thread_id, status, detected_at, updated_at)
         VALUES (?, ?, ?, ?) RETURNING id
         """,
-        (new_thread_id(), C.THREAD_STATUS_ACTIVE, now, now),
+        (new_thread_id(), C.THREAD_STATUS_ACTIVE, stamp, stamp),
     ))
 
 
@@ -692,7 +706,7 @@ def connect_threads(db, left_ref: int, right_ref: int, *, now: Optional[str] = N
            SET status = ?, redirected_to_ref = ?, member_count = 0, updated_at = ?
          WHERE id = ?
         """,
-        (C.THREAD_STATUS_REDIRECTED, survivor, now, loser),
+        (C.THREAD_STATUS_REDIRECTED, survivor, _stamp(now), loser),
     )
     _refresh_member_count(db, survivor, now=now)
     return survivor
@@ -704,7 +718,7 @@ def _refresh_member_count(db, thread_ref: int, *, now: Optional[str] = None) -> 
         "SELECT COUNT(*) FROM thread_member WHERE thread_ref = ?", (thread_ref,))
     db.execute(
         "UPDATE session_thread SET member_count = ?, updated_at = ? WHERE id = ?",
-        (int(row[0]) if row else 0, now, thread_ref),
+        (int(row[0]) if row else 0, _stamp(now), thread_ref),
     )
 
 
@@ -772,7 +786,7 @@ def store_candidates(
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (first, second, candidate.shared_uuids, c_a, c_b, o_a, o_b,
-             candidate.candidate_kind, candidate.rule_version, now),
+             candidate.candidate_kind, candidate.rule_version, _stamp(now)),
         )
         stats["written"] += 1
 
@@ -828,7 +842,8 @@ def _recompute_flags(db, thread_ref: int, *, now: Optional[str] = None) -> None:
          WHERE id = ?
         """,
         (any(len(v) > 1 for v in children.values()),
-         len(terminals) > 1, len(roots) > 1, len(members), now, thread_ref),
+         len(terminals) > 1, len(roots) > 1, len(members), _stamp(now),
+         thread_ref),
     )
 
 

@@ -3397,3 +3397,122 @@ class TestAdditiveUpgradeFromSchema11(unittest.TestCase):
         self.assertIsNone(view["thread"])
         self.assertEqual(view["assessment"], "unassessed",
                          "a pre-A6 session awaits the backfill, and says so")
+
+
+class TestAuditTimestamps(StoreCase):
+    """Audit metadata is never null, and `detected_at` does not move.
+
+    Every production caller omits `now`, so a bare default wrote
+    `detected_at = NULL` at creation and then erased `updated_at` on
+    every later pass. These fields are never an input to lineage — the
+    rule reads none of them — but "when was this thread first seen" is
+    exactly the question a null cannot answer.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.tmp = Path(_tempfile.mkdtemp())
+        self.addCleanup(_shutil.rmtree, self.tmp, ignore_errors=True)
+        self.known: dict = {}
+
+    def _loader(self, key):
+        return next((s.uuids for s in self.known.values()
+                     if s.source_key == key), None)
+
+    def _put(self, source):
+        self.known[source.identity] = source
+        return source
+
+    def _stamps(self) -> tuple:
+        return self.db.query_one(
+            "SELECT detected_at, updated_at FROM session_thread ORDER BY id")
+
+    def test_a_default_call_stamps_both_fields(self) -> None:
+        base = ids(100, "t")
+        a = self._put(src("t1", base))
+        b = self._put(src("t2", base + ids(30, "u")))
+        reconcile(self.db, [a, b], uuid_loader=self._loader)   # no `now`
+        self.db.commit()
+        detected, updated = self._stamps()
+        self.assertIsNotNone(detected, "detected_at must not be null")
+        self.assertIsNotNone(updated, "updated_at must not be null")
+
+    def test_a_later_pass_moves_updated_at_but_NOT_detected_at(self) -> None:
+        base = ids(100, "s")
+        a = self._put(src("s1", base))
+        b = self._put(src("s2", base + ids(30, "v")))
+        reconcile(self.db, [a, b], now="2026-01-01T00:00:00Z",
+                  uuid_loader=self._loader)
+        self.db.commit()
+        first = self._stamps()
+
+        c = self._put(src("s3", base + ids(30, "v") + ids(40, "w")))
+        reconcile(self.db, [c], now="2026-06-01T00:00:00Z",
+                  uuid_loader=self._loader)
+        self.db.commit()
+        second = self._stamps()
+
+        self.assertEqual(second[0], first[0],
+                         "detected_at is when the thread was FIRST seen")
+        self.assertEqual(second[1], "2026-06-01T00:00:00Z")
+        self.assertNotEqual(second[1], first[1])
+
+    def test_a_later_default_pass_never_erases_a_supplied_stamp(self) -> None:
+        base = ids(100, "r")
+        a = self._put(src("r1", base))
+        b = self._put(src("r2", base + ids(30, "x")))
+        reconcile(self.db, [a, b], now="2026-01-01T00:00:00Z",
+                  uuid_loader=self._loader)
+        self.db.commit()
+
+        c = self._put(src("r3", base + ids(30, "x") + ids(40, "y")))
+        reconcile(self.db, [c], uuid_loader=self._loader)      # no `now`
+        self.db.commit()
+        detected, updated = self._stamps()
+        self.assertEqual(detected, "2026-01-01T00:00:00Z")
+        self.assertIsNotNone(updated, "a default pass must not erase it")
+
+    def test_a_redirected_thread_and_a_candidate_are_stamped_too(self) -> None:
+        left, right = self._put(src("L", ids(60, "L"))), self._put(src("R", ids(60, "R")))
+        for source in (left, right):
+            reconcile(self.db, [source], uuid_loader=self._loader)
+        self.db.commit()
+        bridge = self._put(src("BR", ids(60, "L") + ids(60, "R") + ids(200, "n")))
+        reconcile(self.db, [bridge], uuid_loader=self._loader)
+
+        pair = self._put(src("D1", ids(40, "d")))
+        twin = self._put(src("D2", ids(40, "d")))
+        reconcile(self.db, [pair, twin], uuid_loader=self._loader)
+        self.db.commit()
+
+        for (updated,) in self.db.query(
+            "SELECT updated_at FROM session_thread WHERE status = ?",
+            (C.THREAD_STATUS_REDIRECTED,)
+        ):
+            self.assertIsNotNone(updated, "a redirect records when it happened")
+        for (detected,) in self.db.query(
+            "SELECT detected_at FROM thread_relation_candidate"
+        ):
+            self.assertIsNotNone(detected, "a candidate records when it was seen")
+
+    def test_the_timestamp_is_not_an_input_to_lineage(self) -> None:
+        """Two passes an era apart derive the identical graph."""
+        def graph_for(stamp):
+            root = Path(_tempfile.mkdtemp())
+            self.addCleanup(_shutil.rmtree, root, ignore_errors=True)
+            db = Database.connect(f"sqlite:///{root / 'g.db'}")
+            self.addCleanup(db.close)
+            apply_ddl(db)
+            base = ids(100, "q")
+            a, b = src("q1", base), src("q2", base + ids(30, "z"))
+            known = {s.identity: s for s in (a, b)}
+            loader = lambda k: next(  # noqa: E731
+                (s.uuids for s in known.values() if s.source_key == k), None)
+            reconcile(db, [a, b], now=stamp, uuid_loader=loader)
+            db.commit()
+            return db.query(
+                "SELECT ancestor_member_ref, descendant_member_ref, shared_uuids, "
+                "ancestor_only, descendant_only FROM thread_edge")
+
+        self.assertEqual(graph_for("1999-01-01T00:00:00Z"),
+                         graph_for("2099-01-01T00:00:00Z"))
