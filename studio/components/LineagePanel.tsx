@@ -26,7 +26,11 @@ import {
 // `body`, nothing more. The semantic class names are kept as hooks for
 // anything that wants to find these nodes; they carry no styling.
 const TAG = "ml-2 text-xs text-slate-500";
-const EVIDENCE = "ml-3 text-xs text-slate-400";
+// slate-500, NOT slate-400: at 12px this is normal text for WCAG,
+// and slate-400 on the slate-50 body is about 2.45:1 — below the
+// 4.5:1 threshold. It carries the provenance and the
+// shared/added/dropped counts, so it has to stay readable.
+const EVIDENCE = "ml-3 text-xs text-slate-500";
 
 export default function LineagePanel({ view }: { view: LineageView }) {
   const state = lineageState(view);
