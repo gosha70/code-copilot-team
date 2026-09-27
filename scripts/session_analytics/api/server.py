@@ -1029,6 +1029,28 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         finally:
             conn.close()
 
+    @app.get("/api/sessions/{session_ref}/thread")
+    def session_thread(session_ref: int) -> dict[str, Any]:
+        """#371 A6: this session's lineage, as a TREE over the edges.
+
+        Comparable members nest; two incomparable descendants are
+        siblings with no ordering between them, because the order is
+        partial and a list would imply one the data cannot support. A
+        join is listed apart from the tree rather than drawn under each
+        ancestor. `lineage_support` says whether a thread was ever
+        possible, so a blank answer is never read as a finding."""
+        from .. import threads as th
+
+        conn = db()
+        try:
+            return th.thread_view(conn, session_ref)
+        except th.SessionNotFound:
+            # A session that does not exist is NOT an unsupported
+            # source; 404 keeps the two apart.
+            raise HTTPException(status_code=404, detail="session not found")
+        finally:
+            conn.close()
+
     @app.get("/api/dashboard/harness")
     def dashboard_harness(by: str = C.HARNESS_DIMENSIONS[0]) -> dict[str, Any]:
         """#371 A4b: sessions grouped by one dimension of the harness they

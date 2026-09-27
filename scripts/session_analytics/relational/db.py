@@ -95,6 +95,7 @@ _DDL_FILES = (
     "ddl/postgres/009_auto_build_verdict.sql",
     "ddl/postgres/010_feedback.sql",
     "ddl/postgres/011_expectation.sql",
+    "ddl/postgres/012_thread.sql",
 )
 # 3: + local_heartbeat (Slice B1, #187)
 # 4: + trace search index (E10 Slice B, #65). NOTE that apply_ddl creates
@@ -124,7 +125,17 @@ _DDL_FILES = (
 #    slice first proposed would have forced a recreate, and a recreate
 #    permanently drops every session whose transcript has since been
 #    pruned.
-_SCHEMA_VERSION = 11
+# 12: + session_thread, thread_member, thread_edge,
+#    thread_relation_candidate, and an index on copilot_turn(uuid) (#371
+#    A6, session threads). FOUR NEW TABLES and one index on an EXISTING
+#    column — no column is added to any existing table, so nothing joins
+#    _REQUIRED_COLUMNS and a schema-11 store gains all of it in place.
+#    The first design put thread_ref on copilot_session; check_schema
+#    would have refused every existing store and demanded the recreate
+#    that 11's note describes, so the link is read through
+#    thread_member instead — which is also the only shape that can
+#    represent several source transcripts resolving to one session row.
+_SCHEMA_VERSION = 12
 
 _PK_SQL = {
     DIALECT_POSTGRES: "BIGSERIAL PRIMARY KEY",

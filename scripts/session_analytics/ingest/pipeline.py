@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Mapping, Optional, Sequence
 
 from .. import constants as C
+from .. import threads
 from ..config import PricingConfig, ProjectIdRule, ProjectOverride
 from ..cost import UnpricedStats
 from ..registry import get_adapter, list_adapter_ids
@@ -198,6 +199,28 @@ def ingest(
                 store.upsert_session_metadata(db, session_pk, raw.metadata)
                 incremental.record_ingested(db, ref)
                 db.commit()
+                # A6: lineage for the session just written. Detection is
+                # per session and probes the turn-uuid index, so a
+                # session that collides with nothing costs one indexed
+                # lookup. Never fatal: a thread is an observation about
+                # ingested data, and failing to draw one must not lose
+                # the ingest that produced it.
+                try:
+                    threads.detect_for_session(
+                        db,
+                        copilot=copilot,
+                        native_session_id=ref.native_session_id,
+                        session_ref=session_pk,
+                        source_files=ref.source_files,
+                    )
+                except Exception:  # noqa: BLE001 — see above
+                    _log.warning(
+                        "thread detection failed for %s/%s; the session is "
+                        "ingested and lineage can be rebuilt with "
+                        "`session-analytics threads --backfill`",
+                        copilot, ref.native_session_id, exc_info=True,
+                    )
+                    db.rollback()
                 c_ingested += 1
                 stats.sessions_ingested += 1
                 stats.turns += len(raw.turns)

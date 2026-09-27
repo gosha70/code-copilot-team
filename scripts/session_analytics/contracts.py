@@ -159,6 +159,14 @@ class SessionAdapter(Protocol):
 
     copilot_id: str
 
+    #: #371 A6 — whether this source exposes a STABLE PER-TURN IDENTITY
+    #: that survives a resume, which is what makes lineage provable
+    #: rather than inferred. Declared on the PROTOCOL so a new adapter
+    #: must state it: a default would silently answer "unsupported" for
+    #: a source nobody had considered, and an unknowable rendered as a
+    #: negative finding is the exact error FR-14 forbids.
+    exposes_turn_identity: bool
+
     def discover(self, root: Optional[Path]) -> list[SessionRef]:
         """Cheaply enumerate sessions under ``root`` (or the configured
         default when ``root`` is ``None``). Must not fully parse."""

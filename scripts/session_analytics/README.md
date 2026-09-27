@@ -1430,6 +1430,61 @@ Ollama, an OpenAI-compatible server, the claude CLI.
   ranked query, before the top-N cut. Stop on the page stops listening; the running judge call
   is not cancelled server-side (read-only, so harmless).
 
+## Session threads (#371 A6)
+
+Which session was resumed from which, proven by identifiers the
+transcript exposes — **never inferred from timing**. A resumed session's
+transcript replays its ancestor's records and preserves their turn
+`uuid`; that is what makes the lineage provable. Timestamps are copied
+along with the records, so two sessions in one lineage share a first
+timestamp to the millisecond: time here is not a weak signal, it is a
+wrong one.
+
+The unit is a **source transcript**, not a session row. The Claude Code
+adapter groups a resume chain's files under one `sessionId` and
+deduplicates their turns — correct, and load-bearing — but that
+grouping consumes the evidence that there were several. So several
+members can resolve to one session, and that is the normal case.
+
+**The rule** (`containment-net-growth-v1`): a pair is gated in when it
+shares at least 2 turn uuids and `max(s/|A|, s/|B|) >= 0.5`; direction
+comes from net growth, the side that added more than it lost. Equal
+differences produce no edge and a stored *relation candidate* —
+`duplicate_identity` when both sides are identical, `direction_ambiguous`
+when they genuinely differ and the rule cannot order them. A
+`direction_ambiguous` candidate is **not** a proposal to merge.
+
+Forks, joins, ambiguous roots and ambiguous terminals are **flagged, not
+resolved**: every branch and every evidence edge is kept, and nothing is
+ordered or chosen.
+
+```bash
+# lineage for sessions ingested before A6, or whose sources changed
+./scripts/session-analytics threads --backfill
+```
+
+Ingest detects threads for each session it writes. The backfill re-reads
+the transcripts, because the store cannot reconstruct which file each
+turn came from. Its reach is what the store can still **name** —
+`ingest_state.source_file` and `thread_member.source_key` — so coverage
+is reported as a fraction of known sources, never of every transcript
+that ever existed.
+
+**An empty answer is not a finding.** Read three fields in order:
+`lineage_support` (an `aider` or `pi` session carries no per-turn
+identifier, so lineage is unknowable rather than absent), `assessment`
+(`unassessed` means no completed assessment is stored — usually a
+pre-A6 session awaiting the backfill, but also a pass that was rolled
+back before committing; `incomplete` means a source could not be read), and only then `no_ancestor_found`, which is true
+only when native lineage was fully assessed and readable.
+
+Surfaces: `GET /api/sessions/{id}/thread`, the `session_thread` MCP
+tool, and the Lineage panel on the Studio session page — a tree, never a
+numbered list, since the order is partial.
+
+Schema 12 is additive: four new tables and an index on
+`copilot_turn (uuid)`. No rebuild and no re-ingest.
+
 ## Tests
 
 ```bash

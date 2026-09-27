@@ -343,6 +343,22 @@ def _build_parser() -> argparse.ArgumentParser:
         "--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB)."
     )
 
+    p_threads = sub.add_parser(
+        "threads",
+        help="Rebuild session lineage from native identifiers (#371 A6).",
+    )
+    p_threads.add_argument(
+        "--backfill", action="store_true",
+        help="Re-read the sources the store still names and rebuild their "
+             "lineage. Ingest detects threads for new sessions; this covers "
+             "what was stored before, because the adapter's grouping "
+             "discarded which transcript each turn came from.",
+    )
+    p_threads.add_argument(
+        "--db", "--dsn", dest="dsn", default=None,
+        help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB).",
+    )
+
     p_exp = sub.add_parser(
         "expectations",
         help="Store what auto-build runs were required to achieve, and how it came out (#371 A5).",
@@ -709,6 +725,59 @@ def _export_one(exp, db, table: str, fmt: str, dest: Path) -> None:
     else:
         with open(dest, "w", newline="", encoding="utf-8") as fp:
             exp.write_csv(db, table, fp)
+
+
+def _cmd_threads(args: argparse.Namespace) -> int:
+    """#371 A6: rebuild lineage for sources already in the store.
+
+    Ingest detects threads for each session it writes; this pass exists
+    for everything ingested before A6, and for a store whose sources
+    have changed on disk. It re-reads the transcripts because the
+    adapter's grouping discarded which file each turn came from — the
+    store genuinely cannot answer that on its own.
+    """
+    from . import threads as th
+    from .relational.db import Database, apply_ddl, SchemaMismatch
+    from .setup_cmd import ensure_initialized
+
+    if not args.backfill:
+        print("error: nothing to do. Pass --backfill.", file=sys.stderr)
+        return C.EXIT_USAGE
+    if not ensure_initialized(args.dsn):
+        return C.EXIT_USAGE
+    cfg = load_config(dsn=args.dsn)
+    if not cfg.dsn:
+        print(
+            "error: no database configured. Run setup, pass --db, or set CCT_SA_DB.",
+            file=sys.stderr,
+        )
+        return C.EXIT_USAGE
+
+    db = Database.connect(cfg.dsn)
+    try:
+        apply_ddl(db)
+        stats = th.backfill(db)
+    except SchemaMismatch:
+        # Let it out: a store that predates the current schema is a
+        # RUNTIME condition with one standard remedy, and main() is
+        # where that remedy is printed. Swallowing it here would report
+        # a broken store as a usage error and hide the fix.
+        raise
+    finally:
+        db.close()
+
+    print(json.dumps(stats, indent=2, sort_keys=True))
+    if stats["known_sources"] and stats["unavailable"]:
+        # Said plainly: the denominator is what the store can NAME, not
+        # every transcript that ever existed.
+        print(
+            f"note: {stats['unavailable']} of {stats['known_sources']} known "
+            "source(s) could not be read; their lineage is preserved, not "
+            "guessed. Sources deleted before they were ever recorded are "
+            "undiscoverable and are not counted here.",
+            file=sys.stderr,
+        )
+    return C.EXIT_OK
 
 
 def _cmd_expectations(args: argparse.Namespace) -> int:
@@ -1495,6 +1564,7 @@ _HANDLERS = {
     "export": _cmd_export,
     "correlate": _cmd_correlate,
     "expectations": _cmd_expectations,
+    "threads": _cmd_threads,
     "archive": _cmd_archive,
     "search": _cmd_search,
     "watch": _cmd_watch,

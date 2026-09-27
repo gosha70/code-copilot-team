@@ -31,6 +31,8 @@ import ResponseTimeCard from "@/components/ResponseTime";
 import TraceTree from "@/components/TraceTree";
 import { nestTurns } from "@/lib/traceView";
 import FeedbackControl from "@/components/FeedbackControl";
+import LineagePanel from "@/components/LineagePanel";
+import type { LineageView } from "@/lib/lineageView";
 import { targetKey, type VocabularyEntry } from "@/lib/feedbackView";
 import SessionHeader from "@/components/SessionHeader";
 import { HandTag } from "@/components/SessionTags";
@@ -93,6 +95,28 @@ export default function SessionDetailPage() {
   const { data: vocabData } = useApi(() => api.feedbackVocabulary(), []);
   const vocabulary: VocabularyEntry[] | null = vocabData?.names ?? null;
   const [feedbackByTarget, setFeedbackByTarget] = useState<Record<string, FeedbackRow[]>>({});
+  // #371 A6. Loaded on its own so a lineage failure never costs the
+  // session page; absent simply renders nothing.
+  const [lineage, setLineage] = useState<LineageView | null>(null);
+  useEffect(() => {
+    let live = true;
+    // Cleared FIRST. Without this the previous session's lineage stays
+    // on screen until the new request settles — the `live` flag only
+    // stops a late response overwriting a newer one, it does not stop
+    // one session displaying another's ancestry.
+    setLineage(null);
+    api
+      .sessionThread(id)
+      .then((view) => {
+        if (live) setLineage(view);
+      })
+      .catch(() => {
+        if (live) setLineage(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [id]);
   const feedbackFor = useCallback(
     (key: string, fromPayload: FeedbackRow[]) => feedbackByTarget[key] ?? fromPayload,
     [feedbackByTarget],
@@ -127,6 +151,7 @@ export default function SessionDetailPage() {
         tags={tags ?? data.tags}
         onToggleTag={(tag, on) => toggleTag(tag, on)}
       />
+      {lineage ? <LineagePanel view={lineage} /> : null}
       <FeedbackControl
         sessionId={id}
         rows={feedbackFor(targetKey(null, null), data.feedback)}

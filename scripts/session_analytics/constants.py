@@ -427,6 +427,93 @@ EXPECTATION_DETAIL_MAX_CHARS = 4000
 EXPECTATION_EVIDENCE_MAX_CHARS = 8000
 EXPECTATION_VERIFIER_MAX_CHARS = 2000
 
+# ── Session threads (#371 A6) ──────────────────────────────────────────
+# Which session was resumed from which, proven by identifiers the
+# transcript exposes natively. Every name here crosses the detection
+# pass, the store, the API and the Studio, so it lives in one place.
+TBL_SESSION_THREAD = "session_thread"
+TBL_THREAD_MEMBER = "thread_member"
+TBL_THREAD_EDGE = "thread_edge"
+TBL_THREAD_RELATION_CANDIDATE = "thread_relation_candidate"
+
+#: A thread is `active`, or `redirected` at the thread that survived a
+#: connection. Both thread_ids stay valid and immutable: a lookup by a
+#: redirected id resolves to its survivor rather than failing.
+THREAD_STATUS_ACTIVE = "active"
+THREAD_STATUS_REDIRECTED = "redirected"
+THREAD_STATUSES = (THREAD_STATUS_ACTIVE, THREAD_STATUS_REDIRECTED)
+
+#: How a candidate pair was FOUND. Neither value authorizes an edge:
+#: adapter grouping proves common membership, not predecessor order, so
+#: direction always comes from the containment rule below.
+THREAD_PROVENANCE_NATIVE_GROUP = "native_group"
+THREAD_PROVENANCE_UUID_CONTAINMENT = "uuid_containment"
+THREAD_PROVENANCES = (
+    THREAD_PROVENANCE_NATIVE_GROUP, THREAD_PROVENANCE_UUID_CONTAINMENT,
+)
+#: Deterministic precedence when one pair arrives from BOTH discovery
+#: paths: `native_group` wins, because it is the stronger statement
+#: about how the pair was found (the adapter grouped the two
+#: transcripts) and because "whichever arrived first" would make the
+#: stored provenance depend on iteration order.
+THREAD_PROVENANCE_PRECEDENCE = (
+    THREAD_PROVENANCE_NATIVE_GROUP, THREAD_PROVENANCE_UUID_CONTAINMENT,
+)
+
+#: Whether a source can express lineage at all. DERIVED from adapter
+#: capability, never stored and never inferred from whether a link was
+#: found: a claude-code session with no thread is "no ancestor found",
+#: an aider or pi session is "cannot express lineage", and the two must
+#: not render alike.
+LINEAGE_SUPPORT_NATIVE = "native"
+LINEAGE_SUPPORT_UNSUPPORTED = "unsupported"
+LINEAGE_SUPPORTS = (LINEAGE_SUPPORT_NATIVE, LINEAGE_SUPPORT_UNSUPPORTED)
+
+#: The ancestry rule, VERSIONED. Containment is only the GATE; direction
+#: comes from net growth:
+#:
+#:   1. gate      s = |A ∩ B| >= THREAD_MIN_SHARED_UUIDS
+#:                and max(s/|A|, s/|B|) >= THREAD_CONTAINMENT_THRESHOLD
+#:   2. differences   a_only = |A \ B|, b_only = |B \ A|
+#:   3. direction b_only > a_only -> A is ancestor of B
+#:                a_only > b_only -> B is ancestor of A
+#:                equal           -> NO EDGE, an unresolved candidate
+#:
+#: A symmetric ratio comparison cannot express the real data and was
+#: never shipped. Measured over the one lineage in the corpus — in the
+#: SAME universe the turn-uuid index holds, i.e. records the adapter
+#: admits as turns, sizes 8/61/487/517 — the deepest real link
+#: (`7751a598` -> `0e451eb6`, 464 shared) has containment 0.953 forward
+#: and 0.897 REVERSE, so a symmetric rule calls it a duplicate; and no
+#: threshold repairs that, because raising it above 0.897 destroys the
+#: `ad35b1c9` edges at 0.750. Net growth decides it correctly and for
+#: the right reason: a resume after a compaction drops some turns and
+#: adds more — that link trimmed 23 and added 53, so `0e451eb6` is the
+#: descendant.
+#:
+#: The floor stops a single coincidentally shared uuid from inventing a
+#: thread; the smallest real edge observed shares 6.
+#:
+#: The version is stamped on every edge and candidate so a later change
+#: to the rule stays distinguishable from a change in the data. Bump it
+#: whenever the gate, the direction test or either bound moves.
+THREAD_CONTAINMENT_THRESHOLD = 0.5
+THREAD_MIN_SHARED_UUIDS = 2
+THREAD_RULE_VERSION = "containment-net-growth-v1"
+
+#: Why a gated pair produced no edge. The two are NOT the same problem
+#: and must not render alike: one says the sources are
+#: indistinguishable, the other says they DIFFER and the rule cannot say
+#: which came first — which is why the record is a relation candidate
+#: and not a merge candidate. Merging a `direction_ambiguous` pair would
+#: destroy real information.
+#: `a_only == b_only == 0` — the two carry identical uuid sets.
+CANDIDATE_DUPLICATE_IDENTITY = "duplicate_identity"
+#: `a_only == b_only > 0` — each side has as much the other lacks, so
+#: neither grew. Not necessarily something that should be merged.
+CANDIDATE_DIRECTION_AMBIGUOUS = "direction_ambiguous"
+CANDIDATE_KINDS = (CANDIDATE_DUPLICATE_IDENTITY, CANDIDATE_DIRECTION_AMBIGUOUS)
+
 # ── Feedback (#371 A3) ─────────────────────────────────────────────────
 # A named, typed judgement on a session, a turn or a tool call. The
 # source types cross store / API / Studio; the vocabulary is the list the
