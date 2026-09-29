@@ -787,7 +787,7 @@ export default function SettingsPage() {
       </Card>
 
       <Card title="Effective per-project redaction">
-        <p className="text-xs text-slate-400 mb-3">
+        <p className="text-xs text-slate-500 mb-3">
           Read-only — the redaction mode each project’s already-ingested sessions were recorded
           with. To change redaction for future ingests, edit the per-project config file.
         </p>
@@ -817,7 +817,7 @@ export default function SettingsPage() {
                     {p.effective_redaction_mode === "mixed" ? (
                       <span>
                         mixed{" "}
-                        <span className="text-xs text-slate-400">
+                        <span className="text-xs text-slate-500">
                           (
                           {Object.entries(p.redaction_modes)
                             .map(([mode, count]) => `${mode}: ${count}`)

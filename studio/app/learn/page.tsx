@@ -104,7 +104,7 @@ export default function LearnPage() {
           <Card key={s.id} title={s.title}>
             <div id={s.id} className="scroll-mt-20" />
             {s.entries.length === 0 ? (
-              <p className="text-sm text-slate-400">Nothing here yet.</p>
+              <p className="text-sm text-slate-500">Nothing here yet.</p>
             ) : (
               <ul className="grid grid-cols-[fit-content(16rem)_1fr] gap-x-3 gap-y-1.5 text-sm">
                 {/* One grid per card: the name column is as wide as that

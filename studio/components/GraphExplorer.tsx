@@ -477,12 +477,12 @@ export function SelectionPanel({
           <ul className="text-xs text-slate-600 space-y-1">
             {data.context.map((x) => (
               <li key={x.rel + x.key}>
-                <span className="font-mono text-slate-400">{x.rel}</span>{" "}
+                <span className="font-mono text-slate-500">{x.rel}</span>{" "}
                 {x.label}: {x.label === "Workspace" ? shortName(x.key) : x.key}
               </li>
             ))}
             <li>
-              <span className="font-mono text-slate-400">INVOKED</span>{" "}
+              <span className="font-mono text-slate-500">INVOKED</span>{" "}
               {shownOf(data.tools.length, data.totals.tools)} tools; {data.totals.errors} errors
               {data.errors.length &&
               data.errors.every((e) => e.error_type === "redacted")
@@ -490,18 +490,18 @@ export function SelectionPanel({
                 : ""}
             </li>
             <li>
-              <span className="font-mono text-slate-400">ACCESSED_FILE</span>{" "}
+              <span className="font-mono text-slate-500">ACCESSED_FILE</span>{" "}
               {shownOf(data.files.length, data.totals.files)} files (most accessed first)
             </li>
             <li>
-              <span className="font-mono text-slate-400">SIMILAR_TO</span>{" "}
+              <span className="font-mono text-slate-500">SIMILAR_TO</span>{" "}
               {shownOf(data.similar.length, data.totals.similar)} neighbours
               {data.similar.length === 0
                 ? " — run Embed sessions and Find similar on the Analysis page"
                 : ""}
             </li>
           </ul>
-          <p className="text-xs text-slate-400">Click a bubble for detail.</p>
+          <p className="text-xs text-slate-500">Click a bubble for detail.</p>
         </div>
       );
     }
@@ -541,7 +541,7 @@ export function SelectionPanel({
         </div>
       );
     }
-    return <p className="text-sm text-slate-400">Nothing selected.</p>;
+    return <p className="text-sm text-slate-500">Nothing selected.</p>;
   }
   if (selection.kind === "tool") {
     const t = selection.turns;
@@ -552,7 +552,7 @@ export function SelectionPanel({
           the turn that made it
         </p>
         {!t ? (
-          <p className="text-xs text-slate-400">Loading…</p>
+          <p className="text-xs text-slate-500">Loading…</p>
         ) : (
           <>
             <p className="text-xs text-slate-500">
@@ -579,7 +579,7 @@ export function SelectionPanel({
                 </li>
               ))}
               {t.calls.length > 200 && (
-                <li className="text-slate-400">
+                <li className="text-slate-500">
                   … {t.calls.length - 200} more
                 </li>
               )}
@@ -597,7 +597,7 @@ export function SelectionPanel({
           <span className="font-mono text-xs">{selection.path}</span>
         </p>
         {!f ? (
-          <p className="text-xs text-slate-400">Loading…</p>
+          <p className="text-xs text-slate-500">Loading…</p>
         ) : (
           <>
             <p className="text-xs text-slate-500">
@@ -633,7 +633,7 @@ export function SelectionPanel({
   return (
     <div className="text-sm space-y-1">
       <p className="text-slate-700">
-        <span className="text-xs text-slate-400">{n.type}</span>{" "}
+        <span className="text-xs text-slate-500">{n.type}</span>{" "}
         <span className="font-mono break-all">
           {String((n.data as any).key ?? n.label)}
         </span>

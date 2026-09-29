@@ -2,6 +2,7 @@ import "./globals.css";
 import type { Metadata } from "next";
 import Link from "next/link";
 import FirstRunBanner from "@/components/FirstRunBanner";
+import NavTabs, { type NavTab } from "@/components/NavTabs";
 
 export const metadata: Metadata = {
   title: "Session Analytics Studio",
@@ -17,8 +18,8 @@ export const metadata: Metadata = {
 // benchmark-derived, /routing stays); the client-side Agents stub is
 // gone — Learn (#309) carries the real catalogue of docs, skills and
 // agents from the repo itself.
-const TABS = [
-  { href: "/", label: "Dashboard" },
+const TABS: NavTab[] = [
+  { href: "/", label: "Dashboard", also: ["/labels"] },
   { href: "/sessions", label: "Sessions" },
   { href: "/search", label: "Search" },
   { href: "/team", label: "Team" },
@@ -26,7 +27,7 @@ const TABS = [
   { href: "/ask", label: "Ask" },
   { href: "/graph", label: "Graph" },
   { href: "/analysis", label: "Analysis" },
-  { href: "/benchmark", label: "Benchmark" },
+  { href: "/benchmark", label: "Benchmark", also: ["/routing"] },
   { href: "/learn", label: "Learn" },
   { href: "/settings", label: "Settings" },
 ];
@@ -64,17 +65,7 @@ export default function RootLayout({
                 />
                 Session Analytics
               </Link>
-              <nav className="flex gap-1 text-sm overflow-x-auto whitespace-nowrap">
-                {TABS.map((t) => (
-                  <Link
-                    key={t.href}
-                    href={t.href}
-                    className="px-3 py-1.5 rounded hover:bg-slate-700 transition-colors"
-                  >
-                    {t.label}
-                  </Link>
-                ))}
-              </nav>
+              <NavTabs tabs={TABS} />
             </div>
           </header>
           <FirstRunBanner />

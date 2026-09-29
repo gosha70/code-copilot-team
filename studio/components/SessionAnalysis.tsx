@@ -219,7 +219,7 @@ function LearnBadge({ value, learnLinks }: { value: string; learnLinks?: Record<
 // enforced server-side; render it as "no turn cited", never crash.
 function TurnChips({ turns = [] }: { turns?: number[] }) {
   if (!turns.length)
-    return <span className="text-xs text-slate-400">no turn cited</span>;
+    return <span className="text-xs text-slate-500">no turn cited</span>;
   return (
     <span className="inline-flex flex-wrap gap-1">
       {turns.map((t) => (

@@ -270,7 +270,7 @@ function EvidenceRefRow({
         className="text-left hover:underline"
         title={`open ${artifact} at this coordinate`}
       >
-        <span className="text-slate-400">{artifact}</span>{" "}
+        <span className="text-slate-500">{artifact}</span>{" "}
         <span className="text-blue-600">{locatorLabel(locator)}</span>
       </button>
       {error !== null && <div className="text-rose-600 mt-0.5">{error}</div>}
@@ -322,7 +322,7 @@ function EvidenceBlock({
             </div>
           ))}
         </div>
-        <p className="text-slate-400">
+        <p className="text-slate-500">
           Each locator opens its referenced artifact coordinate through the
           read-only artifact surface. (No reference is a served evidence
           file, so the evidence-file endpoint does not apply.)
@@ -350,7 +350,7 @@ function KnnSection({ knn }: { knn: RoutingKnnRecommendation }) {
             <span className="text-slate-500">(per {knn.suggested.arm})</span>
           </span>
         )}
-        <span className="font-mono text-xs text-slate-400">
+        <span className="font-mono text-xs text-slate-500">
           k={knn.k} (min {knn.k_min}) · {knn.distance_metric}
         </span>
       </div>
@@ -409,7 +409,7 @@ function KnnSection({ knn }: { knn: RoutingKnnRecommendation }) {
         </details>
       )}
 
-      <p className="text-xs text-slate-400 mt-2">
+      <p className="text-xs text-slate-500 mt-2">
         Similarity speaks from OTHER tasks&apos; labeled evidence — every
         example of this task is excluded from the neighbor pool, the same fold
         the held-out evaluation measures.

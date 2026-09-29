@@ -174,6 +174,7 @@ def search_sessions(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     limit: int = 20,
+    offset: int = 0,
     noise: Optional[NoiseConfig] = None,
     include_noise: bool = False,
     sort: str = SESSION_SORT_DEFAULT,
@@ -201,7 +202,8 @@ def search_sessions(
     ``count_noise_sessions`` with the same filters to say how many.
     ``sort`` is one of SESSION_SORT_COLUMNS (the Sessions grid's column
     headers); the limit applies AFTER ordering, so "top 50 by errors"
-    is what a sort by errors returns.
+    is what a sort by errors returns. ``offset`` skips that many rows of
+    the same ordering; ``count_sessions`` says how many there are in all.
     """
     column = SESSION_SORT_COLUMNS.get(sort)
     if column is None:
@@ -223,10 +225,49 @@ def search_sessions(
     direction = "DESC" if descending else "ASC"
     rows = db.query(
         f"SELECT {_SESSION_SELECT_COLS} FROM copilot_session{where_sql} "
-        f"ORDER BY ({column} IS NULL), {column} {direction}, started_at DESC LIMIT {int(limit)}",
+        f"ORDER BY ({column} IS NULL), {column} {direction}, started_at DESC, id DESC "
+        f"LIMIT {int(limit)} OFFSET {max(0, int(offset))}",
         tuple(params),
     )
     return [_session_dict(r) for r in rows]
+
+
+def count_sessions(
+    db: Database,
+    query: Optional[str] = None,
+    *,
+    noise: Optional[NoiseConfig] = None,
+    include_noise: bool = False,
+    copilot: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    tag: Optional[str] = None,
+    developer: Optional[str] = None,
+    model: Optional[str] = None,
+    tool: Optional[str] = None,
+    min_cost: Optional[float] = None,
+    max_cost: Optional[float] = None,
+    label: Optional[str] = None,
+    harness: Optional[str] = None,
+) -> int:
+    """How many sessions ``search_sessions`` would list with no limit —
+    the total behind the Sessions page's "showing n of m". Takes every
+    filter and the same noise choice, or the number stops describing the
+    list."""
+    where, params = _session_filters(
+        query, copilot, date_from, date_to,
+        tag=tag, developer=developer, model=model, tool=tool,
+        min_cost=min_cost, max_cost=max_cost, label=label, harness=harness,
+    )
+    if noise is not None and not include_noise:
+        keep_sql, keep_params = keep_clause(noise, "copilot_session")
+        where.append(keep_sql)
+        params += list(keep_params)
+    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+    row = db.query_one(
+        f"SELECT COUNT(*) FROM copilot_session{where_sql}", tuple(params),
+    )
+    return int((row or (0,))[0] or 0)
 
 
 def count_noise_sessions(

@@ -248,7 +248,7 @@ function RunCard({
                   <ul className="text-xs text-slate-700 mt-1 space-y-1">
                     {run.policy_decisions.map((e, i) => (
                       <li key={i} className="font-mono">
-                        <span className="text-slate-400">{e.ts ?? "—"}</span>{" "}
+                        <span className="text-slate-500">{e.ts ?? "—"}</span>{" "}
                         {e.event}: {e.detail ?? ""}
                       </li>
                     ))}

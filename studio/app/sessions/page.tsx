@@ -7,7 +7,7 @@ import { SessionFilters, SessionSort, SessionTagsInfo, api } from "@/lib/api";
 import { filtersFromParams, paramsFromFilters } from "@/lib/filterView";
 import SessionFiltersBar from "@/components/SessionFilters";
 import SessionTagIcons, { HandTag, TAG_LABEL, TagHeaderIcon } from "@/components/SessionTags";
-import { Card, ErrorNote, Loading, formatCost, useApi } from "@/components/ui";
+import { Card, ErrorNote, Loading, Pager, formatCost, useApi } from "@/components/ui";
 
 const REFRESH_MS = 15000;
 
@@ -40,11 +40,22 @@ function Sessions() {
   // newest N reordered.
   const [sort, setSort] = useState<SessionSort>("started_at");
   const [order, setOrder] = useState<"asc" | "desc">("desc");
+  // The page belongs to one list: a new filter, sort or noise choice is
+  // a different list and opens on its first page.
+  const listKey = `${filterKey}|${showNoise}|${sort}|${order}`;
+  const [paging, setPaging] = useState({ listKey, offset: 0 });
+  const offset = paging.listKey === listKey ? paging.offset : 0;
   const { data, error, loading } = useApi(
-    () => api.sessions(filters, showNoise, sort, order),
-    [filterKey, showNoise, sort, order],
+    () => api.sessions(filters, showNoise, sort, order, offset),
+    [listKey, offset],
     REFRESH_MS
   );
+  // The list can shrink under the reader (a refresh, a re-ingest); a
+  // page past the end goes back to the last one that has rows.
+  useEffect(() => {
+    if (data && data.total > 0 && data.offset >= data.total)
+      setPaging({ listKey, offset: Math.floor((data.total - 1) / data.limit) * data.limit });
+  }, [data, listKey]);
   // Facets arrive with every list; keep the last ones while a new list
   // loads so the dropdowns do not flicker empty.
   const [facets, setFacets] = useState(data?.facets ?? null);
@@ -116,7 +127,7 @@ function Sessions() {
     <div className="space-y-4">
       <div className="flex items-baseline gap-2">
         <h1 className="text-2xl font-bold">Sessions</h1>
-        <span className="text-slate-400 text-xs">
+        <span className="text-slate-500 text-xs">
           Auto-refreshing every {REFRESH_MS / 1000}s
         </span>
       </div>
@@ -130,7 +141,7 @@ function Sessions() {
           />
           Show excluded ({data.excluded_noise.toLocaleString()})
           <span
-            className="text-xs text-slate-400"
+            className="text-xs text-slate-500"
             title="Sessions under the turn or duration minimum, or in a probe/temp directory (sessions.noise in config)"
           >
             probe runs, temp dirs, and sessions too short to mean anything
@@ -185,7 +196,7 @@ function Sessions() {
               ))}
               {data.sessions.length === 0 && (
                 <tr>
-                  <td colSpan={11} className="py-6 text-center text-slate-400">
+                  <td colSpan={11} className="py-6 text-center text-slate-500">
                     {data.excluded_noise > 0
                       ? `No sessions worth showing — ${data.excluded_noise.toLocaleString()} excluded as noise (toggle above).`
                       : "No sessions. Run the Analysis page's Load sessions step."}
@@ -194,6 +205,14 @@ function Sessions() {
               )}
             </tbody>
           </table>
+          <Pager
+            noun="sessions"
+            offset={data.offset}
+            shown={data.sessions.length}
+            pageSize={data.limit}
+            total={data.total}
+            onOffset={(next) => setPaging({ listKey, offset: next })}
+          />
         </Card>
       )}
     </div>

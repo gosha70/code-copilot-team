@@ -26,7 +26,7 @@ export default function JudgeQuality({
   if (!runs) {
     return (
       <Card title="Judge quality">
-        <p className="text-sm text-slate-400">{error ? "Could not load the label runs." : "Loading…"}</p>
+        <p className="text-sm text-slate-500">{error ? "Could not load the label runs." : "Loading…"}</p>
       </Card>
     );
   }
@@ -87,7 +87,7 @@ export default function JudgeQuality({
         </select>
       </div>
       {!report ? (
-        <p className="text-sm text-slate-400">{error ? "Could not compute agreement." : "Computing…"}</p>
+        <p className="text-sm text-slate-500">{error ? "Could not compute agreement." : "Computing…"}</p>
       ) : report.turns_shared === 0 ? (
         <p className="text-sm text-slate-600">
           These two sources share no turns ({report.turns_a.toLocaleString()} and{" "}
@@ -114,7 +114,7 @@ export default function JudgeQuality({
               {report.labels.map((l) => (
                 <tr
                   key={l.label}
-                  className={"border-b border-slate-100 " + (l.sufficient ? "" : "text-slate-400")}
+                  className={"border-b border-slate-100 " + (l.sufficient ? "" : "text-slate-500")}
                   title={l.sufficient ? undefined : `only ${l.n} pairs — not evidence`}
                 >
                   <td className="py-1 pr-3 font-mono text-xs">{l.label}</td>
@@ -125,7 +125,7 @@ export default function JudgeQuality({
                   <td className="text-right tabular-nums">{l.b_true}</td>
                 </tr>
               ))}
-              <tr className={"border-b border-slate-100 " + (report.sentiment.sufficient ? "" : "text-slate-400")}>
+              <tr className={"border-b border-slate-100 " + (report.sentiment.sufficient ? "" : "text-slate-500")}>
                 <td className="py-1 pr-3 font-mono text-xs">sentiment (exact)</td>
                 <td className="text-right pr-3 tabular-nums">{report.sentiment.n}</td>
                 <td className="text-right pr-3 tabular-nums">{pct(report.sentiment.exact)}</td>
@@ -133,7 +133,7 @@ export default function JudgeQuality({
                 <td className="text-right pr-3">—</td>
                 <td className="text-right">—</td>
               </tr>
-              <tr className={report.interaction_quality.sufficient ? "" : "text-slate-400"}>
+              <tr className={report.interaction_quality.sufficient ? "" : "text-slate-500"}>
                 <td className="py-1 pr-3 font-mono text-xs">quality (within 1)</td>
                 <td className="text-right pr-3 tabular-nums">{report.interaction_quality.n}</td>
                 <td className="text-right pr-3 tabular-nums">{pct(report.interaction_quality.within_1)}</td>
@@ -143,7 +143,7 @@ export default function JudgeQuality({
               </tr>
             </tbody>
           </table>
-          <p className="text-xs text-slate-400 mt-2">{report.basis}</p>
+          <p className="text-xs text-slate-500 mt-2">{report.basis}</p>
         </>
       )}
     </Card>

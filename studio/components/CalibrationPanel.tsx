@@ -171,7 +171,7 @@ function Aggregate({
     <div className={box}>
       <div
         className={`text-lg font-semibold tabular-nums ${
-          stale ? "text-slate-400 line-through" : ""
+          stale ? "text-slate-500 line-through" : ""
         }`}
       >
         {fmt(value)}
@@ -289,7 +289,7 @@ export function CalibrationPanel() {
           {data.reason ??
             "No calibration verdict can be computed for this configuration."}
         </p>
-        <p className="text-xs text-slate-400 mt-2">
+        <p className="text-xs text-slate-500 mt-2">
           Gate thresholds and classifier parameters are operator policy and are
           never completed from code — set them in the
           <code> routing_calibration</code> configuration block.
@@ -314,7 +314,7 @@ export function CalibrationPanel() {
             ` · ${report.corpus.invalid_sets} invalid`}
         </span>
         <span
-          className="font-mono text-xs text-slate-400"
+          className="font-mono text-xs text-slate-500"
           title={`corpus ${report.corpus_id} · policy ${report.policy_id}`}
         >
           corpus {report.corpus_id.slice(0, 8)}… / policy{" "}
@@ -353,7 +353,7 @@ export function CalibrationPanel() {
       <EvaluationAggregates evaluation={data.evaluation} />
 
       {data.policy && (
-        <p className="text-xs text-slate-400 mt-3">
+        <p className="text-xs text-slate-500 mt-3">
           Policy: {data.policy.feature_vocabulary} · k={data.policy.k} (min{" "}
           {data.policy.k_min}) · {data.policy.distance_metric} ·{" "}
           {data.policy.normalization} · floor {data.policy.tier_floor} · max
@@ -363,7 +363,7 @@ export function CalibrationPanel() {
             : "none"}
         </p>
       )}
-      <p className="text-xs text-slate-400 mt-1">
+      <p className="text-xs text-slate-500 mt-1">
         Shadow-only: a calibrated verdict is evidence for a promotion decision
         an operator makes, never a routing change this page can apply.
       </p>

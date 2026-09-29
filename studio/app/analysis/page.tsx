@@ -65,7 +65,7 @@ function Stepper({
                         ? "bg-white border-blue-500 text-blue-600 animate-pulse"
                         : i === current
                           ? "bg-white border-blue-500 text-blue-600"
-                          : "bg-white border-slate-300 text-slate-400")
+                          : "bg-white border-slate-300 text-slate-500")
                 }
               >
                 {s.done && !running ? "✓" : i + 1}
@@ -126,7 +126,7 @@ function Funnel({ counts }: { counts: PipelineStatus["counts"] }) {
           >
             {c.value.toLocaleString()}
           </span>
-          {c.note && <span className="text-xs text-slate-400">({c.note})</span>}
+          {c.note && <span className="text-xs text-slate-500">({c.note})</span>}
           {i < cells.length - 1 && (
             <span className="text-slate-300 ml-2">→</span>
           )}
@@ -295,7 +295,7 @@ export default function AnalysisPage() {
   }, [judgeState, loadRuns]);
 
   if (!status)
-    return <div className="text-slate-400 text-sm py-8">Loading…</div>;
+    return <div className="text-slate-500 text-sm py-8">Loading…</div>;
 
   const step = status.steps[current];
   const running = step.job.state === "running";

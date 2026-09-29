@@ -78,7 +78,7 @@ export default function HarnessPanel({
             </option>
           ))}
         </select>
-        <span className="text-xs text-slate-400">
+        <span className="text-xs text-slate-500">
           {data.comparable_values} comparable{" "}
           {data.comparable_values === 1 ? "value" : "values"}
         </span>
@@ -134,7 +134,7 @@ export default function HarnessPanel({
                   >
                     {formatCost(r.cost_usd)}
                     {r.cost_usd != null && r.priced_turns < r.priceable_turns && (
-                      <span className="text-xs text-slate-400"> (partial)</span>
+                      <span className="text-xs text-slate-500"> (partial)</span>
                     )}
                   </Td>
                   {/* ONE column: the rate is meaningless without the
@@ -142,7 +142,7 @@ export default function HarnessPanel({
                       instead of widening the table (#371 A5). */}
                   <Td title={expectationCell(r).title}>
                     {expectationCell(r).primary}
-                    <div className="text-[11px] text-slate-400">
+                    <div className="text-[11px] text-slate-500">
                       {expectationCell(r).secondary}
                     </div>
                   </Td>
@@ -168,7 +168,7 @@ export default function HarnessPanel({
           {exclusionNote(data.runs_spanning_groups, data.runs_with_unmatched_sessions)}
         </p>
       )}
-      <p className="mt-3 text-xs text-slate-400">{data.basis}</p>
+      <p className="mt-3 text-xs text-slate-500">{data.basis}</p>
     </Card>
   );
 }

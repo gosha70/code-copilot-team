@@ -49,7 +49,7 @@ export function Stat({
         {shown}
       </div>
       <div className="text-sm text-slate-500 mt-1">{label}</div>
-      {note && <div className="text-xs text-slate-400 mt-0.5">{note}</div>}
+      {note && <div className="text-xs text-slate-500 mt-0.5">{note}</div>}
     </Card>
   );
 }
@@ -246,8 +246,63 @@ export function formatDuration(seconds: number | null | undefined): string {
   return `${d}d ${h % 24}h`;
 }
 
+/** "Showing a–b of n" with previous/next, for a list read a page at a
+ * time. Says the total even when it fits on one page — a list that does
+ * not say how long it is reads as complete. */
+export function Pager({
+  noun,
+  offset,
+  shown,
+  pageSize,
+  total,
+  onOffset,
+}: {
+  noun: string;
+  offset: number;
+  shown: number;
+  pageSize: number;
+  total: number;
+  onOffset: (offset: number) => void;
+}) {
+  if (total === 0) return null;
+  const button =
+    "px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 disabled:text-slate-400 disabled:hover:bg-transparent";
+  return (
+    <nav
+      aria-label={`Pages of ${noun}`}
+      className="flex flex-wrap items-center justify-between gap-2 pt-3 text-sm text-slate-600"
+    >
+      <span aria-live="polite">
+        {shown > 0
+          ? `Showing ${(offset + 1).toLocaleString()}–${(offset + shown).toLocaleString()} of ${total.toLocaleString()} ${noun}`
+          : `${total.toLocaleString()} ${noun}`}
+      </span>
+      {total > pageSize && (
+        <span className="flex gap-2">
+          <button
+            type="button"
+            className={button}
+            disabled={offset === 0}
+            onClick={() => onOffset(Math.max(0, offset - pageSize))}
+          >
+            Previous
+          </button>
+          <button
+            type="button"
+            className={button}
+            disabled={offset + shown >= total}
+            onClick={() => onOffset(offset + pageSize)}
+          >
+            Next
+          </button>
+        </span>
+      )}
+    </nav>
+  );
+}
+
 export function Loading() {
-  return <div className="text-slate-400 text-sm py-8">Loading…</div>;
+  return <div className="text-slate-500 text-sm py-8">Loading…</div>;
 }
 
 /**

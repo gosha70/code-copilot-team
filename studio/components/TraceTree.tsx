@@ -19,7 +19,7 @@ export function untilResult(c: ToolCallRow): string | null {
 }
 
 export function resultLabel(c: ToolCallRow): { text: string; tone: string } {
-  if (!c.has_result) return { text: "no result recorded", tone: "text-slate-400" };
+  if (!c.has_result) return { text: "no result recorded", tone: "text-slate-500" };
   if (c.is_error) return { text: "error", tone: "text-rose-700" };
   return { text: c.status || "ok", tone: "text-emerald-700" };
 }
@@ -61,7 +61,7 @@ export default function TraceTree({
                     </span>
                   )}
                   {c.output_length != null && (
-                    <span className="text-slate-400">{c.output_length} chars</span>
+                    <span className="text-slate-500">{c.output_length} chars</span>
                   )}
                 </div>
                 {c.input_preview && (

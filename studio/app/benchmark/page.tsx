@@ -190,7 +190,7 @@ export default function BenchmarkPage() {
               </tbody>
             </table>
           </div>
-          <p className="text-xs text-slate-400 mt-3">
+          <p className="text-xs text-slate-500 mt-3">
             Cost and duration aggregate over distinct linked sessions only
             (unlinked attempts count in Attempts but contribute no cost);
             &ldquo;—&rdquo; means no linked or priced data, never zero.
@@ -220,7 +220,7 @@ function OutcomeRow({
     <Card title="Predicted pass rate by project">
       <StaleNote error={stale} />
       {shown.length === 0 ? (
-        <p className="text-sm text-slate-400">
+        <p className="text-sm text-slate-500">
           {data.sessions_with_outcome.toLocaleString()} sessions carry a
           benchmark outcome, but no project has {data.min_observations} yet —
           a rate over fewer would not mean anything.
@@ -241,7 +241,7 @@ function OutcomeRow({
           ))}
         </div>
       )}
-      <p className="text-xs text-slate-400 mt-3">{data.basis}</p>
+      <p className="text-xs text-slate-500 mt-3">{data.basis}</p>
     </Card>
   );
 }
@@ -260,7 +260,7 @@ function RoutingCard({
   return (
     <Card title="Routing evidence">
       {sets === null ? (
-        <p className="text-sm text-slate-400">
+        <p className="text-sm text-slate-500">
           {error ? "Routing evidence could not be loaded." : "Loading…"}
         </p>
       ) : sets.length === 0 ? (
