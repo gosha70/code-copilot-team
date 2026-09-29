@@ -35,7 +35,7 @@ design decision is `scripts/session_analytics/README.md`; the Studio's
 - **Python 3.11+** with the package's dependencies. The repo's `.venv` is
   what `./scripts/session-analytics` uses; `start` creates it and installs
   what is missing.
-- **Node 20+** for the Studio (`studio/`, a Next.js app; `start` runs
+- **Node 20.9+** for the Studio (`studio/`, a Next.js app; `start` runs
   `npm install` the first time).
 - **Optional, local:** [Ollama](https://ollama.com) for the judge and for
   embeddings. The packaged default judge is Ollama, so no session text
