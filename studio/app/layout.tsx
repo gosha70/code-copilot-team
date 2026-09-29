@@ -19,7 +19,7 @@ export const metadata: Metadata = {
 // gone — Learn (#309) carries the real catalogue of docs, skills and
 // agents from the repo itself.
 const TABS: NavTab[] = [
-  { href: "/", label: "Dashboard" },
+  { href: "/", label: "Dashboard", also: ["/labels"] },
   { href: "/sessions", label: "Sessions" },
   { href: "/search", label: "Search" },
   { href: "/team", label: "Team" },

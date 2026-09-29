@@ -50,6 +50,14 @@ type Tab = "timeline" | AnalysisKind | "similar";
 
 const TURN_HASH = /^#turn-(\d+)$/;
 
+// Drop a `#turn-N` the reader has moved away from. A link to the same
+// turn changes nothing in the URL while the fragment is still there, so
+// no hashchange fires and the link does nothing.
+function clearTurnHash() {
+  if (TURN_HASH.test(window.location.hash))
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+}
+
 // The Timeline draws this many top-level turns at a time. A long session
 // has thousands; drawn at once they are a page the browser cannot scroll.
 const TIMELINE_PAGE_SIZE = 100;
@@ -168,7 +176,10 @@ export default function SessionDetailPage() {
         {(["timeline", ...ANALYSIS_KINDS, "similar"] as Tab[]).map((t) => (
           <button
             key={t}
-            onClick={() => setTab(t)}
+            onClick={() => {
+              if (t !== "timeline") clearTurnHash();
+              setTab(t);
+            }}
             className={`px-4 py-2 text-sm font-medium whitespace-nowrap ${
               tab === t
                 ? "border-b-2 border-blue-600 text-blue-600"
@@ -240,6 +251,8 @@ function Timeline({ data, feedback }: { data: SessionDetail; feedback: FeedbackC
   const top = useRef<HTMLDivElement>(null);
   // A page turned from the bottom pager starts at its top.
   const turnPage = (next: number) => {
+    clearTurnHash();
+    setTarget(null);
     setOffset(next);
     top.current?.scrollIntoView({ block: "start" });
   };

@@ -568,7 +568,7 @@ try {
   const full = jq({ runs: runs2, report: rep, a: rep.a, b: rep.b });
   if (!/50 turns labelled by both/.test(full)) fail("agreement card lacks the shared-n line");
   else if (!/not evidence/.test(full)) fail("agreement card lacks the pair-floor note");
-  else if (!/text-slate-400[^>]*title="only 6 pairs/.test(full)) fail("insufficient row not greyed with its n");
+  else if (!/text-slate-500[^>]*title="only 6 pairs/.test(full)) fail("insufficient row not greyed with its n");
   else if (!/90%/.test(full) || !/0\.71/.test(full)) fail("agreement/kappa not rendered");
   else console.log("  ok  agreement table: n, %, κ, greyed under-floor rows");
   const none = jq({ runs: runs2, report: { ...rep, turns_shared: 0, labels: [] }, a: rep.a, b: rep.b });
