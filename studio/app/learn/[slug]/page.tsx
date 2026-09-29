@@ -41,7 +41,7 @@ export default function LearnDocPage() {
             {section.title}
           </Link>
         )}
-        <span className="text-xs text-slate-400 font-mono truncate" title={doc.data.path}>
+        <span className="text-xs text-slate-500 font-mono truncate" title={doc.data.path}>
           {doc.data.path}
         </span>
         <a

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
@@ -21,6 +21,7 @@ import {
   Card,
   ErrorNote,
   Loading,
+  Pager,
   formatCost,
   formatDuration,
   useApi,
@@ -48,6 +49,10 @@ import { classifySimilar, type SimilarOutcome } from "@/lib/similarStates";
 type Tab = "timeline" | AnalysisKind | "similar";
 
 const TURN_HASH = /^#turn-(\d+)$/;
+
+// The Timeline draws this many top-level turns at a time. A long session
+// has thousands; drawn at once they are a page the browser cannot scroll.
+const TIMELINE_PAGE_SIZE = 100;
 
 const TAB_LABEL: Record<Tab, string> = {
   timeline: "Timeline",
@@ -208,8 +213,8 @@ function turnBadges(t: TurnRow) {
 // Latency is judged against the ASSISTANT's turns: a slow reply is the
 // harness's business, a slow user is a person thinking.
 function latencyTone(t: TurnRow): string {
-  if (t.latency_seconds == null) return "text-slate-400";
-  if (t.role !== "assistant") return "text-slate-400";
+  if (t.latency_seconds == null) return "text-slate-500";
+  if (t.role !== "assistant") return "text-slate-500";
   if (t.latency_seconds >= 120) return "text-rose-700";
   if (t.latency_seconds >= 30) return "text-amber-700";
   return "text-slate-500";
@@ -230,21 +235,49 @@ function Timeline({ data, feedback }: { data: SessionDetail; feedback: FeedbackC
   // the turn ourselves: `:target` is not re-evaluated for an element that
   // appears after the fragment navigation.
   const [target, setTarget] = useState<number | null>(null);
+  const nested = useMemo(() => nestTurns(data.turns), [data.turns]);
+  const [offset, setOffset] = useState(0);
+  const top = useRef<HTMLDivElement>(null);
+  // A page turned from the bottom pager starts at its top.
+  const turnPage = (next: number) => {
+    setOffset(next);
+    top.current?.scrollIntoView({ block: "start" });
+  };
   useEffect(() => {
     const onHash = () => {
       const m = TURN_HASH.exec(window.location.hash);
-      setTarget(m ? Number(m[1]) : null);
-      if (m)
-        document
-          .getElementById(`turn-${m[1]}`)
-          ?.scrollIntoView({ block: "start" });
+      const seq = m ? Number(m[1]) : null;
+      setTarget(seq);
+      if (seq == null) return;
+      // The turn may be on another page, or nested under a turn that is.
+      const at = nested.findIndex(
+        ({ turn, children }) =>
+          turn.sequence_num === seq || children.some((c) => c.sequence_num === seq),
+      );
+      if (at >= 0) setOffset(Math.floor(at / TIMELINE_PAGE_SIZE) * TIMELINE_PAGE_SIZE);
     };
     onHash();
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
-  }, [data]);
+  }, [nested]);
+  // After the page holding the turn has rendered.
+  useEffect(() => {
+    if (target != null)
+      document.getElementById(`turn-${target}`)?.scrollIntoView({ block: "start" });
+  }, [target, offset, nested]);
+  const visible = nested.slice(offset, offset + TIMELINE_PAGE_SIZE);
+  const pager = (
+    <Pager
+      noun="top-level turns"
+      offset={offset}
+      shown={visible.length}
+      pageSize={TIMELINE_PAGE_SIZE}
+      total={nested.length}
+      onOffset={turnPage}
+    />
+  );
   return (
-    <div className="space-y-3">
+    <div ref={top} className="space-y-3 scroll-mt-20">
       {data.latency && (
         <Card title="Response time (assistant turns)">
           <ResponseTimeCard latency={data.latency} turns={data.turns} />
@@ -257,7 +290,8 @@ function Timeline({ data, feedback }: { data: SessionDetail; feedback: FeedbackC
           text.
         </p>
       )}
-      {nestTurns(data.turns).map(({ turn, children }) => (
+      {nested.length > TIMELINE_PAGE_SIZE && pager}
+      {visible.map(({ turn, children }) => (
         <div key={turn.sequence_num}>
           <TurnCard t={turn} highlighted={turn.sequence_num === target} feedback={feedback} />
           {children.length > 0 && (
@@ -274,6 +308,7 @@ function Timeline({ data, feedback }: { data: SessionDetail; feedback: FeedbackC
           )}
         </div>
       ))}
+      {pager}
     </div>
   );
 }
@@ -328,11 +363,11 @@ function TurnCard({
             {text ? (
               text
             ) : t.archived ? (
-              <span className="text-slate-400">
+              <span className="text-slate-500">
                 (tool results only, no prose)
               </span>
             ) : (
-              <span className="text-slate-400">
+              <span className="text-slate-500">
                 (preview only — no text captured)
               </span>
             )}
@@ -363,7 +398,7 @@ function TurnCard({
               </Badge>
             ))}
             {t.interaction_quality != null && (
-              <span className="text-xs text-slate-400">
+              <span className="text-xs text-slate-500">
                 quality {t.interaction_quality}/5
               </span>
             )}

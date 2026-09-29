@@ -57,7 +57,7 @@ export default function FeedbackControl({
                 <span className="text-slate-500 break-words">— {r.rationale}</span>
               )}
               <span
-                className="text-slate-400"
+                className="text-slate-500"
                 title={`${r.source_type} · ${r.created_at}`}
               >
                 {sourceLabel(r)}

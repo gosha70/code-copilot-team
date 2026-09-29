@@ -62,7 +62,7 @@ export function errorRate(errors: number, turns: number): string {
 function Fact({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return (
     <div>
-      <dt className="text-[11px] uppercase tracking-wide text-slate-400">{label}</dt>
+      <dt className="text-[11px] uppercase tracking-wide text-slate-500">{label}</dt>
       <dd className={"text-slate-700 " + (mono ? "font-mono text-xs" : "")}>{value}</dd>
     </div>
   );
@@ -75,7 +75,7 @@ export function HarnessFacts({ data }: { data: SessionDetail }) {
   const state = harnessState(data);
   if (state === "unstamped") {
     return (
-      <p className="mt-2 text-xs text-slate-400" title={UNSTAMPED_NOTE}>
+      <p className="mt-2 text-xs text-slate-500" title={UNSTAMPED_NOTE}>
         Harness: unstamped
       </p>
     );
@@ -84,13 +84,13 @@ export function HarnessFacts({ data }: { data: SessionDetail }) {
     <dl className="mt-2 flex flex-wrap gap-x-6 gap-y-2 text-sm">
       {harnessFacts(data).map((f) => (
         <div key={f.label} title={f.title}>
-          <dt className="text-[11px] uppercase tracking-wide text-slate-400">{f.label}</dt>
+          <dt className="text-[11px] uppercase tracking-wide text-slate-500">{f.label}</dt>
           <dd className="font-mono text-xs text-slate-700">{f.value}</dd>
         </div>
       ))}
       {state === "mixed" && (
         <div title={MIXED_NOTE}>
-          <dt className="text-[11px] uppercase tracking-wide text-slate-400">Harness</dt>
+          <dt className="text-[11px] uppercase tracking-wide text-slate-500">Harness</dt>
           <dd className="text-xs text-amber-700">mixed — earliest stamp shown</dd>
         </div>
       )}

@@ -101,7 +101,7 @@ export default function MarkdownDoc({
           title="Opens on GitHub"
         >
           {children}
-          <span className="text-slate-400 text-xs"> ↗</span>
+          <span className="text-slate-500 text-xs"> ↗</span>
         </a>
       );
     },

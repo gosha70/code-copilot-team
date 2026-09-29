@@ -203,7 +203,7 @@ function Table({ data }: { data: TeamStatus }) {
               <td className="py-2 pr-4 text-xs text-slate-700">
                 {currentWork(d)}
                 {d.current && (
-                  <span className="text-slate-400">
+                  <span className="text-slate-500">
                     {" "}
                     · {d.current.checkpoint_count.toLocaleString()} checkpoints
                     · seen {d.current.at}

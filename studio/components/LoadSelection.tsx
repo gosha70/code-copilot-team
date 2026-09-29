@@ -137,7 +137,7 @@ export default function LoadSelectionPanel({
 
       {error && <p className="text-xs text-rose-700 px-3 py-2">{error}</p>}
       {!listing && !error && (
-        <p className="text-xs text-slate-400 px-3 py-2">Listing sessions…</p>
+        <p className="text-xs text-slate-500 px-3 py-2">Listing sessions…</p>
       )}
       {listing && listing.sessions.length === 0 && (
         <p className="text-xs text-slate-500 px-3 py-2">

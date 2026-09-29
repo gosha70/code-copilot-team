@@ -1067,6 +1067,28 @@ class TestApi(RegistryResetTestCase):
         self.assertEqual(self.client.get("/api/sessions", params={"sort": "nope"}).status_code, 400)
         self.assertEqual(self.client.get("/api/sessions", params={"order": "sideways"}).status_code, 400)
 
+    def test_sessions_report_the_total_and_page_through_it(self) -> None:
+        # The list is a page; `total` is what the filters match before
+        # limit and offset, under the same noise choice as the rows.
+        probe_id = self._insert_probe()
+        body = self.client.get("/api/sessions").json()
+        self.assertEqual((body["total"], body["limit"], body["offset"]), (1, 50, 0))
+        shown = {"include_noise": "true", "limit": 1}
+        first = self.client.get("/api/sessions", params=shown).json()
+        second = self.client.get("/api/sessions", params={**shown, "offset": 1}).json()
+        self.assertEqual((first["total"], second["total"]), (2, 2))
+        ids = [s["id"] for s in first["sessions"] + second["sessions"]]
+        self.assertEqual(len(ids), 2)
+        self.assertEqual(len(set(ids)), 2)
+        self.assertIn(probe_id, ids)
+        past = self.client.get("/api/sessions", params={**shown, "offset": 2}).json()
+        self.assertEqual((past["sessions"], past["total"]), ([], 2))
+        # a filter narrows the total with the rows
+        none = self.client.get("/api/sessions", params={"query": "no-such-project-anywhere"}).json()
+        self.assertEqual((none["sessions"], none["total"]), ([], 0))
+        self.assertEqual(self.client.get("/api/sessions", params={"offset": -1}).status_code, 400)
+        self.assertEqual(self.client.get("/api/sessions", params={"limit": 0}).status_code, 400)
+
     def test_session_tags_are_set_by_hand_shown_in_the_list_and_sortable(self) -> None:
         sid = self._session_id()
         row = self.client.get("/api/sessions").json()["sessions"][0]

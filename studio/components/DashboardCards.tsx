@@ -191,7 +191,7 @@ export function CostByOutcomeCard({
     return (
       <Card title="Cost by outcome">
         <StaleNote error={stale} />
-        <p className="text-sm text-slate-400">
+        <p className="text-sm text-slate-500">
           No priced turns yet. Cost needs a model with a rate in the pricing
           table; sentiment needs the judge step on the Analysis page.
         </p>
@@ -237,7 +237,7 @@ export function CostByOutcomeCard({
           ))}
         </div>
       )}
-      <p className="text-xs text-slate-400 mt-2">
+      <p className="text-xs text-slate-500 mt-2">
         Priced turns only; a phase or sentiment with no priced turn is not
         shown.
       </p>
@@ -258,7 +258,7 @@ export function LabelDistributionCard({
     return (
       <Card title="Label distribution">
         <StaleNote error={stale} />
-        <p className="text-sm text-slate-400">
+        <p className="text-sm text-slate-500">
           No heuristic labels yet — run the judge step on the Analysis page.
         </p>
       </Card>
@@ -285,7 +285,7 @@ export function LabelDistributionCard({
           </Link>
         ))}
       </div>
-      <p className="text-xs text-slate-400 mt-2">
+      <p className="text-xs text-slate-500 mt-2">
         Turns where the label fired. Click a label to read the turns.
       </p>
     </Card>
@@ -304,7 +304,7 @@ export function RecentErrorsCard({
     return (
       <Card title="Recent tool errors">
         <StaleNote error={stale} />
-        <p className="text-sm text-slate-400">No tool errors recorded.</p>
+        <p className="text-sm text-slate-500">No tool errors recorded.</p>
       </Card>
     );
   }
@@ -408,7 +408,7 @@ export function PhaseProcessCard({
           </div>
         ))}
       </div>
-      <p className="text-xs text-slate-400 mt-2">{data.absence_note}</p>
+      <p className="text-xs text-slate-500 mt-2">{data.absence_note}</p>
     </Card>
   );
 }

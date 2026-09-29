@@ -89,7 +89,7 @@ export default function PathPicker({
           </span>
           <button
             onClick={onClose}
-            className="text-slate-400 hover:text-slate-700 text-sm"
+            className="text-slate-500 hover:text-slate-700 text-sm"
             aria-label="Close"
           >
             ✕

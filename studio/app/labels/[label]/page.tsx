@@ -88,7 +88,7 @@ export default function LabelPage() {
 
       <Card title={`Turns where ${label} fired`}>
         {traces.data.traces.length === 0 ? (
-          <p className="text-sm text-slate-400">
+          <p className="text-sm text-slate-500">
             No archived turn carries this label yet.
           </p>
         ) : (

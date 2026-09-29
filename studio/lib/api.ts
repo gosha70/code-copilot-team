@@ -290,6 +290,10 @@ export interface CatalogueResult {
 
 export interface SessionsResponse {
   sessions: SessionRow[];
+  /** How many the filters match before limit and offset. */
+  total: number;
+  limit: number;
+  offset: number;
   /** How many the same filters would add with include_noise. */
   excluded_noise: number;
   include_noise: boolean;
@@ -1784,8 +1788,14 @@ export const api = {
     includeNoise = false,
     sort: SessionSort = "started_at",
     order: "asc" | "desc" = "desc",
+    offset = 0,
   ) => {
-    const p = new URLSearchParams({ include_noise: String(includeNoise), sort, order });
+    const p = new URLSearchParams({
+      include_noise: String(includeNoise),
+      sort,
+      order,
+      offset: String(offset),
+    });
     for (const [k, v] of Object.entries(filters)) {
       if (v !== undefined && v !== null && v !== "") p.set(k, String(v));
     }

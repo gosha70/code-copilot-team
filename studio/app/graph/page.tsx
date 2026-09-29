@@ -8,7 +8,7 @@ import { api } from "@/lib/api";
 // Cytoscape touches the DOM — load the explorer client-only.
 const GraphExplorer = dynamic(() => import("@/components/GraphExplorer"), {
   ssr: false,
-  loading: () => <div className="text-slate-400 text-sm py-8">Loading explorer…</div>,
+  loading: () => <div className="text-slate-500 text-sm py-8">Loading explorer…</div>,
 });
 
 export default function GraphPage() {

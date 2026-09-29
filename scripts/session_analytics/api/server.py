@@ -1391,7 +1391,8 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
     # ── sessions ───────────────────────────────────────────────────────
     @app.get("/api/sessions")
     def sessions(
-        query: str = "", copilot: str = "", limit: int = 50, include_noise: bool = False,
+        query: str = "", copilot: str = "", limit: int = 50, offset: int = 0,
+        include_noise: bool = False,
         sort: str = mcp_tools.SESSION_SORT_DEFAULT, order: str = "desc",
         date_from: str = "", date_to: str = "", tag: str = "",
         developer: str = "", model: str = "", tool: str = "", harness: str = "",
@@ -1401,11 +1402,15 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         """The list, noise excluded by default (#307); ``excluded_noise``
         is how many the same filters would add with include_noise=1, so
         the page's toggle can say "Show excluded (n)". ``sort``/``order``
-        are the grid's column headers; the limit applies after ordering.
+        are the grid's column headers; the limit applies after ordering,
+        and ``total`` is how many the filters match before ``limit`` and
+        ``offset`` — what the page's "showing n of m" and pager read.
         The filters (#371 A2) combine with AND; ``facets`` are the values
         they can take, over the same population as the list."""
         if order not in ("asc", "desc"):
             raise HTTPException(status_code=400, detail="order must be asc or desc")
+        if limit < 1 or offset < 0:
+            raise HTTPException(status_code=400, detail="limit must be at least 1 and offset at least 0")
         noise = load_config().noise
         filters = dict(
             copilot=copilot or None, date_from=date_from or None, date_to=date_to or None,
@@ -1417,9 +1422,12 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         try:
             try:
                 rows = mcp_tools.search_sessions(
-                    conn, query or None, limit=limit,
+                    conn, query or None, limit=limit, offset=offset,
                     noise=noise, include_noise=include_noise,
                     sort=sort, descending=(order == "desc"), **filters,
+                )
+                total = mcp_tools.count_sessions(
+                    conn, query or None, noise=noise, include_noise=include_noise, **filters,
                 )
                 excluded = mcp_tools.count_noise_sessions(conn, noise, query or None, **filters)
             except (
@@ -1430,6 +1438,9 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
                 raise HTTPException(status_code=400, detail=str(exc)) from None
             return {
                 "sessions": rows,
+                "total": total,
+                "limit": limit,
+                "offset": offset,
                 "sort": sort,
                 "order": order,
                 "excluded_noise": excluded,

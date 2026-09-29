@@ -66,7 +66,7 @@ export default function DashboardPage() {
       <div className="space-y-6">
         <div className="flex items-baseline gap-2">
           <h1 className="text-2xl font-bold">Dashboard</h1>
-          <span className="text-slate-400 text-xs">
+          <span className="text-slate-500 text-xs">
             Auto-refreshing every {REFRESH_MS / 1000}s
           </span>
         </div>
@@ -97,7 +97,7 @@ export default function DashboardPage() {
     <div className="space-y-6">
       <div className="flex items-baseline gap-2">
         <h1 className="text-2xl font-bold">Dashboard</h1>
-        <span className="text-slate-400 text-xs">
+        <span className="text-slate-500 text-xs">
           Auto-refreshing every {REFRESH_MS / 1000}s
         </span>
       </div>
@@ -162,7 +162,7 @@ export default function DashboardPage() {
 
         <Card title="Sentiment distribution">
           {data.sentiment_distribution.length === 0 ? (
-            <p className="text-sm text-slate-400">
+            <p className="text-sm text-slate-500">
               No heuristic labels yet — run the Analysis tab.
             </p>
           ) : (

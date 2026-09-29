@@ -60,7 +60,7 @@ function InvalidSetRow({ set }: { set: RoutingInvalidEvidenceSet }) {
         <span className="text-slate-500 text-xs"> [{set.artifact}]</span>
         <span className="text-slate-600 text-xs"> — {set.detail}</span>
       </td>
-      <td className="py-2 text-xs text-slate-400">not consumable</td>
+      <td className="py-2 text-xs text-slate-500">not consumable</td>
     </tr>
   );
 }
@@ -85,7 +85,7 @@ export default function RoutingPage() {
       </div>
 
       {routingSettings && (
-        <p className="text-xs text-slate-400">
+        <p className="text-xs text-slate-500">
           Evidence roots:{" "}
           {routingSettings.configured
             ? `${routingSettings.root_count} configured`
@@ -139,7 +139,7 @@ export default function RoutingPage() {
               </tbody>
             </table>
           </div>
-          <p className="text-xs text-slate-400 mt-3">
+          <p className="text-xs text-slate-500 mt-3">
             Invalid sets are rendered with their sanitized failure code — never
             silently skipped — and produce no recommendations.
           </p>

@@ -231,7 +231,7 @@ function ExchangeView({ x, onStop }: { x: Exchange; onStop: () => void }) {
           <ol className="text-xs text-slate-600 space-y-1 mb-3">
             {x.steps.map((s) => (
               <li key={s.n} className="flex gap-2">
-                <span className="text-slate-400 tabular-nums w-4 shrink-0">
+                <span className="text-slate-500 tabular-nums w-4 shrink-0">
                   {s.n}.
                 </span>
                 <div className="min-w-0">
@@ -352,7 +352,7 @@ function ExchangeView({ x, onStop }: { x: Exchange; onStop: () => void }) {
           </div>
         )}
         {x.answer !== null && x.judge && (
-          <p className="text-[11px] text-slate-400 mt-2">
+          <p className="text-[11px] text-slate-500 mt-2">
             Answered by {x.judge} after {x.steps.length} lookup
             {x.steps.length === 1 ? "" : "s"}.
           </p>

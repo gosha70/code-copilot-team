@@ -34,7 +34,7 @@ function Search() {
     <div className="space-y-4">
       <div className="flex items-baseline gap-2">
         <h1 className="text-2xl font-bold">Search</h1>
-        <span className="text-slate-400 text-xs">{SEARCH_VS_ASK}</span>
+        <span className="text-slate-500 text-xs">{SEARCH_VS_ASK}</span>
       </div>
       <form
         className="flex gap-2"
@@ -71,7 +71,7 @@ function Search() {
                 <Link className="text-blue-700 hover:underline text-sm" href={hitHref(h)}>
                   session #{h.session_ref}, turn #{h.sequence_num}
                 </Link>
-                <span className="ml-2 text-xs text-slate-400">
+                <span className="ml-2 text-xs text-slate-500">
                   {h.project_path ?? ""}
                   {h.redaction_mode && h.redaction_mode !== "none" ? ` · redacted: ${h.redaction_mode}` : ""}
                 </span>
