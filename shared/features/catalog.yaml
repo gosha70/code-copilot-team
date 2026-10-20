@@ -108,7 +108,7 @@ features:
       session, with a gating reviewer per phase, bounded fix sessions, a
       cost and wall-clock cap, a ledger, and a PR at the end.
     maturity: beta
-    since: unreleased
+    since: v2.0.0
     adapters:
       claude-code: enforced
       pi: enforced
@@ -133,7 +133,7 @@ features:
       rounds or session turns exceed the caps frozen at admission, and the
       Studio raises an alert at 80% and 100%.
     maturity: beta
-    since: unreleased
+    since: v2.0.0
     adapters:
       claude-code: enforced
       pi: enforced
@@ -153,7 +153,7 @@ features:
       proves it, and the driver refuses a phase whose coverage fell below
       the frozen contract.
     maturity: beta
-    since: unreleased
+    since: v2.0.0
     adapters:
       claude-code: enforced
       pi: enforced
@@ -174,7 +174,7 @@ features:
       runtime criteria before the phase can land, so a green unit suite
       cannot hide a service that does not come up.
     maturity: experimental
-    since: unreleased
+    since: v2.0.0
     adapters:
       claude-code: enforced
       pi: enforced
@@ -194,7 +194,7 @@ features:
       A UI feature's run captures screenshots against the contract's visual
       criteria and parks rather than passes when the capture cannot be made.
     maturity: experimental
-    since: unreleased
+    since: v2.0.0
     adapters:
       claude-code: enforced
       pi: enforced
@@ -333,7 +333,7 @@ features:
       project's own documentation are browsed in one local web app with a
       settings page for the judge and embedding providers.
     maturity: beta
-    since: unreleased
+    since: v2.0.0
     adapters:
       claude-code: neutral
       pi: neutral
@@ -352,7 +352,7 @@ features:
       an execution profile, with validate, status and explain commands and a
       scheduled tick.
     maturity: experimental
-    since: unreleased
+    since: v2.0.0
     adapters:
       claude-code: enforced
       pi: enforced
@@ -391,7 +391,7 @@ features:
       One provider-neutral command lists every slash command, skill and
       capability and drives routing; doctor and config are planned.
     maturity: experimental
-    since: unreleased
+    since: v2.0.0
     adapters:
       claude-code: neutral
       pi: neutral
