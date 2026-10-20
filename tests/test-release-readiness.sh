@@ -271,9 +271,13 @@ else
   section "live stack: synthesize, ingest, serve, assert"
   WORK=$(mktemp -d "${TMPDIR:-/tmp}/cct-relcheck.XXXXXX")
   if ! require_free_port "$API_PORT" "API" || ! require_free_port "$UI_PORT" "Studio"; then
+    # STOP. Printing SKIP and continuing would synthesize, ingest, launch
+    # and then aim every check — including a feedback WRITE — at whatever
+    # process already holds that port. With a mistyped override that is
+    # someone's real Studio and their real store.
     STACK_RAN=0
-    echo "  SKIP: the live stack did not run"
-  fi
+    echo "  SKIP: the live stack did not run — no request was sent to the port holder"
+  else
   python3 tests/release/synth_store.py "$WORK/transcripts" > "$WORK/shape.json" 2>/dev/null
   check "synthetic transcripts were written" "[[ -s '$WORK/shape.json' ]]"
   TOTAL=$(python3 -c "import json;print(json.load(open('$WORK/shape.json'))['listable'])" 2>/dev/null || echo 0)
@@ -412,6 +416,7 @@ print(next((s['id'] for s in rows if s['session_id'] == want), ''))
     fi
   else
     echo "  FAIL: the API did not come up — see $WORK/api.log"; FAIL=$((FAIL + 1))
+  fi
   fi
 fi
 
