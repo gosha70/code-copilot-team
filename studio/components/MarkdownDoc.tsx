@@ -149,7 +149,7 @@ export default function MarkdownDoc({
       return <CodeBlock className={props.className}>{props.children}</CodeBlock>;
     },
     code: ({ children }) => (
-      <code className="bg-slate-100 rounded px-1 py-0.5 text-[0.9em]">{children}</code>
+      <code className="bg-slate-100 text-slate-700 rounded px-1 py-0.5 text-[0.9em]">{children}</code>
     ),
     table: ({ children }) => (
       <div className="overflow-x-auto my-3">

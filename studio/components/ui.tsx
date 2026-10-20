@@ -333,7 +333,7 @@ export function ErrorNote({ error }: { error: string }) {
   return (
     <div className="bg-red-50 border border-red-200 text-red-700 rounded p-3 text-sm">
       {error}
-      <div className="text-red-400 mt-1">
+      <div className="text-red-700 mt-1">
         Is the API running? Start it with <code>./scripts/session-analytics serve</code>.
       </div>
     </div>
