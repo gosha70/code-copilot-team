@@ -764,7 +764,7 @@ export default function SettingsPage() {
         </div>
         <p className="mt-2 text-xs text-slate-500">
           Judge in effect:{" "}
-          <code className="bg-slate-100 px-1 rounded">{models?.configured.spec ?? cfg.judge_default}</code>
+          <code className="bg-slate-100 text-slate-700 px-1 rounded">{models?.configured.spec ?? cfg.judge_default}</code>
           {models?.configured.source === "settings" ? " (from your saved settings)" : " (the packaged default)"}
           {models && models.url ? (
             models.reachable ? (
@@ -776,7 +776,7 @@ export default function SettingsPage() {
             )
           ) : null}
           . Embedding in effect:{" "}
-          <code className="bg-slate-100 px-1 rounded">
+          <code className="bg-slate-100 text-slate-700 px-1 rounded">
             {embedModels?.configured.model_set ? embedModels.configured.spec : "none — choose an embedding model above"}
           </code>
           . All three tests use the saved settings — Save first.
