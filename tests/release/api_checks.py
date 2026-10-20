@@ -233,11 +233,15 @@ def main() -> int:
 
     # ── every page's endpoint answers ─────────────────────────────────
     print("every Studio surface has a live endpoint")
+    # 200, not "anything below 500". A deleted or renamed route answers
+    # 404, which the old condition accepted — so a page losing its
+    # endpoint entirely would have passed as healthy.
     for label, path in [
         ("dashboard KPIs", "/api/dashboard/kpis"),
         ("benchmark", "/api/dashboard/benchmark"),
-        ("harness compare (#371 A4)", "/api/harness"),
-        ("team (#174)", "/api/team"),
+        ("harness compare (#371 A4)", "/api/dashboard/harness"),
+        ("team status (#174)", "/api/team/status"),
+        ("team alerts (#174)", "/api/team/alerts"),
         ("runs (#190)", "/api/runs"),
         ("pipeline status", "/api/pipeline/status"),
         ("docs registry (Learn)", "/api/docs"),
@@ -246,10 +250,23 @@ def main() -> int:
         ("graph catalogue", "/api/graph/catalogue"),
     ]:
         status, payload = get(path)
-        # A page with no data must still answer; only a 5xx or a dead
-        # socket is a failure.
-        check(f"{label} answers", status not in (0,) and status < 500,
-              f"status={status} {str(payload)[:120]}")
+        check(f"{label} answers 200", status == 200,
+              f"status={status} — {'route missing' if status == 404 else str(payload)[:110]}")
+
+    # A route that exists but is empty must still be a document, not a
+    # bare null: the pages render from these shapes.
+    for label, path in [("runs", "/api/runs"), ("team status", "/api/team/status")]:
+        _, payload = get(path)
+        check(f"{label} returns a document even when empty",
+              isinstance(payload, (dict, list)),
+              f"got {type(payload).__name__}")
+
+    # The negative control: a route that does NOT exist must 404. Without
+    # this, a server answering 200 to everything would pass every check
+    # above.
+    check("a route that does not exist answers 404",
+          get("/api/definitely-not-a-route")[0] == 404,
+          "the liveness checks above cannot distinguish a real route")
 
     print(f"\napi checks: {PASS} passed, {FAIL} failed")
     return 1 if FAIL else 0

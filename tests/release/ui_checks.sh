@@ -146,14 +146,27 @@ settle 3
 again=$(ev '() => String(!!document.getElementById("turn-150"))')
 check "the same turn link works a second time" "[[ '$again' == 'true' ]]"
 
-# ── P1-1: explanatory text clears the contrast floor ───────────────────
-echo "explanatory text clears the contrast floor (P1-1)"
+# ── P1-1: text clears the contrast floor ───────────────────────────────
+# Measured, not inferred. The previous check looked for the Tailwind
+# class `text-slate-400`, which tested the fix that was applied rather
+# than the property that was wanted: any other pale colour, an inline
+# style or a new utility would have passed while the text stayed
+# unreadable. The collector resolves each text element's foreground and
+# effective background in the page; contrast_check.py applies WCAG 2.2
+# SC 1.4.3 and has its own --selftest for the arithmetic.
+echo "text clears the contrast floor, measured (P1-1)"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+COLLECTOR="$(cat "$HERE/contrast-collector.txt")"
 for path in "/" "/sessions" "/settings" "/learn"; do
   P goto "$URL$path" >/dev/null 2>&1; settle 3
-  # Only enabled text matters: a disabled control is exempt from the
-  # contrast requirement, and the Studio keeps those pale on purpose.
-  pale=$(ev '() => String([...document.querySelectorAll("*")].filter(e => e.className && typeof e.className === "string" && /(^|\s)text-slate-400(\s|$)/.test(e.className) && !e.disabled && !e.closest("[disabled]")).length)')
-  check "$path has no pale explanatory text" "[[ '$pale' == '0' ]]" "$pale elements still text-slate-400"
+  measured=$(ev "$COLLECTOR")
+  verdict=$(python3 "$HERE/contrast_check.py" "$measured" 2>&1)
+  rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    echo "  PASS: $path — $verdict"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: $path — ${verdict//$'\n'/ }"; FAIL=$((FAIL + 1))
+  fi
 done
 
 # ── reflow and console health ──────────────────────────────────────────

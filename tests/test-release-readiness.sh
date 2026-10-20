@@ -32,6 +32,9 @@ UI_PORT="${CCT_RELCHECK_UI_PORT:-3002}"
 EXPECT_VERSION=""
 RUN_STACK=1
 REQUIRE_BROWSER=""
+# A verdict is only a release verdict when every layer actually ran.
+STACK_RAN=0
+BROWSER_RAN=0
 PASS=0
 FAIL=0
 WARN=0
@@ -67,18 +70,63 @@ gate() {
   fi
 }
 
+# Only processes this script started are ever signalled. Each launcher
+# writes its own pid after detaching; killing by "whatever holds the
+# port" would terminate a developer's unrelated process.
+STARTED_PIDS=()
+record_pid() {
+  local pid_file="$1"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [[ -s "$pid_file" ]] && { STARTED_PIDS+=("$(cat "$pid_file")"); return 0; }
+    python3 -c "import time; time.sleep(0.5)"
+  done
+  warn "could not record the pid from $pid_file; that process must be stopped by hand"
+  return 1
+}
 cleanup() {
-  for port in "$API_PORT" "$UI_PORT"; do
-    local pid
-    pid=$(lsof -nP -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)
+  for pid in ${STARTED_PIDS+"${STARTED_PIDS[@]}"}; do
     [[ -n "$pid" ]] && kill "$pid" 2>/dev/null
   done
-  [[ -n "$WORK" && -d "$WORK" ]] && rm -rf "$WORK" 2>/dev/null
+  # The work directory holds the logs the failure messages point at, so
+  # it survives a failing run and is named in the summary.
+  if [[ -n "$WORK" && -d "$WORK" ]]; then
+    if [[ "$FAIL" -eq 0 ]]; then
+      rm -rf "$WORK" 2>/dev/null
+    else
+      echo
+      echo "  logs kept for the failures above: $WORK"
+    fi
+  fi
   return 0
 }
 trap cleanup EXIT
 
-echo "release readiness — $(git rev-parse --short HEAD 2>/dev/null)"
+# A busy port is refused, not cleared.
+require_free_port() {
+  local port="$1" label="$2" holder
+  holder=$(lsof -nP -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)
+  if [[ -n "$holder" ]]; then
+    echo "  FAIL: port $port ($label) is held by pid $holder"
+    echo "        this script will not stop a process it did not start."
+    echo "        Stop it, or set CCT_RELCHECK_API_PORT / CCT_RELCHECK_UI_PORT."
+    FAIL=$((FAIL + 1))
+    return 1
+  fi
+  return 0
+}
+
+# Provenance. A verdict that names only a commit is misleading when the
+# tree is dirty: what ran is the working tree, not that commit.
+HEAD_SHA=$(git rev-parse HEAD 2>/dev/null || echo unknown)
+DIRTY_FILES=$(git status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+# Digest the inputs whose bytes decide the outcome, tracked or not.
+INPUT_DIGEST=$(cat package.json package-lock.json studio/package.json \
+  studio/package-lock.json adapters/pi/package.json CHANGELOG.md 2>/dev/null \
+  | shasum -a 256 | cut -c1-16)
+echo "release readiness"
+echo "  commit:        $HEAD_SHA"
+echo "  working tree:  $([[ "$DIRTY_FILES" == "0" ]] && echo "clean" || echo "$DIRTY_FILES path(s) differ (modified or untracked) — THE TREE WAS TESTED, NOT THE COMMIT")"
+echo "  input digest:  $INPUT_DIGEST  (package manifests, lockfiles, CHANGELOG)"
 
 # ── toolchain ──────────────────────────────────────────────────────────
 section "toolchain"
@@ -217,17 +265,15 @@ fi
 # ── the live stack ─────────────────────────────────────────────────────
 if [[ "$RUN_STACK" -eq 0 ]]; then
   section "live stack"
-  echo "  SKIP: --no-stack given"
+  echo "  SKIP: --no-stack given — the API and browser claims are UNVERIFIED"
 else
+  STACK_RAN=1
   section "live stack: synthesize, ingest, serve, assert"
   WORK=$(mktemp -d "${TMPDIR:-/tmp}/cct-relcheck.XXXXXX")
-  cleanup_ports() {
-    for port in "$API_PORT" "$UI_PORT"; do
-      local pid; pid=$(lsof -nP -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)
-      [[ -n "$pid" ]] && { echo "  (port $port busy, freeing)"; kill "$pid" 2>/dev/null; }
-    done
-  }
-  cleanup_ports
+  if ! require_free_port "$API_PORT" "API" || ! require_free_port "$UI_PORT" "Studio"; then
+    STACK_RAN=0
+    echo "  SKIP: the live stack did not run"
+  fi
   python3 tests/release/synth_store.py "$WORK/transcripts" > "$WORK/shape.json" 2>/dev/null
   check "synthetic transcripts were written" "[[ -s '$WORK/shape.json' ]]"
   TOTAL=$(python3 -c "import json;print(json.load(open('$WORK/shape.json'))['listable'])" 2>/dev/null || echo 0)
@@ -239,8 +285,33 @@ else
   else
     echo "  FAIL: ingest failed — see $WORK/ingest.log"; FAIL=$((FAIL + 1))
   fi
-  gate "threads --backfill is idempotent" env PYTHONPATH=scripts:. \
+  # Idempotence is a property of the SECOND run, so run it twice and
+  # compare the lineage the store holds afterwards. Running once and
+  # calling it idempotent asserted nothing.
+  lineage_counts() {
+    PYTHONPATH=scripts:. "$REPO_DIR/.venv/bin/python" - "$WORK/store.db" <<'PYC' 2>/dev/null
+import sys
+from session_analytics.relational.db import Database
+conn = Database.connect(f"sqlite:///{sys.argv[1]}")
+out = []
+for table in ("session_thread", "thread_member", "thread_edge",
+              "thread_relation_candidate"):
+    try:
+        out.append(str(conn.query_one(f"SELECT COUNT(*) FROM {table}")[0]))
+    except Exception:
+        out.append("?")
+print(",".join(out))
+PYC
+  }
+  gate "threads --backfill runs" env PYTHONPATH=scripts:. \
     "$REPO_DIR/.venv/bin/python" -m session_analytics threads --backfill --db "sqlite:///$WORK/store.db"
+  BACKFILL_1=$(lineage_counts)
+  gate "threads --backfill runs a second time" env PYTHONPATH=scripts:. \
+    "$REPO_DIR/.venv/bin/python" -m session_analytics threads --backfill --db "sqlite:///$WORK/store.db"
+  BACKFILL_2=$(lineage_counts)
+  check "a second backfill changes nothing (idempotent)" \
+    "[[ '$BACKFILL_1' == '$BACKFILL_2' && '$BACKFILL_1' != '' ]]" \
+    "threads/members/edges/candidates went $BACKFILL_1 -> $BACKFILL_2"
   gate "doctor reports the store" env PYTHONPATH=scripts:. \
     "$REPO_DIR/.venv/bin/python" -m session_analytics doctor --db "sqlite:///$WORK/store.db"
 
@@ -253,12 +324,14 @@ os.setsid()
 if os.fork(): os._exit(0)
 log = open("$WORK/api.log", "ab", buffering=0)
 os.dup2(log.fileno(), 1); os.dup2(log.fileno(), 2)
+open("$WORK/api.pid", "w").write(str(os.getpid()))
 import uvicorn
 from session_analytics.api.server import create_app
 uvicorn.run(create_app("sqlite:///$WORK/store.db", kuzu_path="$WORK/graph", ui_port=$UI_PORT),
             host="127.0.0.1", port=$API_PORT, log_level="warning")
 PY
   "$REPO_DIR/.venv/bin/python" "$WORK/api.py"
+  record_pid "$WORK/api.pid"
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     curl -sf -o /dev/null "http://127.0.0.1:$API_PORT/api/sessions" && break
     python3 -c "import time; time.sleep(2)"
@@ -298,11 +371,13 @@ os.setsid()
 if os.fork(): os._exit(0)
 log = open("$WORK/ui.log", "ab", buffering=0)
 os.dup2(log.fileno(), 1); os.dup2(log.fileno(), 2)
+open("$WORK/ui.pid", "w").write(str(os.getpid()))
 os.chdir("$WORK/studio")
 os.environ["NEXT_PUBLIC_API_BASE"] = "http://127.0.0.1:$API_PORT"
 os.execvp("npx", ["npx", "next", "start", "-p", "$UI_PORT"])
 PY
       python3 "$WORK/ui.py"
+      record_pid "$WORK/ui.pid"
       for _ in 1 2 3 4 5 6 7 8 9 10; do
         curl -sf -o /dev/null "http://127.0.0.1:$UI_PORT/" && break
         python3 -c "import time; time.sleep(2)"
@@ -326,6 +401,8 @@ print(next((s['id'] for s in rows if s['session_id'] == want), ''))
         fi
         if grep -q "SKIP: playwright-cli" <<<"$UI_OUT"; then
           warn "the browser layer did not run — the three P0 fixes are UNVERIFIED by this run"
+        else
+          BROWSER_RAN=1
         fi
       else
         echo "  FAIL: could not resolve the large session's id"; FAIL=$((FAIL + 1))
@@ -361,11 +438,31 @@ section "summary"
 echo "  passed:   $PASS"
 echo "  failed:   $FAIL"
 echo "  warnings: $WARN"
-if [[ "$FAIL" -eq 0 ]]; then
+echo "  commit:   $HEAD_SHA"
+echo "  tree:     $([[ "$DIRTY_FILES" == "0" ]] && echo "clean" || echo "$DIRTY_FILES path(s) differ from the commit")"
+echo "  inputs:   $INPUT_DIGEST"
+
+if [[ "$FAIL" -ne 0 ]]; then
   echo
-  echo "  Release candidate is READY for the manual items above."
-  exit 0
+  echo "  NOT READY: $FAIL check(s) failed."
+  exit 1
+fi
+
+# Zero failures is not a release verdict when a layer never ran. Naming
+# what was skipped is the difference between "nothing failed" and
+# "everything was checked".
+INCOMPLETE=()
+[[ "$STACK_RAN" -eq 0 ]] && INCOMPLETE+=("the live stack (API and browser claims)")
+[[ "$STACK_RAN" -eq 1 && "$BROWSER_RAN" -eq 0 ]] && INCOMPLETE+=("the browser layer (the three P0 fixes)")
+[[ "$DIRTY_FILES" != "0" ]] && INCOMPLETE+=("a clean tree — $DIRTY_FILES path(s) differ from $HEAD_SHA, so the verdict describes the tree, not that commit")
+
+if [[ ${#INCOMPLETE[@]} -gt 0 ]]; then
+  echo
+  echo "  INCOMPLETE — nothing failed, but this is not a release verdict."
+  for item in "${INCOMPLETE[@]}"; do echo "    missing: $item"; done
+  echo "  Re-run with the live stack and --require-browser on a clean tree."
+  exit 2
 fi
 echo
-echo "  Release candidate is NOT ready: $FAIL check(s) failed."
-exit 1
+echo "  READY for the manual items above."
+exit 0
