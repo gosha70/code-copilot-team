@@ -183,6 +183,21 @@ fi
 
 for path in "/" "/sessions" "/settings" "/learn" ${DOC_SLUG:+"$DOC_SLUG"}; do
   P goto "$URL$path" >/dev/null 2>&1; settle 3
+  # The document is only worth measuring if it actually renders a fence.
+  # The gate takes whichever document the Learn index lists first, so
+  # reordering the intents could put a fence-free page there and drop the
+  # dark block out of measurement — silently, which is how the inline-chip
+  # regression survived in the first place. Assert it, do not assume it.
+  if [[ -n "$DOC_SLUG" && "$path" == "$DOC_SLUG" ]]; then
+    fences=$(ev '() => String(document.querySelectorAll("pre code").length)')
+    if [[ "${fences:-0}" -gt 0 ]]; then
+      echo "  PASS: $path renders $fences fenced block(s), so both chip styles are measured"
+      PASS=$((PASS + 1))
+    else
+      echo "  FAIL: $path renders no fenced code — the dark block is NOT measured"
+      FAIL=$((FAIL + 1))
+    fi
+  fi
   measured=$(ev "$COLLECTOR")
   verdict=$(python3 "$HERE/contrast_check.py" "$measured" 2>&1)
   rc=$?
