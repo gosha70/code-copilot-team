@@ -99,6 +99,20 @@ check "on-demand skills (configuration layers)" "$r_ondemand"      "$INSTALLED_S
 check "agents (configuration layers)"           "$r_agents"        "$AGENTS"
 check "codex skills (install guide)"            "$r_codex"         "$CODEX_SKILLS"
 
+# ── The install guide's clone pin ──
+# The first instruction a new user follows is `git clone --branch vX.Y.Z`.
+# Nothing kept it in step with the release: it sat at v1.1.0 while v2.0.0
+# was being prepared, which would have handed every new reader the
+# superseded release. The version source is adapters/pi/package.json, the
+# same carrier the release checks treat as authoritative.
+PINNED_CLONE=$(grep -oE 'git clone --branch v[0-9]+\.[0-9]+\.[0-9]+' docs/install.md | head -1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' || true)
+REPO_VERSION="v$(python3 -c "import json;print(json.load(open('adapters/pi/package.json'))['version'])" 2>/dev/null)"
+if [[ -z "$PINNED_CLONE" ]]; then
+    fail "install guide: no 'git clone --branch vX.Y.Z' line found to check"
+else
+    check "install guide clone pin" "$PINNED_CLONE" "$REPO_VERSION"
+fi
+
 # ── Documentation index completeness ──
 # lychee proves every link resolves; nothing proved the reverse, so a guide
 # could ship unlisted (agent-teams.md and hooks-test-cases.md both did until
