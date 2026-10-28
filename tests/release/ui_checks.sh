@@ -155,9 +155,33 @@ check "the same turn link works a second time" "[[ '$again' == 'true' ]]"
 # effective background in the page; contrast_check.py applies WCAG 2.2
 # SC 1.4.3 and has its own --selftest for the arithmetic.
 echo "text clears the contrast floor, measured (P1-1)"
+# NOT covered: an Ask answer. Its markdown renders only after a live
+# model call, which this suite must not depend on. Ask's component map
+# is therefore unmeasured here — it reuses MarkdownDoc's CodeBlock so
+# that fences cannot drift again, but inline chips in an answer are
+# proven only by that shared code, not by this gate.
 HERE="$(cd "$(dirname "$0")" && pwd)"
 COLLECTOR="$(cat "$HERE/contrast-collector.txt")"
-for path in "/" "/sessions" "/settings" "/learn"; do
+# A rendered Learn DOCUMENT, not just the index: the index is a link
+# list, so neither markdown renderer was ever measured here. A fenced
+# code block inside a document is exactly where the inline-chip
+# regression lived, and it would have passed this gate unseen.
+DOC_SLUG=$(ev '() => { const a=[...document.querySelectorAll("a[href^=\"/learn/\"]")][0]; return a ? a.getAttribute("href") : ""; }')
+if [[ -z "$DOC_SLUG" ]]; then
+  P goto "$URL/learn" >/dev/null 2>&1; settle 3
+  DOC_SLUG=$(ev '() => { const a=[...document.querySelectorAll("a[href^=\"/learn/\"]")][0]; return a ? a.getAttribute("href") : ""; }')
+fi
+# FAIL, do not skip. An empty slug means no document was measured, and a
+# gate that quietly measures nothing is how the inline-chip regression
+# reached a release in the first place.
+if [[ -z "$DOC_SLUG" ]]; then
+  echo "  FAIL: no /learn/ document link found — the markdown renderer was NOT measured"
+  FAIL=$((FAIL + 1))
+else
+  echo "    (measuring a rendered document: $DOC_SLUG)"
+fi
+
+for path in "/" "/sessions" "/settings" "/learn" ${DOC_SLUG:+"$DOC_SLUG"}; do
   P goto "$URL$path" >/dev/null 2>&1; settle 3
   measured=$(ev "$COLLECTOR")
   verdict=$(python3 "$HERE/contrast_check.py" "$measured" 2>&1)
