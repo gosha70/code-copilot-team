@@ -1606,15 +1606,35 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
                     conn, session_id, kind, judge=judge, force=req.force,
                 )
             except JudgeTransportError as exc:
+                # A timeout is NOT the same failure as an unreachable
+                # backend, and telling the reader to check that the model
+                # is pulled when it was pulled and running sends them
+                # looking in the wrong place. Say which one happened, and
+                # for a timeout say how long it waited: a local 27B model
+                # on a capped transcript can genuinely need longer than
+                # the limit, and the fix is a smaller model or a shorter
+                # session, not a reinstall.
+                timed_out = "timed out" in str(exc).lower()
+                if timed_out:
+                    guidance = (
+                        f"The backend answered but did not finish within "
+                        f"{sa.ANALYSIS_TIMEOUT_SECONDS}s. A large local model over a "
+                        f"long transcript can need longer — the work is "
+                        f"discarded when the limit is reached. Try a smaller "
+                        f"or faster model under Settings → LLM-as-Judge, or a "
+                        f"shorter session."
+                    )
+                else:
+                    guidance = (
+                        "Check the LLM-as-Judge settings — is the backend "
+                        "running and the model pulled? — then run it again."
+                    )
                 raise HTTPException(
                     status_code=503,
                     detail={
                         "error": f"the judge ({label}) did not answer: {exc}",
                         "prerequisite": "judge",
-                        "guidance": (
-                            "Check the LLM-as-Judge settings — is the backend "
-                            "running and the model pulled? — then run it again."
-                        ),
+                        "guidance": guidance,
                     },
                 )
             except (RuntimeError, ValueError) as exc:

@@ -10,7 +10,200 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ## [Unreleased]
 
+## [2.0.0]
+ The harness learned to run unattended, to route work across models, and to
+show its own work. Six real unattended builds shaped the autonomy engine — and
+two features in this release, developer aliases and cap alerts, were built by
+it. Policy-driven routing met all 33 of its acceptance criteria. The Session
+Analytics Studio grew from six pages to twelve. The documentation became a
+generated, gated site with a `cct` command in front of it.
+
+### Highlights
+
+- **Unattended auto-build, run-tested.** A frozen verification contract
+  (coverage, runtime conformance, visual), a cost cap that is discoverable,
+  live and raisable mid-run, a reviewer probed at admission through the
+  real review path, resume at the review step, and one fallback to the next
+  healthy reviewer. Outcomes are recorded in the driver's own words, with the
+  human verdict on the resulting PR kept beside them.
+- **Policy-driven LLM routing.** Execution profiles, Tier-1 failover, bounded
+  Tier-2 delegation with Tier-1 reconciliation, probe-verified recovery and
+  failback, calibration gates with a shadow recommender, and Codex as an
+  execution backend.
+- **Session Analytics Studio.** A session page with real transcript text, a
+  trace tree, feedback and lineage; Ask, Graph, Similar, Team, Runs and Learn;
+  comparison by harness version; expectations and how they came out.
+- **A team store.** One shared Postgres store, a live registry, cross-developer
+  rollups, budgets and runaway detection.
+- **Documentation and a CLI front door.** A feature catalog with maturity and
+  per-adapter support, a published docs site, `cct features`, `cct doctor` and
+  `cct config`, a Codespace guided tour, and an experimental `llms.txt`.
+- **A Claude Code plugin that loads**, with its skills, agents and commands
+  generated from their sources.
+
+### Breaking changes and upgrade notes
+
+- **The Session Analytics store must be recreated.** The store schema moved
+  from version 2 to version 12, and two of those steps (8 and 10) add columns
+  to existing tables, which create-if-absent DDL cannot do in place. A store
+  created by v1.1.0 is refused at start-up with the remedy printed: delete the
+  SQLite file (or drop the Postgres schema) and run `session-analytics ingest
+  --full`. **A session whose transcript has since been pruned cannot be re-
+  ingested** — export anything you need with your v1.1.0 checkout before
+  upgrading. From schema 11 onward the additions are new tables only and land
+  in place.
+- **`CCT_SA_DSN` is now `CCT_SA_DB`, and `--dsn` is now `--db`** (#315). The
+  old names are still read, so nothing breaks today; new configuration should
+  use the new ones.
+- **Studio navigation changed.** The Agents page was removed (#307). Search was
+  replaced by Ask (#320) and then returned as its own page with every filter
+  the store can answer and full-text search (#371 A2).
+- **`phase_violation` is no longer collected or published** (#300). The label
+  was ungrounded; anything reading it will find it absent.
+- **The Claude Code plugin's `hooks.json` layout changed** (#363). Hook events
+  are nested under `"hooks"`. The previously shipped plugin did not load, so
+  there is no working installation to migrate — reinstall it.
+- **The README was restructured** (#214): 1,417 lines to 254, with the deep
+  reference relocated into six guides under `docs/`. Deep links into the old
+  README sections no longer resolve.
+- **An INCONCLUSIVE review with no blocking finding now stops an unattended
+  run for recovery** rather than starting a fix session (#342).
+- **The Studio needs Node 20.9 or later** (#382). The patched Next.js
+  resolves `sharp` to 0.35.5, which requires it; Node 20.0–20.8 is no longer
+  supported.
+
 ### Added
+
+#### Session Analytics and the Studio
+
+- **The session page is real (#306, Studio Phase 1)** — open one session and
+  read its transcript text, per-turn latency, and three judge-generated
+  analyses (Agent Tuning, Prompt Coaching, Efficiency) with turn references
+  and configuration diffs. No terminal, no canned strings.
+- **Trust every number (#307, Studio Phase 2)** — a noise filter applied at
+  query time to every list and aggregate (probe runs, temp directories,
+  too-short sessions) with the exclusion count shown; agent response time as a
+  dashboard KPI with its measured n; ten endpoints that had no UI surfaced
+  where they answer a question.
+- **Learn (#309, Studio Phase 3)** — the project's own documentation in the
+  Studio, from a closed docs registry, and every Agent Tuning or Efficiency
+  finding links to the page that explains how to fix it.
+- **Ask (#320)** — a question about your own sessions, in words, answered by
+  the configured judge model through read-only lookups over the store. Every
+  lookup is shown so the answer can be checked.
+- **Graph (#319, #311)** — pick a session or a project and see what it is
+  connected to, with the relationship written on every edge, drill-downs and
+  a catalogue of questions. `graph --rebuild` went from 67 minutes on a
+  90k-turn store to 2.7 seconds on a 96k-turn one, and from 9.2 GB to 568 MB
+  peak memory, by replacing ~271k `MERGE` statements with 18 `COPY FROM`.
+- **Similar sessions (#285, #287, #293, #318)** — a session embedding
+  pipeline, similarity over it, and a Similar tab that runs itself; embedding
+  and similarity are pipeline steps with Settings → Embeddings.
+- **Benchmark explains itself (#321)** — the page says what a benchmark run
+  is, and linking runs to sessions is a pipeline step with a setting rather
+  than a CLI command printed on a page.
+- **Judge validation (#313)** — a rubric run can be named and repeated over
+  the same turns; human labels survive re-ingest; `labels agreement` reports
+  per-label agreement with n and Cohen's kappa.
+- **Ranked search over archived traces (#65 E10)** — tokenized and ranked,
+  replacing substring matching once measured recall showed the need: on a real
+  62k-turn archive one query went from 1 result to 27.
+- **Predictive analytics and label correlation (#65 E4, E10)** — what
+  comparable past sessions actually cost, and historical pass rate; read-only.
+- **Per-developer aggregates (#65 E1)** and **phase-process analytics
+  (#301)** — per-developer rollups, and descriptive metrics over the Pi
+  runtime's recorded workflow: phases seen, movements, oscillations, rework.
+- **Trace tree (#371 A1)** — under each turn, its tool calls with their
+  results and the time until each result; subagent runs nested under the turn
+  that started them.
+- **Search and filters (#371 A2)** — every filter the store can answer is
+  reachable from the Studio: date range, tag, developer, cost, model, tool,
+  label and harness.
+- **Feedback as a general record (#371 A3)** — a named, typed judgement on a
+  session, a turn or a tool call, with a rationale, a source (human, judge or
+  code) and supersession, and a control for it in the Studio.
+- **Harness version, stamped and compared (#371 A4)** — a `SessionStart` hook
+  records the harness version and commit and digests of the instructions and
+  provider configuration, and the CLI version is read from the transcript;
+  sessions can then be grouped by any of them and compared on turns, errors,
+  priced cost and judge score, each with its coverage. Answers "did the new
+  skill change anything".
+- **Expectations (#371 A5)** — what an unattended run was required to achieve,
+  frozen at admission, and how each requirement came out: `met`, `not_met` or
+  `unknown`. An unevaluated requirement is never counted as a failure, and a
+  rate is null — never zero — when nothing was evaluated.
+- **Session threads (#371 A6)** — which session was resumed from which, proven
+  by turn identifiers the transcript preserves and never inferred from timing.
+  Forks, joins and ambiguous ends are flagged, not resolved. An empty answer
+  states whether lineage was assessable at all before it states that none was
+  found.
+- **The team store (#174)** — one shared Postgres store every developer's
+  ingest writes to; a live registry of who is active and on what; cross-
+  developer rollups; a Team tab. Budgets, runaway detection and alerts are
+  derived from the rows on every read and never stored, so the audit trail is
+  the store itself. Developer aliases fold duplicate identities at read time
+  (#331, built unattended).
+- **A user cookbook** for Session Analytics (#315), including ports, the judge
+  on a LAN host, and troubleshooting.
+
+#### Documentation and the `cct` command
+
+- **Feature catalog (#214 Phase 2)** — one source for what the harness offers
+  a user, how mature each feature is, which release carries it and how each
+  adapter delivers it; validated, and rendered into `docs/features.md`. The
+  capability matrix is gated on pull requests.
+- **Provider profile schema and a generated configuration reference (#214
+  Phase 2.3)** — configuration has a schema where it had none, and one
+  generated reference.
+- **Documentation site (#214 Phase 4)** — the repository's own docs rendered
+  and published to GitHub Pages, with a gate on what the site omits.
+- **`cct features`, `cct doctor`, `cct config` (#214 Phase 5)** — the catalog
+  on the terminal; whether this machine is ready and what each installed
+  adapter says about itself; validate configuration and explain any key — what
+  it does, its default, the value in effect, and who owns it.
+- **Codespace guided tour, experimental `llms.txt`, and a README demo (#214
+  Phase 6)** — a zero-local-setup tour; a Markdown index of the documentation
+  for language models; a demo rendered in a container and checked before it
+  is drawn.
+- **Documentation accuracy gate (#211)** — a drift gate over the documentation
+  so a claim that stops being true fails a pull request.
+- **Developer cookbook (#265)** — the project's own lifecycle, in self-driven
+  and harness-driven modes. **Auto code review cookbook (#347)**, served in
+  Learn.
+
+#### Claude Code plugin
+
+- **Skills, agents and commands generated from their sources (#363)** — the
+  plugin carried seven hand-copied hook scripts and nothing else, and one copy
+  had already drifted. It is now generated. Effort is set in the shipped
+  agents' frontmatter.
+
+#### Pi
+
+- **`unattended` profile** — an opt-in profile so a long unattended build does
+  not stall on ask-gated prompts, while every deny rule, protected path,
+  security floor and sandbox requirement stays intact.
+- **Claude settings generated from the shared permission profile** — Claude's
+  permission posture comes from the same file Pi imports, closing the
+  cross-harness drift.
+- **Durable continuity report** and unattended diagnostics — the state a
+  resumed or supervised session re-reads.
+- **Cooldown-resume supervisor** — a harness-neutral outer loop that keeps a
+  long unattended build alive across usage-limit pauses, with no token-limit
+  logic embedded in any adapter.
+- **`pi-code provenance`** — version, install identity and capability and
+  trust posture in one read-only diagnostic.
+- **Extension templates and programmatic hook recipes (#179)** — a
+  `.pi/extensions/` guardrails starter with deterministic gates.
+
+#### Working agreements
+
+- **Target alignment in agent reviews (#269, #376)** — an always-on rule that
+  maps agent-produced work back to the originating goal; a handoff is
+  classified `on-target`, `overcomplicated` or `off-target`, and the
+  independent reviewer fails material scope or architecture drift.
+
+#### Unattended autonomy
 
 - **Unattended autonomy, run-tested (#190 §12, increment D as the data
   scoped it, and the fixes six real runs demanded)** — Six real
@@ -60,257 +253,6 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   per-adapter capability declaration were added; per-template coverage
   floors ship as C1's verification presets. Suites: review-loop 127 →
   213, driver 1086 → 1206, session-analytics +`test_auto_build_runs`.
-
-- **Codex execution backend (#109)** — `codex` is now an executable
-  backend, not merely an accepted registry name. Routed model AND
-  provider are bound (`--model`, `-c model_provider=`), the routed
-  identity outranks any ambient override, and preflight checks the
-  codex binary rather than falling through to the claude branch.
-
-  Codex speaks JSONL while the supervisor's result boundaries are
-  line-anchored plain text, so a codex round keeps TWO views: the raw
-  JSONL drives failure classification and the usage-limit scan (a rate
-  limit appears in an error event, never in the agent message), and a
-  decoded text view drives verdict parsing and the operator transcript.
-  Both are scrubbed; neither replaces the other. Codex stderr is kept
-  out of the parsed stream entirely — this repo captured live that its
-  prompt echo can forge a verdict — and is scrubbed, attached to the
-  attempt transcript, and cleaned via the single EXIT handler.
-
-  Result normalization requires exit 0, a completed turn, no error
-  event, and a thread identity before reporting success; a refused cost
-  debit disposes as `cost_accounting_failed` like every other call
-  site. Recorded deviation and known limitations in
-  `specs/routing-codex-backend/plan.md`.
-
-- **Calibration gates + shadow kNN recommender (#266, E3 of #109)** —
-  the #109 §12 promotion conditions made executable as five gates
-  (`telemetry_complete`, `labeled_volume`, `heldout_evaluated`,
-  `false_downgrade`, `floors_authoritative`), each reporting
-  pass / fail / insufficient_data with its measured value, its
-  operator-declared threshold, and *addressable* evidence locators the
-  Studio opens through the existing read-only surfaces; the overall
-  verdict is `calibrated` only when every gate passes, and nothing acts
-  on it. Reports bind to `corpus_id` + `policy_id` (the full evaluation
-  policy, including both policy-source digests), and either mismatch
-  makes a report stale — stale satisfies no gate and renders as void,
-  not merely old. Adds a deterministic similarity (kNN) recommender
-  served **beside** the E2 dominance recommendation: pre-routing
-  features only (the *declared* trial count, never the observed record
-  count), refusal instead of imputation, current-policy filtering
-  before ranking, conservative ties, and full neighbour provenance that
-  resolves across sets. Held-out evaluation is leave-one-task-out
-  through the same recommender the API serves; the false-downgrade
-  denominator counts judged recommendations only, with refusals,
-  tier-unresolved predictions, and unevaluable examples each reported
-  separately so none dilutes the rate, and the safety baseline is the
-  *highest* tier the chain engaged. Eligibility mirrors the production
-  selector — the effective policy composed as `rc_effective` composes
-  it, filtered by role and route class as `rt_select` filters it — so a
-  suggestion is admissible only if the router could have selected that
-  profile for a task of that route class. Shadow-only by construction
-  and proven: no production routing script can name a calibration
-  symbol, the production config reader knows none of the new keys, and
-  every write lands under the analytics-owned calibration root. E1
-  gains two optional labeled artifacts (`task-descriptors.json`,
-  `profile-policy.json`) derived at publication; pre-addition sets load
-  as unlabeled. A new `session-analytics calibrate` command is the
-  supported way to produce the held-out evaluation report the gates
-  read — without it three of the five gates are structurally
-  unreachable — and its write is isolation-checked before any byte:
-  the calibration root may not overlap a routing-evidence root in
-  either direction, compared resolved so a symlink or `..` cannot walk
-  around it. `agreement` is rendered beside the five verdicts
-  because no gate consumes it and it is the only figure separating a
-  useful recommender from a safe-but-inert one.
-- **Shadow-mode routing analysis (#261, E2 of #109)** — session
-  analytics consumes E1's published evidence sets read-only and
-  derives per-task shadow recommendations, served through the
-  analytics API and a Studio **Routing** tab. The recommendation
-  contract: a closed outcome trichotomy (`switch_profile` only under
-  positive two-axis dominance AND the availability guard — the
-  suggested profile must appear admissible in the router's own
-  durable candidate evidence; `no_change_recommended` means the
-  evidence *concluded*; `insufficient_data` means it *cannot
-  conclude* and is never collapsed into no-change), a confidence
-  grade carrying its complete basis (trials, per-trial two-axis
-  agreement, component mask, unevaluated trials, insufficiency refs)
-  that the serving gate re-derives whole from canonical evidence, and
-  figure provenance for the recommendation quality/cost figures and
-  their deltas (decision 9: direct figures name their exact artifact
-  pointer, deltas name both operands, one identity-bound resolver
-  validates and recomputes before serving; confidence statistics
-  carry no pointers — their gate is the recomputation above). E1 gains the set-atomic publication entrypoint
-  (`publish_evidence_set`): stage → validate with the consumer's own
-  loader → one atomic rename, with referenced evidence files scrubbed
-  at publication and the manifest hashing the scrubbed bytes, the
-  manifest bound to exactly the records' canonical reference set, and
-  execution-proven per-leg identity. Every evidence locator is
-  followable through a closed read-only artifact surface; invalid
-  sets surface with sanitized closed codes, never skipped; configured
-  roots and server-side set paths are never serialized (sets are
-  addressed by opaque content id, home-prefixed paths collapse at
-  write time). **Shadow-only by construction** (plan
-  decision 11, inherited from E1's decision 10): no key the router
-  reads, no policy surface, no code path that changes a routing
-  decision — routing shell suites pass unmodified at their pins and
-  the diff guard holds — and learned/kNN routing remains out until
-  #109's explicit calibration gates are met. See
-  `scripts/session_analytics/README.md` § Routing evidence.
-
-- **Routing-quality measurement substrate (#260, E1 of #109)** — the
-  hybrid routing benchmark scenario driven through the UNMODIFIED
-  production supervisor and tick CLI, with the #109 §12 arc proven
-  per trial from harvested routing-run records alone. A `cct_router`
-  figure is never emitted uncontrolled: the report requires
-  `always_best`, `always_cheapest`, and `oracle` control arms
-  (optional `oracle_budget`), selected from an exhaustive
-  `task × profile × trial` outcome matrix bound to a five-component
-  reuse fingerprint the router evidence must match before any
-  comparative figure exists. `quality_fn: v1` (fixed weights, one
-  global selection-independent component mask, renormalization, Q
-  withheld on a missing primary outcome) is reported beside the full
-  #109 metric vector — no AIQ scalar. Insufficiency is first-class
-  and contagious: unpriced or unreconciled evidence is never rendered
-  as zero (unreconciled delegation surfaces as insufficiency in the
-  arm's sequence-dependent rows, which sit outside `quality_fn`), the
-  Pareto frontier is withheld whole on any Q or cost-basis violation
-  rather than partially drawn, and an insufficient control refuses
-  the report.
-  Evidence persists only through a write-time redaction gate —
-  literal runtime credential values (resolved from the executed
-  registry's `credential_env` references, never by enumerating the
-  environment) scrubbed before pattern-based defense in depth, with a
-  measurement-view guard proving redaction can never alter
-  fingerprints or measurement semantics — into canonical,
-  byte-reproducible artifacts. Measurement-only by construction
-  (plan decision 10): no runtime routing authority, enforced by an
-  executable diff guard over the production routing files. See
-  `benchmarks/README.md` § Routing-quality evaluation.
-
-- **Probe-verified routing recovery + failback (#257, increment D of
-  #109)** — the seven-state circuit store now has durable probe
-  schedules and a verified exit from cooldown/auth-disabled states;
-  D-managed cooldowns become `probe_due`, never silently selectable
-  on time alone. Ships real bounded inference/tool canaries with
-  pre-launch accounting reservation, secret scrubbing, closed honest
-  outcomes, provider-reset/Retry-After/rate-limit/backoff timing, and
-  abandoned-probe reconciliation; whitespace-normalized, parsed
-  run-specific success evidence that cannot be satisfied by echoed
-  prompts or discarded by non-JSON notices; live-supervisor recovery
-  without requiring cron; globally locked, cron-idempotent
-  `cct routing tick --due --once [--wake]`; fixed structured wake
-  reconstruction using code-owned default authority under a per-park
-  generation claim (non-default grants require manual resume), live run locks, and
-  durable startup acknowledgement; boundary-only preferred-profile
-  failback with independent preferred-health and active-tenure dwell;
-  reconcile-on-recovery through increment C before the switch; and
-  explicit `cct routing enable <profile-id>` as the sole
-  auth-disabled exit. Registry policy promotes `failback`,
-  `healthy_probes_required`, and `minimum_profile_dwell_sec`;
-  repository `routing.recovery` remains restriction-only with
-  `wake_enabled` and `auto_failback_enabled`. `degraded`, timer
-  generators, attended wake, and `max_switches_per_task` remain
-  deliberately deferred.
-- **Tier-2 bounded delegation + reconciliation (#254, increment C of
-  #109)** — deliberate cost/capability routing: send explicitly
-  bounded tasks to a cheaper or local Tier-2 model BY POLICY, even
-  while Tier-1 is healthy, and make the work authoritative only
-  through Tier-1 reconciliation. COMPATIBILITY FIRST: everything is
-  opt-in behind `--routing` plus the new per-packet flags; without
-  them the supervisor, driver, selector, and ledgers are unchanged
-  (legacy suite 37/0 and increment-B suite 186/0 pass unmodified,
-  modulo two disclosed source-count pin bumps). The rule is
-  load-bearing everywhere: Tier-2 is delegated bounded work, never
-  another unrestricted failover target. Ships: the constrained
-  `routing-tasks.yaml` metadata artifact with a nine-category
-  structural safety floor (admission + packet build; glob authority
-  by intersection; a per-path authority predicate that covers files
-  not yet existing); immutable content-addressed packets whose
-  verifier commands are verbatim, grammar-constrained, and
-  byte-equivalent from record to execution (LF/CR/NUL refused at the
-  pre-decode transport boundary); `--delegate` bounded execution in
-  a dedicated worktree with driver-owned scope/budget/verifier
-  verdicts, bounded repair, three named thrash reasons, and
-  full-digest crash-safe recovery; `verified_provisional` ledger
-  state that satisfies NO completion gate; `--reconcile` — a
-  crash-safe promotion boundary (judgment in a disposable copy;
-  canonical provisional state immutable until a committed verdict)
-  with fail-closed reviewer independence and driver re-verification
-  of every acceptance; the `routing.tier2.delegation_enabled` repo
-  restriction (promoted refused→implemented→behaviorally-tested;
-  `recovery` stays refused until increment D); and task-addressed
-  `cct routing explain --feature --task` rendering effective
-  candidate legality (increment A's recorded deviation resolved).
-  Suite growth: new `tests/test-routing-delegation.sh` (171) and
-  `tests/test-routing-packet.sh` (99); `test-routing-tasks.sh` 154;
-  automation-config 181 → 186.
-- **Tier-1 LLM failover (#251, increment B of #109)** — the cooldown
-  supervisor gains an EXPLICIT opt-in `--routing` mode (without the
-  flag, behavior is byte-identical — proven by the untouched legacy
-  suite); a supervised build now CONTINUES on the next eligible
-  Tier-1 profile when its provider becomes unavailable. Every failed
-  attempt is classified through increment A's frozen nine-cause
-  taxonomy and acted on by a TOTAL normative table with
-  epoch-anchored, replay-deterministic deadlines: quota exhaustion
-  cools the whole quota pool to the provider reset (bounded fallback
-  when reset evidence is absent); rate limiting retries the same
-  profile exactly once; auth disables one profile; request-local
-  causes stay request-local; denied/unknown fail closed and are
-  never rerouted around. Selection is a deterministic total order
-  (tier → priority → profile id) over the effective policy, journaled
-  per candidate, tier1-only (Tier-2 is increment C). Crash safety is
-  a frozen five-step ordering of durable artifacts with TWO
-  independent attempt-id idempotency domains (circuit state +
-  control budgets); indeterminate attempts are never replayed and
-  never assumed failed; a valid result without its checkpoint applies
-  the RECORDED decision without relaunching, bound to the persisted
-  identity under a versioned closed envelope. No session crosses
-  profiles; credential values live only in child environments and
-  child output is secret-scrubbed before persistence. Model identity
-  is tri-state (verified / fail-closed mismatch / explicitly
-  unverified). Reviewer independence is re-evaluated at every launch
-  with provider identity as the primary signal and one closed
-  journal tri-state; the active builder identity lands in the run
-  ledger (`routing_identity`, present only when routed) and the
-  peer-review request. New suite `tests/test-routing-failover.sh`
-  (186); driver suite 1034 → 1037. The codex execution adapter and
-  probes/recovery (`routing tick`) remain later increments.
-
-- **Execution-profile routing foundation (#248, increment A of #109)**
-  — the DECLARATIVE layer for policy-driven tiered LLM routing;
-  deliberately inert at runtime (no build is routed, no provider
-  invoked, no state written; driver, cooldown supervisor, and reviewer
-  `providers.toml` untouched — absence of the registry changes
-  nothing). Ships: the user-level registry
-  `~/.code-copilot-team/routing.toml` (a constrained TOML dialect —
-  unsupported constructs rejected by name, never approximated;
-  `schema_version = 1` required; closed profile shape over the
-  backend/provider/model/tier/priority/quota-pool vocabulary; tiers
-  CLOSED at `tier1|tier2`; credential/endpoint REFERENCES only, with
-  value-shaped secrets refused as defense in depth; `[policy]` accepts
-  only what A consumes — behavior-bearing keys refused until their
-  increment ships); the trust-asymmetric `automation.json` `routing`
-  block (restriction-only by construction: profile/credential/
-  endpoint/identity/capability definition refused by name, `tier2`/
-  `recovery` refused until shipped); the effective-policy merge
-  proving `effective_candidates(user, repo) ⊆ candidates(user)` over
-  canonical collision-free executable-identity tuples (roles are a
-  set; both-layers-enable; disabled ⇒ empty; unknown repo ids and
-  route classes are named violations); the normalized backend-result
-  contract (`shared/schemas/routing-result.schema.json`: cause
-  taxonomy `quota_exhausted | rate_limited | unavailable | transport
-  | auth | invalid_request | denied | execution | unknown`,
-  bidirectional success/failure invariant, classifier with explicit
-  precedence over a captured real-output corpus — HTTP status alone
-  never determines cause, `denied` needs an affirmative policy
-  signal, `unknown` fails closed); and the read-only `cct routing
-  validate | status | explain` commands (T3 validation before
-  composition; purity proven under a network shim; credential
-  PRESENCE only, `set` = non-empty). **Increment B owns cause→action
-  and all runtime failover behavior** — nothing in A selects,
-  probes, or executes. New suite `tests/test-routing-config.sh`
-  (157); automation-config 161 → 181.
 
 - **Driver-owned visual verification gate (#239, increment C3 of #190
   §6)** — `verification.visual` in `automation.json` (schema-validated,
@@ -415,19 +357,6 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   under `CCT_ADMISSION_TEST_IN_PLACE=1`, non-fatal and journalled even
   when git fails silently. Driver suite 399 → 620.
 
-### Fixed
-
-- **Review runner: read-only directories no longer poison verdicts** — the
-  snapshot sandbox is built with tar (deferred directory modes, `.git`
-  excluded at source) instead of `cp -R`, snapshot setup failures map to
-  RUNNER_ERROR instead of a `set -e` exit 1 that read as a FAIL verdict,
-  and cleanup never decides the exit code.
-- **Auto-build sessions: prompts on stdin, not argv (#234)** — a fix
-  prompt carrying a large findings file exceeded ARG_MAX and died E2BIG
-  before the session started; both the claude and pi backends now pass
-  the prompt on stdin, and fix prompts drop the reviewer's `raw_output`
-  transcript (the findings file retains it).
-
 - **Unattended admission control + traceability (#193, increment B of
   #190)** — `specs/<feature>/verification.yaml` requirement→verifier
   evidence graph (`shared/schemas/verification.schema.json` contract,
@@ -449,8 +378,6 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   are the sanctioned channel for post-freeze edits; other live-file
   edits are ignored on resume by design.
 
-
-### Added
 - **Unattended policy core + metering (#191, increment A of #190)** —
   terminal-outcome vocabulary in the auto-build driver (`landed` /
   `terminated_policy` exit 6 / `failed`); terminate-only disposition
@@ -470,7 +397,6 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   profile (previously silently free); estimates stay opt-in for
   attended configs and inactive for v1.
 
-### Added
 - **The cost cap is discoverable, live, and raisable mid-run (#201)** — a
   run inherited a **$25 default** the README never mentioned, showed no
   spend while in flight, and could not have its cap raised without first
@@ -494,7 +420,311 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   result-parsing fix — spend evaluated to `0`, so `caps.cost_usd` never
   accrued or triggered. Anyone on an older version was not protected by it.
 
+#### LLM routing
+
+- **Codex execution backend (#109)** — `codex` is now an executable
+  backend, not merely an accepted registry name. Routed model AND
+  provider are bound (`--model`, `-c model_provider=`), the routed
+  identity outranks any ambient override, and preflight checks the
+  codex binary rather than falling through to the claude branch.
+
+  Codex speaks JSONL while the supervisor's result boundaries are
+  line-anchored plain text, so a codex round keeps TWO views: the raw
+  JSONL drives failure classification and the usage-limit scan (a rate
+  limit appears in an error event, never in the agent message), and a
+  decoded text view drives verdict parsing and the operator transcript.
+  Both are scrubbed; neither replaces the other. Codex stderr is kept
+  out of the parsed stream entirely — this repo captured live that its
+  prompt echo can forge a verdict — and is scrubbed, attached to the
+  attempt transcript, and cleaned via the single EXIT handler.
+
+  Result normalization requires exit 0, a completed turn, no error
+  event, and a thread identity before reporting success; a refused cost
+  debit disposes as `cost_accounting_failed` like every other call
+  site. Recorded deviation and known limitations in
+  `specs/routing-codex-backend/plan.md`.
+
+- **Calibration gates + shadow kNN recommender (#266, E3 of #109)** —
+  the #109 §12 promotion conditions made executable as five gates
+  (`telemetry_complete`, `labeled_volume`, `heldout_evaluated`,
+  `false_downgrade`, `floors_authoritative`), each reporting
+  pass / fail / insufficient_data with its measured value, its
+  operator-declared threshold, and *addressable* evidence locators the
+  Studio opens through the existing read-only surfaces; the overall
+  verdict is `calibrated` only when every gate passes, and nothing acts
+  on it. Reports bind to `corpus_id` + `policy_id` (the full evaluation
+  policy, including both policy-source digests), and either mismatch
+  makes a report stale — stale satisfies no gate and renders as void,
+  not merely old. Adds a deterministic similarity (kNN) recommender
+  served **beside** the E2 dominance recommendation: pre-routing
+  features only (the *declared* trial count, never the observed record
+  count), refusal instead of imputation, current-policy filtering
+  before ranking, conservative ties, and full neighbour provenance that
+  resolves across sets. Held-out evaluation is leave-one-task-out
+  through the same recommender the API serves; the false-downgrade
+  denominator counts judged recommendations only, with refusals,
+  tier-unresolved predictions, and unevaluable examples each reported
+  separately so none dilutes the rate, and the safety baseline is the
+  *highest* tier the chain engaged. Eligibility mirrors the production
+  selector — the effective policy composed as `rc_effective` composes
+  it, filtered by role and route class as `rt_select` filters it — so a
+  suggestion is admissible only if the router could have selected that
+  profile for a task of that route class. Shadow-only by construction
+  and proven: no production routing script can name a calibration
+  symbol, the production config reader knows none of the new keys, and
+  every write lands under the analytics-owned calibration root. E1
+  gains two optional labeled artifacts (`task-descriptors.json`,
+  `profile-policy.json`) derived at publication; pre-addition sets load
+  as unlabeled. A new `session-analytics calibrate` command is the
+  supported way to produce the held-out evaluation report the gates
+  read — without it three of the five gates are structurally
+  unreachable — and its write is isolation-checked before any byte:
+  the calibration root may not overlap a routing-evidence root in
+  either direction, compared resolved so a symlink or `..` cannot walk
+  around it. `agreement` is rendered beside the five verdicts
+  because no gate consumes it and it is the only figure separating a
+  useful recommender from a safe-but-inert one.
+
+- **Shadow-mode routing analysis (#261, E2 of #109)** — session
+  analytics consumes E1's published evidence sets read-only and
+  derives per-task shadow recommendations, served through the
+  analytics API and a Studio **Routing** tab. The recommendation
+  contract: a closed outcome trichotomy (`switch_profile` only under
+  positive two-axis dominance AND the availability guard — the
+  suggested profile must appear admissible in the router's own
+  durable candidate evidence; `no_change_recommended` means the
+  evidence *concluded*; `insufficient_data` means it *cannot
+  conclude* and is never collapsed into no-change), a confidence
+  grade carrying its complete basis (trials, per-trial two-axis
+  agreement, component mask, unevaluated trials, insufficiency refs)
+  that the serving gate re-derives whole from canonical evidence, and
+  figure provenance for the recommendation quality/cost figures and
+  their deltas (decision 9: direct figures name their exact artifact
+  pointer, deltas name both operands, one identity-bound resolver
+  validates and recomputes before serving; confidence statistics
+  carry no pointers — their gate is the recomputation above). E1 gains the set-atomic publication entrypoint
+  (`publish_evidence_set`): stage → validate with the consumer's own
+  loader → one atomic rename, with referenced evidence files scrubbed
+  at publication and the manifest hashing the scrubbed bytes, the
+  manifest bound to exactly the records' canonical reference set, and
+  execution-proven per-leg identity. Every evidence locator is
+  followable through a closed read-only artifact surface; invalid
+  sets surface with sanitized closed codes, never skipped; configured
+  roots and server-side set paths are never serialized (sets are
+  addressed by opaque content id, home-prefixed paths collapse at
+  write time). **Shadow-only by construction** (plan
+  decision 11, inherited from E1's decision 10): no key the router
+  reads, no policy surface, no code path that changes a routing
+  decision — routing shell suites pass unmodified at their pins and
+  the diff guard holds — and learned/kNN routing remains out until
+  #109's explicit calibration gates are met. See
+  `scripts/session_analytics/README.md` § Routing evidence.
+
+- **Routing-quality measurement substrate (#260, E1 of #109)** — the
+  hybrid routing benchmark scenario driven through the UNMODIFIED
+  production supervisor and tick CLI, with the #109 §12 arc proven
+  per trial from harvested routing-run records alone. A `cct_router`
+  figure is never emitted uncontrolled: the report requires
+  `always_best`, `always_cheapest`, and `oracle` control arms
+  (optional `oracle_budget`), selected from an exhaustive
+  `task × profile × trial` outcome matrix bound to a five-component
+  reuse fingerprint the router evidence must match before any
+  comparative figure exists. `quality_fn: v1` (fixed weights, one
+  global selection-independent component mask, renormalization, Q
+  withheld on a missing primary outcome) is reported beside the full
+  #109 metric vector — no AIQ scalar. Insufficiency is first-class
+  and contagious: unpriced or unreconciled evidence is never rendered
+  as zero (unreconciled delegation surfaces as insufficiency in the
+  arm's sequence-dependent rows, which sit outside `quality_fn`), the
+  Pareto frontier is withheld whole on any Q or cost-basis violation
+  rather than partially drawn, and an insufficient control refuses
+  the report.
+  Evidence persists only through a write-time redaction gate —
+  literal runtime credential values (resolved from the executed
+  registry's `credential_env` references, never by enumerating the
+  environment) scrubbed before pattern-based defense in depth, with a
+  measurement-view guard proving redaction can never alter
+  fingerprints or measurement semantics — into canonical,
+  byte-reproducible artifacts. Measurement-only by construction
+  (plan decision 10): no runtime routing authority, enforced by an
+  executable diff guard over the production routing files. See
+  `benchmarks/README.md` § Routing-quality evaluation.
+
+- **Probe-verified routing recovery + failback (#257, increment D of
+  #109)** — the seven-state circuit store now has durable probe
+  schedules and a verified exit from cooldown/auth-disabled states;
+  D-managed cooldowns become `probe_due`, never silently selectable
+  on time alone. Ships real bounded inference/tool canaries with
+  pre-launch accounting reservation, secret scrubbing, closed honest
+  outcomes, provider-reset/Retry-After/rate-limit/backoff timing, and
+  abandoned-probe reconciliation; whitespace-normalized, parsed
+  run-specific success evidence that cannot be satisfied by echoed
+  prompts or discarded by non-JSON notices; live-supervisor recovery
+  without requiring cron; globally locked, cron-idempotent
+  `cct routing tick --due --once [--wake]`; fixed structured wake
+  reconstruction using code-owned default authority under a per-park
+  generation claim (non-default grants require manual resume), live run locks, and
+  durable startup acknowledgement; boundary-only preferred-profile
+  failback with independent preferred-health and active-tenure dwell;
+  reconcile-on-recovery through increment C before the switch; and
+  explicit `cct routing enable <profile-id>` as the sole
+  auth-disabled exit. Registry policy promotes `failback`,
+  `healthy_probes_required`, and `minimum_profile_dwell_sec`;
+  repository `routing.recovery` remains restriction-only with
+  `wake_enabled` and `auto_failback_enabled`. `degraded`, timer
+  generators, attended wake, and `max_switches_per_task` remain
+  deliberately deferred.
+
+- **Tier-2 bounded delegation + reconciliation (#254, increment C of
+  #109)** — deliberate cost/capability routing: send explicitly
+  bounded tasks to a cheaper or local Tier-2 model BY POLICY, even
+  while Tier-1 is healthy, and make the work authoritative only
+  through Tier-1 reconciliation. COMPATIBILITY FIRST: everything is
+  opt-in behind `--routing` plus the new per-packet flags; without
+  them the supervisor, driver, selector, and ledgers are unchanged
+  (legacy suite 37/0 and increment-B suite 186/0 pass unmodified,
+  modulo two disclosed source-count pin bumps). The rule is
+  load-bearing everywhere: Tier-2 is delegated bounded work, never
+  another unrestricted failover target. Ships: the constrained
+  `routing-tasks.yaml` metadata artifact with a nine-category
+  structural safety floor (admission + packet build; glob authority
+  by intersection; a per-path authority predicate that covers files
+  not yet existing); immutable content-addressed packets whose
+  verifier commands are verbatim, grammar-constrained, and
+  byte-equivalent from record to execution (LF/CR/NUL refused at the
+  pre-decode transport boundary); `--delegate` bounded execution in
+  a dedicated worktree with driver-owned scope/budget/verifier
+  verdicts, bounded repair, three named thrash reasons, and
+  full-digest crash-safe recovery; `verified_provisional` ledger
+  state that satisfies NO completion gate; `--reconcile` — a
+  crash-safe promotion boundary (judgment in a disposable copy;
+  canonical provisional state immutable until a committed verdict)
+  with fail-closed reviewer independence and driver re-verification
+  of every acceptance; the `routing.tier2.delegation_enabled` repo
+  restriction (promoted refused→implemented→behaviorally-tested;
+  `recovery` stays refused until increment D); and task-addressed
+  `cct routing explain --feature --task` rendering effective
+  candidate legality (increment A's recorded deviation resolved).
+  Suite growth: new `tests/test-routing-delegation.sh` (171) and
+  `tests/test-routing-packet.sh` (99); `test-routing-tasks.sh` 154;
+  automation-config 181 → 186.
+
+- **Tier-1 LLM failover (#251, increment B of #109)** — the cooldown
+  supervisor gains an EXPLICIT opt-in `--routing` mode (without the
+  flag, behavior is byte-identical — proven by the untouched legacy
+  suite); a supervised build now CONTINUES on the next eligible
+  Tier-1 profile when its provider becomes unavailable. Every failed
+  attempt is classified through increment A's frozen nine-cause
+  taxonomy and acted on by a TOTAL normative table with
+  epoch-anchored, replay-deterministic deadlines: quota exhaustion
+  cools the whole quota pool to the provider reset (bounded fallback
+  when reset evidence is absent); rate limiting retries the same
+  profile exactly once; auth disables one profile; request-local
+  causes stay request-local; denied/unknown fail closed and are
+  never rerouted around. Selection is a deterministic total order
+  (tier → priority → profile id) over the effective policy, journaled
+  per candidate, tier1-only (Tier-2 is increment C). Crash safety is
+  a frozen five-step ordering of durable artifacts with TWO
+  independent attempt-id idempotency domains (circuit state +
+  control budgets); indeterminate attempts are never replayed and
+  never assumed failed; a valid result without its checkpoint applies
+  the RECORDED decision without relaunching, bound to the persisted
+  identity under a versioned closed envelope. No session crosses
+  profiles; credential values live only in child environments and
+  child output is secret-scrubbed before persistence. Model identity
+  is tri-state (verified / fail-closed mismatch / explicitly
+  unverified). Reviewer independence is re-evaluated at every launch
+  with provider identity as the primary signal and one closed
+  journal tri-state; the active builder identity lands in the run
+  ledger (`routing_identity`, present only when routed) and the
+  peer-review request. New suite `tests/test-routing-failover.sh`
+  (186); driver suite 1034 → 1037. The codex execution adapter and
+  probes/recovery (`routing tick`) remain later increments.
+
+- **Execution-profile routing foundation (#248, increment A of #109)**
+  — the DECLARATIVE layer for policy-driven tiered LLM routing;
+  deliberately inert at runtime (no build is routed, no provider
+  invoked, no state written; driver, cooldown supervisor, and reviewer
+  `providers.toml` untouched — absence of the registry changes
+  nothing). Ships: the user-level registry
+  `~/.code-copilot-team/routing.toml` (a constrained TOML dialect —
+  unsupported constructs rejected by name, never approximated;
+  `schema_version = 1` required; closed profile shape over the
+  backend/provider/model/tier/priority/quota-pool vocabulary; tiers
+  CLOSED at `tier1|tier2`; credential/endpoint REFERENCES only, with
+  value-shaped secrets refused as defense in depth; `[policy]` accepts
+  only what A consumes — behavior-bearing keys refused until their
+  increment ships); the trust-asymmetric `automation.json` `routing`
+  block (restriction-only by construction: profile/credential/
+  endpoint/identity/capability definition refused by name, `tier2`/
+  `recovery` refused until shipped); the effective-policy merge
+  proving `effective_candidates(user, repo) ⊆ candidates(user)` over
+  canonical collision-free executable-identity tuples (roles are a
+  set; both-layers-enable; disabled ⇒ empty; unknown repo ids and
+  route classes are named violations); the normalized backend-result
+  contract (`shared/schemas/routing-result.schema.json`: cause
+  taxonomy `quota_exhausted | rate_limited | unavailable | transport
+  | auth | invalid_request | denied | execution | unknown`,
+  bidirectional success/failure invariant, classifier with explicit
+  precedence over a captured real-output corpus — HTTP status alone
+  never determines cause, `denied` needs an affirmative policy
+  signal, `unknown` fails closed); and the read-only `cct routing
+  validate | status | explain` commands (T3 validation before
+  composition; purity proven under a network shim; credential
+  PRESENCE only, `set` = non-empty). **Increment B owns cause→action
+  and all runtime failover behavior** — nothing in A selects,
+  probes, or executes. New suite `tests/test-routing-config.sh`
+  (157); automation-config 161 → 181.
+
 ### Fixed
+
+- **Text on light surfaces is readable (#387)** — the hint shown when the
+  API cannot be reached measured 2.53:1, and four `<code>` chips declared
+  no colour at all and inherited whatever surrounded them, as low as
+  4.34:1. Each now carries its own, measured rather than inferred: the
+  earlier sweep replaced one Tailwind token, which cleared the floor on
+  white but not on every surface.
+- **The Sessions list says how long it is (#383)** — the page showed 50
+  sessions and never said there were more. `/api/sessions` takes `offset` and
+  returns `total`; the page shows "Showing a–b of n" with previous and next.
+- **A long session can be read (#383)** — a session of 8,775 turns was drawn
+  at once, 114,652 DOM nodes. The timeline draws 100 top-level turns a page,
+  and a `#turn-N` link opens the page that holds the turn.
+- **The current tab is marked (#383)** — highlighted, with
+  `aria-current="page"`.
+- **Explanatory text is readable (#383)** — notes, denominators and empty
+  states were 2.56:1 on white; they are now 4.76:1.
+- **Routing packets bind to the schema's verifier kind (#109)** —
+  `routing-packet.sh` and `routing-tasks.sh` selected verifiers by matching a
+  record's kind against the string `test`, which is a field name and never a
+  kind. Every schema-conformant `verification.yaml` was refused, so no Tier-2
+  delegation packet could be built for a real feature. The suites were green
+  because their fixtures emitted the same non-schema kind; they now bind to
+  the schema's closed vocabulary.
+- **Embeddings offer only models that can embed (#322)** — and a chat model
+  chosen by mistake is named as the cause.
+- **`AGENTS.md` budget comes from the adapter's installed cap (#296)** — with
+  the headroom visible.
+- **Cost coverage counts only price-eligible turns (#65 E1)** — and a load
+  failure is no longer hidden.
+- **Codex's provider is recorded as unestablished rather than guessed
+  (#281)**.
+- **A crash-parked review breaker is recoverable by supported commands
+  (#233)**.
+- **pytest stays out of the polyglot fixture tree (#268)**.
+
+- **Review runner: read-only directories no longer poison verdicts** — the
+  snapshot sandbox is built with tar (deferred directory modes, `.git`
+  excluded at source) instead of `cp -R`, snapshot setup failures map to
+  RUNNER_ERROR instead of a `set -e` exit 1 that read as a FAIL verdict,
+  and cleanup never decides the exit code.
+
+- **Auto-build sessions: prompts on stdin, not argv (#234)** — a fix
+  prompt carrying a large findings file exceeded ARG_MAX and died E2BIG
+  before the session started; both the claude and pi backends now pass
+  the prompt on stdin, and fix prompts drop the reviewer's `raw_output`
+  transcript (the findings file retains it).
+
 - **The `max_rounds` breaker is no longer a dead end (#227)** — three
   defects together made it terminal. (1) Round numbering is deliberately
   monotonic, so a CUMULATIVE ceiling made `/review-decide retry`
@@ -703,6 +933,30 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   autonomous entry, `claude-code build <feature-id> [driver args]`, so
   no-human-in-loop intent never needs
   `--dangerously-skip-permissions`. `pi-code` is unchanged.
+
+### Security
+
+- **Studio dependency advisories cleared (#382, #385)** — all 20 open
+  Dependabot advisories were in `studio/package-lock.json`, two of them
+  critical: unauthenticated remote code execution in Next.js
+  (GHSA-2xp9-vwfh-vxw4, GHSA-p293-qw3h-jr36). Two further advisories then
+  reached the runtime tree and were cleared in turn: cache poisoning of
+  SSG/ISR pages (GHSA-4jqv-mc3x-m676, GHSA-mcj8-r9mp-w47p) and an
+  event-loop denial of service in `source-map-js` (GHSA-68fv-2mgg-jv7q).
+  `next` moves 15.5.20 → 15.5.28, the `postcss` pin 8.5.10 → 8.5.23, and
+  `source-map-js` is pinned to 1.2.2. No advisory reaches a runtime
+  dependency. The remaining build-time advisories are the Tailwind 3
+  toolchain, whose only fix is a breaking major; they take their input
+  from the repository's own config and stylesheets, never from a request.
+- **The connection probe never writes to its target (CodeQL 14)** — the
+  Settings "Test Connection" endpoint takes a caller-supplied database
+  address, and probing an unrelated SQLite database added the full schema to
+  it. The probe now opens read-only.
+- **Route failures are curated, not leaked (CodeQL 21–23)** — three
+  routing-calibration routes let exceptions reach the caller with their stack
+  traces.
+- **Environment scrubbing at the spawn boundaries (#173)** — name-based
+  scrubbing wherever the harness spawns a child process.
 
 ## [1.1.0]
 
