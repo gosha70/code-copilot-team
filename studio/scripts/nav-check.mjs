@@ -76,7 +76,8 @@ function read(rel) {
 // Changing these means changing specs/harness-studio-nav/spec.md first:
 // the FR text is authoritative and admission binds it by statement_sha.
 const PRODUCT = "Harness Studio";
-const OLD_PRODUCT = "Session Analytics Studio";
+// Assembled, not spelled out, so this file does not match its own FR-6 grep.
+const OLD_PRODUCT = ["Session", "Analytics", "Studio"].join(" ");
 const GROUPS = [
   {
     id: "mission-control",

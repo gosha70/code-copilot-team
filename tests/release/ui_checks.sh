@@ -75,8 +75,9 @@ settle 4
 
 # ── P0-3: the current tab is marked ────────────────────────────────────
 echo "navigation marks where you are (P0-3)"
-for route in "/:Dashboard" "/sessions:Sessions" "/graph:Graph" "/team:Team" \
-             "/learn:Learn" "/settings:Settings" "/routing:Benchmark"; do
+for route in "/:Overview" "/sessions:Sessions" "/graph:Graph" "/team:Team" \
+             "/learn:Guides" "/settings:Settings" "/routing:Routing" \
+             "/analysis:Analysis pipeline"; do
   path="${route%%:*}"; want="${route##*:}"
   P goto "$URL$path" >/dev/null 2>&1; settle 2
   got=$(ev '() => [...document.querySelectorAll("[aria-current=page]")].map(e=>e.textContent.trim()).join(",")')

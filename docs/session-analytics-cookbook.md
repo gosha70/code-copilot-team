@@ -16,14 +16,14 @@ design decision is `scripts/session_analytics/README.md`; the Studio's
 
 | Page | The question it answers |
 |---|---|
-| **Dashboard** | How much have I done, what did it cost, how fast does the agent answer, where did the errors and money go? |
+| **Overview** | How much have I done, what did it cost, how fast does the agent answer, where did the errors and money go? |
 | **Sessions** | Which sessions are real work (probe runs and two-turn tests are hidden by default; one toggle shows them). |
 | **Session page** | What was said, turn by turn, with the agent's response time — and three analyses a judge writes over the whole transcript: **Agent Tuning** (what to change in your CLAUDE.md, permissions, hooks, skills, with the diff), **Prompt Coaching** (which of your prompts were vague and what to send instead), **Efficiency** (where the turns went, and the script, hook, skill or rule that would remove each detour). |
 | **Ask** | A question about your sessions in words, answered by the judge LLM through read-only lookups (sessions, turn text, analyses, patterns, the graph), each lookup shown so the answer can be checked. |
 | **Team** | Who on the team is active right now (a heartbeat in the last five minutes), what they are on, what sessions cost per developer, per project and over today / 7 days / 30 days, and the alerts: budgets passed, runaway sessions, and auto-build runs burning a cap (§8.5). Reads the shared team store (§8.4); on a local SQLite store it shows one developer. |
 | **Runs** | Every attempt of the auto-build driver recorded on this machine, read from its ledger: the outcome in the driver's own words (`landed`, `terminated_policy`, or none yet — never pass/fail), why it stopped, rounds per phase, cost against the cap with the estimated part distinguished, which requirements had verifiers and went green, the policy decisions taken, the PR — and the human verdict on that PR, set here (§8.6). |
 | **Graph** | One session or project and everything it is connected to, every relationship named; a catalogue of questions answered as tables, charts or drawn on the canvas. |
-| **Analysis** | The pipeline as steps — load sessions, build the graph, run the judge, compute KPIs — with a funnel of counts and a **Judge quality** card. |
+| **Analysis pipeline** | The pipeline as steps — load sessions, build the graph, run the judge, compute KPIs — with a funnel of counts and a **Judge quality** card. |
 | **Benchmark** | What this repository's benchmark harness found: attempts by result with the cost and duration of the sessions they produced, and the predicted pass rate per project. Empty until you run the harness and link its runs (Settings → Benchmarks, then **Link benchmark runs**). |
 | **Learn** | The project's own docs, skills, agents and wiki, read in-app; each Agent Tuning finding links to the guide that explains the fix. |
 | **Settings** | The `.env` this tool reads, edited with help text and a path picker. |
@@ -207,7 +207,7 @@ parsed to list them:
 ./scripts/session-analytics ingest --session-id <id> --session-id <id>   # exactly these (ids from --list)
 ```
 
-On the Analysis page the **Load sessions** step shows the same list
+On the Analysis pipeline page the **Load sessions** step shows the same list
 under **Which sessions**: filter by date and count, or tick sessions,
 and the button says what it will read ("Load 3 selected · 12.1 MB").
 **Run all steps** uses the same selection. `watch` runs ingest in a
@@ -222,8 +222,8 @@ loop:
 Probe runs in temp directories and two-turn smoke tests are real rows in
 the store and, on a developer's machine, outnumber real work. Every list
 and aggregate in the Studio leaves them out by default, and says so: the
-Dashboard's Sessions stat, the Sessions page's **Show excluded (n)**
-toggle and the Analysis funnel all show the same excluded count. A
+Overview's Sessions stat, the Sessions page's **Show excluded (n)**
+toggle and the Analysis pipeline funnel all show the same excluded count. A
 session is noise when it has fewer than `min_turns` turns, lasted under
 `min_duration_seconds`, or its path contains one of `path_patterns`.
 Benchmark-linked sessions are never noise. This is decided at query
@@ -282,14 +282,14 @@ earlier result is kept and the page says so.
 
 The judge labels each turn (corrections, questions, commands, rework,
 misunderstanding, helpfulness, sentiment, a 1–5 quality) so the
-Dashboard's label distribution, the KPIs, and cost-by-sentiment mean
+Overview's label distribution, the KPIs, and cost-by-sentiment mean
 something. It calls a model **per turn**; the local Ollama default keeps
 that free.
 
 The judge is **configured in one place: Settings → LLM-as-Judge**
 (backend, model, workers, URL). The Model field lists what the saved
 backend URL actually serves; choose *Other…* to type a name it does not
-list. **Analysis → step 3, LLM judge** runs that judge — it shows which
+list. **Analysis pipeline → step 3, LLM judge** runs that judge — it shows which
 one and links back to Settings; it is not a second place to choose.
 Set how many turns and run. The step reports as it goes:
 turns done of total, labelled and failed, the rate and time left, and
@@ -323,7 +323,7 @@ configuration is:
    prompt to the saved judge. Expect `openai:qwen38-27b answered in
    0.7s: {"ok": true}`. A failure shows the server's own reason (a
    wrong model name, a wrong port).
-4. **Analysis → step 3**, Run llm judge. Verified on that Spark: about
+4. **Analysis pipeline → step 3**, Run llm judge. Verified on that Spark: about
    10 s per turn.
 
 For Ollama on the Spark instead: Backend `ollama`, Ollama URL
@@ -350,7 +350,7 @@ operator manual, the runbook).
 ### 7.1 Is the judge right? (validation)
 
 Everything the labels feed rests on the judge, so measure it. Two
-comparisons are built in, both on the Analysis page's **Judge quality**
+comparisons are built in, both on the Analysis pipeline page's **Judge quality**
 card and in the CLI:
 
 **Run against run** — the same rubric under a second name over the same
@@ -388,7 +388,7 @@ human sample is one command away (`--judge claude-code: --rubric-name heuristic-
 ./scripts/session-analytics similar                 # SIMILAR_TO edges from the embeddings
 ```
 
-Or press **Build knowledge graph** on the Analysis page (noise sessions
+Or press **Build knowledge graph** on the Analysis pipeline page (noise sessions
 are left out, the same as everywhere else in the Studio).
 
 The **Graph** tab is a picture of one thing and what it is connected
@@ -443,7 +443,7 @@ shared files. It needs two things, both in the Analysis pipeline:
    Ollama has no default one; `nomic-embed-text` is small and enough
    (`ollama pull nomic-embed-text`, then pick it from the list and
    Save). **Test embedding** shows the vector size and time.
-2. **Analysis → Embed sessions**, then **Find similar sessions** — or
+2. **Analysis pipeline → Embed sessions**, then **Find similar sessions** — or
    just press the button on the Similar tab, which runs both (and the
    graph build first if it has not run). Run all steps includes them.
    Embedding 119 sessions with nomic-embed-text took about 8 seconds
@@ -489,7 +489,7 @@ If you run this repository's benchmark harness (`benchmarks/README.md`),
 each attempt leaves a `run-record.json` and a `score.json` under a runs
 folder (the harness's default is `runs/` at the repository root). Set
 that folder under **Settings → Benchmarks**, then press **Link benchmark
-runs** on the Analysis page — or on the Benchmark page, which offers the
+runs** on the Analysis pipeline page — or on the Benchmark page, which offers the
 same step. It stores every attempt's result, for every benchmark
 backend, and links Claude Code runs whose run record names a Claude
 Code session that is loaded; a linked session is never hidden as noise,
@@ -655,7 +655,7 @@ runs); the default is this repository's own `.cct`.
 ./scripts/session-analytics search "pricing config" --limit 20   # archived text, ranked
 ./scripts/session-analytics export --table sessions --format csv --out sessions.csv
 ./scripts/session-analytics export --table all --format parquet --out ./export/
-./scripts/session-analytics correlate --runs-root runs             # same as Analysis → Link benchmark runs
+./scripts/session-analytics correlate --runs-root runs             # same as Analysis pipeline → Link benchmark runs
 ./scripts/session-analytics runs                                   # auto-build runs and their verdicts (§8.6)
 ./scripts/session-analytics mcp                                    # MCP server over the store
 ./scripts/session-analytics list                                   # adapters + judges registered
@@ -677,13 +677,13 @@ docker compose -f scripts/session_analytics/docker-compose.yml up -d
 | `error: no database configured` | No `.env`, no `--db`. | `setup`, or `--db sqlite:////abs/path.db` (four slashes). |
 | Settings says the server uses a different database than the form | `serve` was started with `--db`. | Either is fine; the banner tells you which store every number comes from. |
 | Graph tab: "the graph store … could not be opened" | The store file at `CCT_SA_KUZU_PATH` is corrupt or locked by a running build. | Delete the corrupt file (`~/.cct/session-analytics-graph` by default), then run **Build knowledge graph**. |
-| Graph tab: "has not been built yet" | Never built. | Analysis → Build knowledge graph. |
+| Graph tab: "has not been built yet" | Never built. | Analysis pipeline → Build knowledge graph. |
 | Session page: `model 'llama3' not found` | The configured judge has no model and Ollama's default is not pulled. | Pick an installed model in the page's judge picker, or set `CCT_SA_JUDGE_MODEL`. |
 | "The judge did not answer … Remote end closed connection" | The model does not fit in memory at the whole-session context size. | Use a smaller model for whole-session analyses. |
 | "hit its answer cap before finishing" | A small model would not keep to the list limits. | Re-generate, or a stronger model. |
 | Timeline says "preview only" | The project is not opted into the archive. | §5.3. |
 | Sessions page is empty but the store has data | Everything matched the noise rule. | Tick **Show excluded**, or relax `CCT_SA_NOISE_*`. |
-| Dashboard "Median agent response" is "—" | No turn carries a timestamp on both sides (Aider transcripts have none per turn). | Expected; the measured-n note says how many turns were measured. |
+| Overview "Median agent response" is "—" | No turn carries a timestamp on both sides (Aider transcripts have none per turn). | Expected; the measured-n note says how many turns were measured. |
 | `serve` fails: "address already in use" | A default port is held — usually an earlier `serve` still running. | `lsof -nP -iTCP:8765 -iTCP:3000 -sTCP:LISTEN`, stop it, or `serve --api-port 8766 --ui-port 3001` (§4.1). |
 | Studio pages stuck on "Loading…" after `npm install` | The dev server's cache predates the install. | Restart `serve`. |
 | CodeQL / CI mentions `fs/browse` | The Settings path picker is a deliberate local directory browser, loopback-only. | Nothing; it is by design. |
@@ -695,7 +695,7 @@ docker compose -f scripts/session_analytics/docker-compose.yml up -d
 Redaction (`code` by default) runs before anything is written or sent
 anywhere. The packaged judge and embedding backends are local Ollama;
 session text reaches a cloud model only if you set `claude-code` or an
-`openai` endpoint as the judge, and the Analysis page warns before a
+`openai` endpoint as the judge, and the Analysis pipeline page warns before a
 batch run. The API binds to 127.0.0.1 and rejects cross-origin writes.
 `.env` may hold an API key and is gitignored. Per project you can turn
 ingest off entirely or tighten redaction beyond the global mode.
