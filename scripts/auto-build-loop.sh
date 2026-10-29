@@ -206,17 +206,31 @@ read_fd, write_fd = os.pipe()
 pid = os.fork()
 if pid > 0:
     os.close(write_fd)
-    reason = b""
+    reply = b""
     while True:
         chunk = os.read(read_fd, 4096)
         if not chunk:
             break
-        reason += chunk
+        reply += chunk
     os.close(read_fd)
+    # EOF ALONE IS NOT SUCCESS. A child killed between fork and exec — a
+    # signal, an OOM kill, an interpreter crash — closes the pipe without
+    # writing, which is byte-for-byte what a successful exec looks like. The
+    # child therefore sends a READY sentinel immediately before exec: EOF
+    # preceded by the sentinel means exec ran, EOF without it means the child
+    # died before reaching exec, and a sentinel followed by text means exec
+    # itself failed and said why.
+    if not reply.startswith(b"\x01"):
+        sys.stderr.write(
+            "auto-build: the detached child died before it could start the run"
+            + (" — " + reply.decode("utf-8", "replace") if reply else " (no reason reported)")
+            + "\n"
+        )
+        raise SystemExit(127)
+    reason = reply[1:]
     if reason:
         sys.stderr.write(reason.decode("utf-8", "replace"))
         raise SystemExit(127)
-    # EOF with no message: exec succeeded in a new session.
     print(f"auto-build detached — pid {pid}, log: {log}")
     print(f"follow it with:  tail -f {log}")
     raise SystemExit(0)
@@ -232,6 +246,10 @@ try:
     os.dup2(fd, 1)
     os.dup2(fd, 2)
     os.chdir(project)
+    # READY: everything that can fail before exec has succeeded. Written
+    # before execvp so a successful exec leaves exactly this byte, and a
+    # death before this point leaves nothing.
+    os.write(write_fd, b"\x01")
     os.execvp("bash", ["bash", script] + passthrough)
 except BaseException as exc:
     detail = (
@@ -903,49 +921,6 @@ load_config() {
         echo "requested via --profile or CCT_AUTOBUILD_PROFILE." >&2
         exit 1
     fi
-    # A profile that opens a PR needs a close target, and open_pr refuses
-    # without one. That refusal used to land at `finalizing` — AFTER every
-    # phase was built, reviewed and pushed — so a whole run was spent to
-    # report a pure config defect. Nothing about the close target is
-    # learned by running: it is `pr.closes` in the config, or an `issue:`
-    # in plan.md frontmatter, both readable now. It is decided for
-    # --dry-run too: a dry run that promises "push + PR" while the PR step
-    # cannot succeed is worse than no dry run at all.
-    #
-    # ORDER MATTERS, AND IT IS ASSERTED. This sits BELOW the profile
-    # legality gates above. Profile legality is a property of the
-    # REQUEST; a close target is a property of the PUBLISH step. Placed
-    # first, this check answered an illegal `--profile unattended`
-    # upgrade with "no close target", which is the right refusal for the
-    # wrong reason — the exact failure shape this check exists to stop.
-    #
-    # Observed 2026-10-28 (harness-studio-nav): three phases built, three
-    # reviewer PASSes, six verifier gates green, branch pushed, $1.75
-    # spent — then terminated_policy/pr_config because pr.closes was [].
-    if [[ "$CAN_OPEN_PR" == "true" ]]; then
-        # STATUS, NOT JUST OUTPUT. A derive that ERRORS and a derive that
-        # returns EMPTY are different facts. Reading only the output
-        # conflated them once already: with the helper defined further
-        # down the file it failed `command not found`, and the empty
-        # result read as "no close target configured" — a refusal for the
-        # wrong reason, indistinguishable from the right one. Relocating
-        # the helper fixed that instance; reading $? fixes the next
-        # refactor too.
-        local _closes _closes_rc=0
-        _closes=$(derive_close_ids) || _closes_rc=$?
-        if [[ "$_closes_rc" -ne 0 ]]; then
-            echo "Error: could not determine the PR close target — derive_close_ids exited $_closes_rc." >&2
-            echo "This is a driver fault, not a configuration one: the close target was never read." >&2
-            exit 1
-        fi
-        if [[ -z "$_closes" ]]; then
-            echo "Error: profile '$PROFILE' opens a pull request, but no close target is configured." >&2
-            echo "Set pr.closes in $CONFIG_PATH, or an 'issue:' in $SPEC_DIR/plan.md frontmatter." >&2
-            echo "(Checked here rather than at finalizing, so a run cannot build everything" >&2
-            echo " and then refuse to publish it.)" >&2
-            exit 1
-        fi
-    fi
     # #193 (Increment B of #190): REAL admission control. An unattended
     # run must pass the machine-checkable §11 bar (finalized
     # verification.yaml, full FR coverage, sha binding, executable
@@ -1045,11 +1020,7 @@ preflight() {
     # gh preflight (FR-2a): required only when the profile can push / open PRs.
     if [[ "$CAN_PUSH" == "true" ]]; then
         local gh_fail_kind=""
-        if ! "$GH_BIN" --version >/dev/null 2>&1; then
-            gh_fail_kind="binary"
-        elif ! ( cd "$PROJECT_DIR" && "$GH_BIN" auth status ) >/dev/null 2>&1; then
-            gh_fail_kind="auth"
-        fi
+        gh_fail_kind="$(gh_probe)"
         if [[ -n "$gh_fail_kind" ]]; then
             if [[ "$PROFILE" == "unattended" ]]; then
                 # #191 FR-5: push/PR artifacts are BEST-EFFORT under
@@ -1086,6 +1057,18 @@ preflight() {
             state_set '.capability_downgrade = null'
         fi
     fi
+
+    # CALLED AFTER THE gh PREFLIGHT, DELIBERATELY, and through the same
+    # function the dry run uses. Under `unattended` an unusable or
+    # unauthenticated gh DOWNGRADES CAN_OPEN_PR to false and the run
+    # continues without push/PR artifacts by design (#191 FR-5, best-effort
+    # publication protecting the terminate-only contract). Asked before that
+    # downgrade, this refused runs that were never going to open a pull
+    # request at all. The dry run must therefore apply the same downgrade
+    # before asking, or the two paths would answer the same config
+    # differently — which is the defect this check exists to prevent, one
+    # level up.
+    close_target_check "$CAN_OPEN_PR" || exit 1
 
     # Origin gate — exit >= 2 parks and is never auto-resolved.
     # Skip for unattended: the admission bar (validate-spec.sh --unattended)
@@ -2094,6 +2077,45 @@ import_preflight_result() {
 # empty result read as 'no close target' — a check that refused for
 # the wrong reason, which is indistinguishable from refusing for the
 # right one.
+# gh_probe — can gh publish from here? Echoes "" (yes), "binary" or "auth".
+# READ-ONLY: --version and auth status write nothing, so a dry run may ask
+# the same question the real run asks, and get the same answer.
+gh_probe() {
+    if ! "$GH_BIN" --version >/dev/null 2>&1; then
+        echo "binary"
+    elif ! ( cd "$PROJECT_DIR" && "$GH_BIN" auth status ) >/dev/null 2>&1; then
+        echo "auth"
+    fi
+}
+
+# close_target_check <effective-can-open-pr> — the ONE decision, so the dry
+# run and the real run cannot disagree about the same config.
+#
+# Takes the publish capability AFTER any gh downgrade has been applied: under
+# `unattended` an unusable gh sets CAN_OPEN_PR=false and the run continues
+# without PR artifacts by design (#191 FR-5), and a config that will never
+# open a pull request must not be refused for lacking a close target.
+#
+# Prints its reason and returns: 0 nothing to refuse, 1 no target, 2 the
+# target could not be read.
+close_target_check() {
+    local can_open_pr="$1" closes rc=0
+    [[ "$can_open_pr" == "true" ]] || return 0
+    closes=$(derive_close_ids) || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+        echo "Error: could not determine the PR close target — derive_close_ids exited $rc." >&2
+        echo "This is a driver fault, not a configuration one: the close target was never read." >&2
+        return 2
+    fi
+    if [[ -z "$closes" ]]; then
+        echo "Error: profile '$PROFILE' opens a pull request, but no close target is configured." >&2
+        echo "Set pr.closes in $CONFIG_PATH, or an 'issue:' in $SPEC_DIR/plan.md frontmatter." >&2
+        echo "(Checked before the run, so it cannot build everything and then refuse to publish.)" >&2
+        return 1
+    fi
+    return 0
+}
+
 derive_close_ids() {
     # Echo comma-separated issue numbers for the PR "Closes #N" marker.
     # Config pr.closes wins; else the spec's origin-frontmatter issue number.
@@ -4962,11 +4984,29 @@ if [[ "$DRY_RUN" == "true" ]]; then
             echo "  milestone-paused (exit 3) — human sign-off required"
         fi
     done
-    if [[ "$CAN_OPEN_PR" == "true" ]]; then
+    # A DRY RUN MUST PREDICT THE REAL RUN. preflight() is never called here,
+    # so the publish capability is recomputed the same way it would be there:
+    # probe gh (read-only), apply the #191 FR-5 downgrade for `unattended`,
+    # then ask the SAME close_target_check with the SAME exit code. Warning
+    # instead would let a dry run exit 0 on a config the real run refuses —
+    # a false green for anything gating on it.
+    DRY_CAN_OPEN_PR="$CAN_OPEN_PR"
+    DRY_GH="$(gh_probe)"
+    if [[ -n "$DRY_GH" && "$CAN_PUSH" == "true" ]]; then
+        if [[ "$PROFILE" == "unattended" ]]; then
+            DRY_CAN_OPEN_PR=false
+        else
+            echo "  gh is not usable here ($DRY_GH) — profile '$PROFILE' requires it; the real run refuses."
+        fi
+    fi
+    if [[ "$DRY_CAN_OPEN_PR" == "true" ]]; then
         echo "  finalizing -> done ($PROFILE: push + PR per profile)"
+    elif [[ -n "$DRY_GH" && "$PROFILE" == "unattended" ]]; then
+        echo "  finalizing -> done (unattended: gh unusable ($DRY_GH) — nothing pushed, FR-5)"
     else
         echo "  finalizing -> done ($PROFILE: nothing pushed)"
     fi
+    close_target_check "$DRY_CAN_OPEN_PR" || exit $?
     exit 0
 fi
 
