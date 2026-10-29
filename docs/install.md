@@ -76,7 +76,7 @@ The plugin is the quick path; `setup.sh` is the full harness. The plugin's conte
 
 **What only `setup.sh` gives you**
 
-- **Always-loaded rules.** A plugin cannot ship instructions that load into every session. The six skills `setup.sh` installs as always-on rules (coding-standards, copilot-conventions, copyright-headers, origin-confirmation, safety, wiki-first-query) ship in the plugin as ordinary skills: they load when relevant, not always. The two protect hooks enforce file and git safety either way.
+- **Always-loaded rules.** A plugin cannot ship instructions that load into every session. The four skills `setup.sh` installs as always-on rules (coding-standards, copilot-conventions, copyright-headers, safety) ship in the plugin as ordinary skills: they load when relevant, not always. `origin-confirmation` and `wiki-first-query` are **not** always-on under either install — they are on-demand skills, reached through the pointer in the global `CLAUDE.md`. The two protect hooks enforce file and git safety either way.
 - The global `CLAUDE.md` manifest, the `claude-code` launcher, the status line, and the templates for new projects.
 - The peer-review and memkernel hooks — those are CCT-pipeline-specific.
 

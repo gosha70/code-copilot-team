@@ -29,7 +29,16 @@ If `specs/<feature-id>/automation.json` does not exist, copy
 - `test.command` — the command the driver runs to verify each phase (required)
 - `review.reviewers[0].provider` — must match a provider in providers.toml
   with a healthcheck; keep `gating: true`
-- `profile` — only `advisory` is available in this increment
+- `profile` — `advisory` (publishes nothing), `pr` (pushes the branch and
+  opens a pull request, never merges), or `merge` (additionally arms
+  GitHub-native gated auto-merge). A fourth, `unattended`, runs with no human
+  in the loop; it cannot be requested with `--profile` — it must be declared
+  in `automation.json` (schema_version 2, explicit caps, an `unattended`
+  block) and pass admission (`validate-spec.sh --unattended`) before anything
+  runs.
+- `pr.closes` — required for any profile that opens a pull request. Without a
+  close target here, or an `issue:` in `plan.md` frontmatter, the run is
+  refused at preflight.
 - Caps: keep the defaults unless the user asks (phases 8, fix sessions 3,
   wall-clock 4h, cost $25)
 

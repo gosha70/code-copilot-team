@@ -223,7 +223,7 @@ per feature is [docs/features.md](docs/features.md), or ask the CLI
 - **[Studio web UI](docs/session-analytics-cookbook.md)** _(beta)_ — The analytics, benchmarks, auto-build runs, team alerts and the project's own documentation are browsed in one local web app with a settings page for the judge and embedding providers.
 - **[LLM routing profiles](docs/llm-routing.md)** _(experimental)_ — Auto-build tasks are routed to a backend by route class and role under an execution profile, with validate, status and explain commands and a scheduled tick.
 - **[MemKernel persistent memory](shared/skills/memkernel-memory/SKILL.md)** _(experimental)_ — Session context is recalled at start, checkpointed before compaction and recovered after it by hooks that activate only when MemKernel is installed.
-- **[cct command-line front door](docs/features.md)** _(experimental)_ — One provider-neutral command lists every slash command, skill and capability and drives routing; doctor and config are planned.
+- **[cct command-line front door](docs/features.md)** _(experimental)_ — One provider-neutral command lists every slash command, skill and capability, drives routing, reports environment health with doctor, and explains or validates configuration with config.
 <!-- generated:end feature-summary -->
 
 ## Why this exists

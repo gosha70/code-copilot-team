@@ -270,9 +270,17 @@ operator-supplied `required_when_ui_in_scope` is rejected by name):
     "timeout_sec": 900,
     "skip_is_failure": true
   },
-  "app": { "command": "npm start", "ready": { "url": "http://127.0.0.1:3000/health", "timeout_sec": 30 } }
+  "app": {
+    "command": "npm start",
+    "ready": { "url": "http://127.0.0.1:3000/health", "timeout_sec": 30 },
+    "stop_timeout_sec": 10
+  }
 }
 ```
+
+`stop_timeout_sec` is **required** whenever `verification.app` is present —
+`validate-automation-config.sh` refuses the config without it, and the driver
+exits before the first phase. The conformance example above carries it too.
 
 - **Frozen during preflight, and unskippable by omission.** The criteria
   (each FR's statement, sha-pinned) are frozen whenever the spec maps

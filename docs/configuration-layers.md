@@ -69,6 +69,7 @@ Every setting these files hold is listed in the
   ├── verify-after-edit.sh             After a source file is edited, auto-detects and runs the…
   └── verify-on-stop.sh                When Claude finishes responding, auto-detects and runs the…
 ~/.claude/settings.json            ← Hooks wiring and global settings
+~/.claude/commands/*.md            ← CCT slash commands (14, installed by setup.sh)
 ./CLAUDE.md                        ← Project-level (overrides global)
 ./.claude/commands/*.md            ← Project slash commands
 ./CLAUDE.local.md                  ← Personal overrides (gitignored)

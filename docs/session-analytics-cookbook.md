@@ -73,7 +73,10 @@ CCT_SA_DB=sqlite:////Users/you/.cct/session-analytics.db
 > keeps working; the next Save from Settings rewrites it under the new
 > name. The CLI flag is `--db` (`--dsn` still accepted).
 
-Any command takes `--db …` to use a store without touching `.env`.
+21 of the 24 subcommands take `--db …`, to use a store without touching
+`.env`. The three that do not are `list` and `calibrate`, which never open a
+store, and `start`, which configures one: point `start` at a different store
+with `setup --db <dsn>` first, or by setting `CCT_SA_DB`.
 Precedence, lowest to highest: packaged defaults → `~/.cct/session-analytics.json`
 → `.env` → real environment variables → command-line flags.
 
@@ -127,9 +130,10 @@ saying whether the API is reachable. It also tells you when the running
 server is using a different database than the one saved in the form (a
 `--db` flag on the command line wins over `.env`).
 
-The source roots, the embedding settings and the noise thresholds are
-not in that form: set them in `.env` or the environment, and the
-per-project block in `~/.cct/session-analytics.json`.
+The source roots and the noise thresholds are not in that form: set them
+in `.env` or the environment, and the per-project block in
+`~/.cct/session-analytics.json`. The embedding settings *are* in the form —
+Settings → Embeddings carries the backend and model.
 
 ---
 
@@ -289,7 +293,7 @@ that free.
 The judge is **configured in one place: Settings → LLM-as-Judge**
 (backend, model, workers, URL). The Model field lists what the saved
 backend URL actually serves; choose *Other…* to type a name it does not
-list. **Analysis → step 3, LLM judge** runs that judge — it shows which
+list. **Analysis → the LLM judge step** runs that judge — it shows which
 one and links back to Settings; it is not a second place to choose.
 Set how many turns and run. The step reports as it goes:
 turns done of total, labelled and failed, the rate and time left, and
@@ -323,7 +327,7 @@ configuration is:
    prompt to the saved judge. Expect `openai:qwen38-27b answered in
    0.7s: {"ok": true}`. A failure shows the server's own reason (a
    wrong model name, a wrong port).
-4. **Analysis → step 3**, Run llm judge. Verified on that Spark: about
+4. **Analysis → the LLM judge step**, Run llm judge. Verified on that Spark: about
    10 s per turn.
 
 For Ollama on the Spark instead: Backend `ollama`, Ollama URL
