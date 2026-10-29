@@ -3,9 +3,10 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import FirstRunBanner from "@/components/FirstRunBanner";
 import NavTabs, { type NavTab } from "@/components/NavTabs";
+import { PRODUCT_NAME } from "@/lib/nav";
 
 export const metadata: Metadata = {
-  title: "Session Analytics Studio",
+  title: PRODUCT_NAME,
   description: "Copilot session analytics & process mining (CCT #63)",
 };
 
@@ -63,7 +64,7 @@ export default function RootLayout({
                   height={28}
                   className="w-7 h-7 object-contain"
                 />
-                Session Analytics
+                {PRODUCT_NAME}
               </Link>
               <NavTabs tabs={TABS} />
             </div>

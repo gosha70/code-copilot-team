@@ -1,4 +1,4 @@
-# Session Analytics Studio
+# Harness Studio
 
 Next.js + Tailwind + Cytoscape UI for the Copilot Session Analytics pipeline
 (CCT issue #63). Pure presentation — it never touches a database directly; all
