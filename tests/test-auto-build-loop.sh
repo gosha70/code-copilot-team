@@ -1560,9 +1560,25 @@ assert_contains "--detach reports the log it writes to" "$OUTPUT" "auto-build de
 # a child that received "demo-feat --profile unattended" reaches the
 # close-target gate at all. Captured from the log, not the terminal.
 DETACH_LOG="$P/.cct/auto-build/demo-feat.log"
-for _i in 1 2 3 4 5 6 7 8 9 10; do [[ -s "$DETACH_LOG" ]] && break; sleep 1; done
+# Wait for the CHILD to exit, not merely for the log to be non-empty: the
+# fixture is removed below, and a child still running inside it would race
+# `rm -rf`. A log that never appears is reported as that, rather than being
+# asserted against an empty string and failing confusingly.
+for _i in $(seq 1 30); do
+    pgrep -f "auto-build-loop.sh demo-feat" >/dev/null 2>&1 || break
+    sleep 1
+done
+assert_eq "the detached child exited rather than outliving its fixture" "0" \
+    "$(pgrep -f "auto-build-loop.sh demo-feat" >/dev/null 2>&1 && echo 1 || echo 0)"
+assert_eq "the detached child wrote the log it promised" "1" \
+    "$([[ -s "$DETACH_LOG" ]] && echo 1 || echo 0)"
 assert_contains "the detached child ran with the argv minus --detach" \
     "$(cat "$DETACH_LOG" 2>/dev/null)" "no close target is configured"
+# `grep -c` PRINTS 0 and EXITS 1 on no match, so `|| echo 0` would emit a
+# second line and the comparison would read "0\n0". `|| true` keeps grep's
+# own count as the only value.
+assert_eq "the detached child did not fail to exec" "0" \
+    "$(grep -c 'could not start the detached run' "$DETACH_LOG" 2>/dev/null || true)"
 rm -rf "$P"
 
 # The A-era test seam is deleted — real admission replaced it.

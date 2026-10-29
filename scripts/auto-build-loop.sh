@@ -23,6 +23,12 @@ set -uo pipefail
 #                             --unattended) before anything runs.
 #   --config <path>           Config (default: specs/<feature-id>/automation.json)
 #   --resume                  Continue a paused/parked run from the ledger
+#   --detach                  Run in a new session with no controlling terminal
+#                             and return at once; output goes to
+#                             <ledger-root>/<feature-id>.log (CCT_AUTOBUILD_LOG
+#                             overrides). Use this instead of `nohup … &`, which
+#                             a background tcsetattr() stops with SIGTTOU.
+#                             Cannot be combined with --dry-run.
 #   --dry-run                 Print planned phases/transitions; no side effects
 #   --max-phases N            Override config phase cap
 #   --start-phase N           Start at phase N (default: from ledger or 1)
@@ -177,8 +183,9 @@ if [[ "$DETACH" == "true" ]]; then
     fi
     DETACH_LOG="${CCT_AUTOBUILD_LOG:-$PROJECT_DIR/$AUTOBUILD_ROOT/$FEATURE_ID.log}"
     mkdir -p "$(dirname "$DETACH_LOG")"
-    # CCT_AUTOBUILD_DETACHED stops the re-exec from detaching again.
-    CCT_AUTOBUILD_DETACHED=1 python3 - "$0" "$DETACH_LOG" "$PROJECT_DIR" \
+    # Re-detaching is prevented by ORIGINAL_ARGS, which excludes --detach —
+    # not by any environment flag. Nothing here reads one.
+    python3 - "$0" "$DETACH_LOG" "$PROJECT_DIR" \
         "${ORIGINAL_ARGS[@]}" <<'DETACH_PY'
 import os, sys
 
@@ -199,7 +206,20 @@ fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
 os.dup2(fd, 1)
 os.dup2(fd, 2)
 os.chdir(project)
-os.execvp("bash", ["bash", script] + passthrough)
+
+# AN EXEC FAILURE MUST NOT BE SILENT. The parent has already printed
+# "detached" and exited 0, so it cannot report this. The user was told to
+# read the log, so the log is where the failure goes — otherwise a missing
+# bash or an unreadable script leaves them tailing an empty file forever.
+try:
+    os.execvp("bash", ["bash", script] + passthrough)
+except OSError as exc:
+    sys.stderr.write(
+        f"auto-build: could not start the detached run: {exc}\n"
+        f"  tried: bash {script} {' '.join(passthrough)}\n"
+    )
+    sys.stderr.flush()
+    os._exit(127)
 DETACH_PY
     exit $?
 fi
