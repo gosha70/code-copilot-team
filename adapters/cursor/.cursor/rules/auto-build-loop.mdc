@@ -189,7 +189,7 @@ Every run now records an explicit ledger `outcome`:
 |---|---|---|---|
 | `landed` | 0 | all phases done, review-verified | n/a |
 | *(parked)* | 4 | attended breaker — human resolves, `--resume` | yes (playbook above) |
-| `terminated_policy` | 6 | **unattended** breaker — the system deliberately stopped at a defined safety/quality/budget boundary | **conditionally** — `--resume` continues at the review step for `provider_unavailable`, `review_breaker` and `review_inconclusive`, provided the phase's build commit is still the branch head (#190 D2). Every other reason, and a moved head, still needs a fresh run. See [auto-build.md](../../../docs/auto-build.md) |
+| `terminated_policy` | 6 | **unattended** breaker — the system deliberately stopped at a defined safety/quality/budget boundary | **conditionally** — `--resume` continues at the review step for `provider_unavailable`, `review_breaker` and `review_inconclusive`, provided the phase's build commit is still the branch head (#190 D2). Every other reason, and a moved head, still needs a fresh run. See `docs/auto-build.md` in the repository. |
 | `failed` | 1/5 | the control system itself broke (usage/preflight/supervisor caps) | fix the environment |
 
 Under `unattended`, every breaker that would park instead becomes a
