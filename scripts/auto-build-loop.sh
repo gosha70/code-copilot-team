@@ -192,33 +192,62 @@ import os, sys
 script, log, project = sys.argv[1], sys.argv[2], sys.argv[3]
 passthrough = sys.argv[4:]
 
-if os.fork() > 0:
-    print(f"auto-build detached — log: {log}")
+# STARTUP HANDSHAKE, NOT A BARE FORK.
+# A bare fork lets the parent print "detached" and exit 0 while the child has
+# not yet called setsid(), opened the log, or crossed exec — so "started" was
+# a guess. Closing the terminal in that window, or a failing exec, produced a
+# success message and no run. The pipe closes this gap: its write end is
+# close-on-exec (Python's default for os.pipe), so a SUCCESSFUL exec closes it
+# and the parent's read returns EOF. A FAILING exec writes the reason through
+# it first. The parent therefore blocks until the child has really detached
+# and really crossed exec, and reports whichever actually happened.
+read_fd, write_fd = os.pipe()
+
+pid = os.fork()
+if pid > 0:
+    os.close(write_fd)
+    reason = b""
+    while True:
+        chunk = os.read(read_fd, 4096)
+        if not chunk:
+            break
+        reason += chunk
+    os.close(read_fd)
+    if reason:
+        sys.stderr.write(reason.decode("utf-8", "replace"))
+        raise SystemExit(127)
+    # EOF with no message: exec succeeded in a new session.
+    print(f"auto-build detached — pid {pid}, log: {log}")
     print(f"follow it with:  tail -f {log}")
     raise SystemExit(0)
 
-# New session: no controlling terminal, so tcsetattr in any descendant
-# returns ENOTTY instead of stopping the run, and closing the terminal
-# cannot deliver SIGHUP to it.
-os.setsid()
-os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
-fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
-os.dup2(fd, 1)
-os.dup2(fd, 2)
-os.chdir(project)
-
-# AN EXEC FAILURE MUST NOT BE SILENT. The parent has already printed
-# "detached" and exited 0, so it cannot report this. The user was told to
-# read the log, so the log is where the failure goes — otherwise a missing
-# bash or an unreadable script leaves them tailing an empty file forever.
+os.close(read_fd)
 try:
+    # New session: no controlling terminal, so tcsetattr in any descendant
+    # returns ENOTTY instead of stopping the run, and closing the terminal
+    # cannot deliver SIGHUP to it.
+    os.setsid()
+    os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
+    fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    os.dup2(fd, 1)
+    os.dup2(fd, 2)
+    os.chdir(project)
     os.execvp("bash", ["bash", script] + passthrough)
-except OSError as exc:
-    sys.stderr.write(
+except BaseException as exc:
+    detail = (
         f"auto-build: could not start the detached run: {exc}\n"
         f"  tried: bash {script} {' '.join(passthrough)}\n"
     )
-    sys.stderr.flush()
+    try:
+        os.write(write_fd, detail.encode())
+    except OSError:
+        pass
+    # Also to the log, for the case where the parent is already gone.
+    try:
+        sys.stderr.write(detail)
+        sys.stderr.flush()
+    except Exception:
+        pass
     os._exit(127)
 DETACH_PY
     exit $?
@@ -2068,14 +2097,36 @@ import_preflight_result() {
 derive_close_ids() {
     # Echo comma-separated issue numbers for the PR "Closes #N" marker.
     # Config pr.closes wins; else the spec's origin-frontmatter issue number.
-    local ids
-    ids=$(jq -r '(.pr.closes // []) | map(tostring) | join(",")' "$CONFIG_SNAPSHOT" 2>/dev/null)
+    #
+    # A READ FAILURE AND AN ABSENT TARGET ARE DIFFERENT ANSWERS, and this
+    # function is the only place that can tell them apart. It used to
+    # suppress jq's status, fall through to the plan, and end on a bare
+    # `echo` — so it returned 0 no matter what broke, and the caller's
+    # "driver fault" branch could never run. Nonzero here now means the
+    # target could not be READ; empty-with-zero means there genuinely is
+    # none.
+    local ids jq_rc=0
+    ids=$(jq -r '(.pr.closes // []) | map(tostring) | join(",")' "$CONFIG_SNAPSHOT" 2>/dev/null) || jq_rc=$?
+    if [[ "$jq_rc" -ne 0 ]]; then
+        echo "derive_close_ids: jq could not read $CONFIG_SNAPSHOT (exit $jq_rc)" >&2
+        return 2
+    fi
     if [[ -n "$ids" && "$ids" != "null" ]]; then
         echo "$ids"; return 0
     fi
-    local raw
-    raw=$(sed -n '/^---$/,/^---$/p' "$SPEC_DIR/plan.md" 2>/dev/null \
-          | grep -E '^[[:space:]]*issue:' | head -1 | sed -E 's/^[[:space:]]*issue:[[:space:]]*//')
+    local plan="$SPEC_DIR/plan.md"
+    # Absent is a legitimate "no target". Present-but-unreadable is not: it
+    # is a target this function was prevented from reading.
+    if [[ -e "$plan" && ! -r "$plan" ]]; then
+        echo "derive_close_ids: $plan exists but is not readable" >&2
+        return 2
+    fi
+    local raw=""
+    if [[ -r "$plan" ]]; then
+        raw=$(sed -n '/^---$/,/^---$/p' "$plan" \
+              | { grep -E '^[[:space:]]*issue:' || true; } \
+              | head -1 | sed -E 's/^[[:space:]]*issue:[[:space:]]*//')
+    fi
     raw="${raw##*#}"
     printf '%s' "$raw" | tr -cd '0-9'
     echo

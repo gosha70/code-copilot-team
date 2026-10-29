@@ -1540,6 +1540,27 @@ assert_contains "an illegal profile upgrade still names the declaration rule" "$
     "must be declared"
 rm -rf "$P"
 
+# A close target that cannot be READ is a driver fault, not a missing config.
+# Without this, derive_close_ids could normalise every failure to success and
+# the caller's nonzero branch would be unreachable — a diagnostic that reports
+# nothing is worse than none, because it reads as evidence.
+P=$(setup_project); unattended_cfg "$P"
+cfg_set "$P" '.pr.closes=[]'
+chmod 000 "$P/specs/demo-feat/plan.md"
+run_driver "$P" --dry-run
+assert_exit "an unreadable plan.md is refused (exit 1)" 1 "$RC"
+assert_contains "a read failure is named as a DRIVER fault" "$OUTPUT" \
+    "could not determine the PR close target"
+assert_eq "it is NOT reported as a missing close target" "0" \
+    "$(printf '%s' "$OUTPUT" | grep -c 'no close target is configured' || true)"
+chmod 644 "$P/specs/demo-feat/plan.md"
+# …and the same fixture, readable, gives the OTHER answer — so the two
+# branches are distinguishable rather than both firing on everything.
+run_driver "$P" --dry-run
+assert_contains "a readable plan with no target gives the config answer" "$OUTPUT" \
+    "no close target is configured"
+rm -rf "$P"
+
 # ── --detach: an unattended run that survives the terminal ──────────
 #
 # `nohup driver &` stops instantly with "suspended (tty output)": something
@@ -1560,18 +1581,21 @@ assert_contains "--detach reports the log it writes to" "$OUTPUT" "auto-build de
 # a child that received "demo-feat --profile unattended" reaches the
 # close-target gate at all. Captured from the log, not the terminal.
 DETACH_LOG="$P/.cct/auto-build/demo-feat.log"
-# Wait for the CHILD to exit, not merely for the log to be non-empty: the
-# fixture is removed below, and a child still running inside it would race
-# `rm -rf`. A log that never appears is reported as that, rather than being
-# asserted against an empty string and failing confusingly.
-for _i in $(seq 1 30); do
-    pgrep -f "auto-build-loop.sh demo-feat" >/dev/null 2>&1 || break
+# Wait on the EXACT PID the parent reported, not a process-NAME pattern: a
+# pattern can be searched before the child's argv becomes the driver's,
+# conclude the child is gone, and remove the fixture out from under it. The
+# handshake means the log file already exists by the time the parent returns.
+DETACH_PID=$(printf '%s' "$OUTPUT" | sed -n 's/.*pid \([0-9][0-9]*\),.*/\1/p' | head -1)
+assert_eq "--detach reports the child's pid" "1" \
+    "$([[ "$DETACH_PID" =~ ^[0-9]+$ ]] && echo 1 || echo 0)"
+assert_eq "the log file exists as soon as the parent returns" "1" \
+    "$([[ -e "$DETACH_LOG" ]] && echo 1 || echo 0)"
+for _i in $(seq 1 60); do
+    kill -0 "$DETACH_PID" 2>/dev/null || break
     sleep 1
 done
 assert_eq "the detached child exited rather than outliving its fixture" "0" \
-    "$(pgrep -f "auto-build-loop.sh demo-feat" >/dev/null 2>&1 && echo 1 || echo 0)"
-assert_eq "the detached child wrote the log it promised" "1" \
-    "$([[ -s "$DETACH_LOG" ]] && echo 1 || echo 0)"
+    "$(kill -0 "$DETACH_PID" 2>/dev/null && echo 1 || echo 0)"
 assert_contains "the detached child ran with the argv minus --detach" \
     "$(cat "$DETACH_LOG" 2>/dev/null)" "no close target is configured"
 # `grep -c` PRINTS 0 and EXITS 1 on no match, so `|| echo 0` would emit a
