@@ -23,6 +23,12 @@ set -uo pipefail
 #                             --unattended) before anything runs.
 #   --config <path>           Config (default: specs/<feature-id>/automation.json)
 #   --resume                  Continue a paused/parked run from the ledger
+#   --detach                  Run in a new session with no controlling terminal
+#                             and return at once; output goes to
+#                             <ledger-root>/<feature-id>.log (CCT_AUTOBUILD_LOG
+#                             overrides). Use this instead of `nohup … &`, which
+#                             a background tcsetattr() stops with SIGTTOU.
+#                             Cannot be combined with --dry-run.
 #   --dry-run                 Print planned phases/transitions; no side effects
 #   --max-phases N            Override config phase cap
 #   --start-phase N           Start at phase N (default: from ledger or 1)
@@ -99,6 +105,7 @@ RESUME=false
 DRY_RUN=false
 MAX_PHASES_ARG=""
 START_PHASE_ARG=""
+DETACH=false
 
 usage() {
     # Print the header comment block (everything from line 4 to the first
@@ -106,11 +113,21 @@ usage() {
     awk 'NR < 4 { next } !/^#/ { exit } { print }' "$0" | sed 's/^# \{0,1\}//'
 }
 
+# The argv --detach re-execs with, minus --detach itself. Captured BEFORE
+# the parse loop, which shifts "$@" empty.
+ORIGINAL_ARGS=()
+for _arg in "$@"; do
+    [[ "$_arg" == "--detach" ]] && continue
+    ORIGINAL_ARGS+=("$_arg")
+done
+unset _arg
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --profile)     PROFILE_ARG="${2:?--profile requires a value}"; shift 2 ;;
         --config)      CONFIG_PATH="${2:?--config requires a path}"; shift 2 ;;
         --resume)      RESUME=true; shift ;;
+        --detach)      DETACH=true; shift ;;
         --dry-run)     DRY_RUN=true; shift ;;
         --max-phases)  MAX_PHASES_ARG="${2:?--max-phases requires a number}"; shift 2 ;;
         --start-phase) START_PHASE_ARG="${2:?--start-phase requires a number}"; shift 2 ;;
@@ -136,6 +153,127 @@ fi
 
 SPEC_DIR="$PROJECT_DIR/specs/$FEATURE_ID"
 CONFIG_PATH="${CONFIG_PATH:-$SPEC_DIR/automation.json}"
+
+# ── --detach: start an unattended run that survives the terminal ──────
+#
+# WHY THIS EXISTS. `nohup auto-build-loop.sh … &` does not work, and the
+# failure looks like a hang: the job stops immediately with "suspended
+# (tty output)". The cause is not the `tostop` tty flag — the observed
+# failure happened with tostop OFF. Something in the toolchain calls
+# tcsetattr() to configure the terminal, and tcsetattr from a background
+# process group raises SIGTTOU unconditionally. Redirecting stdout and
+# stderr cannot help, because the call is on the terminal itself rather
+# than on a stream.
+#
+# The only reliable fix is to leave the terminal's session, so there is
+# no controlling terminal to configure: fork, setsid, then exec. macOS
+# ships no setsid(1), so python3 performs the fork — it is already a hard
+# dependency of this toolkit.
+#
+# Observed 2026-10-28: a run launched with `nohup … &` sat stopped at
+# preflight indefinitely, doing nothing, while appearing to be running.
+if [[ "$DETACH" == "true" ]]; then
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo "Error: --detach and --dry-run are contradictory (a dry run prints its plan to this terminal)." >&2
+        exit 1
+    fi
+    if ! command -v python3 &>/dev/null; then
+        echo "Error: --detach needs python3 (macOS has no setsid(1))." >&2
+        exit 1
+    fi
+    DETACH_LOG="${CCT_AUTOBUILD_LOG:-$PROJECT_DIR/$AUTOBUILD_ROOT/$FEATURE_ID.log}"
+    mkdir -p "$(dirname "$DETACH_LOG")"
+    # Re-detaching is prevented by ORIGINAL_ARGS, which excludes --detach —
+    # not by any environment flag. Nothing here reads one.
+    python3 - "$0" "$DETACH_LOG" "$PROJECT_DIR" \
+        "${ORIGINAL_ARGS[@]}" <<'DETACH_PY'
+import os, sys
+
+script, log, project = sys.argv[1], sys.argv[2], sys.argv[3]
+passthrough = sys.argv[4:]
+
+# STARTUP HANDSHAKE, NOT A BARE FORK.
+# A bare fork lets the parent print "detached" and exit 0 while the child has
+# not yet called setsid(), opened the log, or crossed exec — so "started" was
+# a guess. Closing the terminal in that window, or a failing exec, produced a
+# success message and no run. The pipe closes this gap: its write end is
+# close-on-exec (Python's default for os.pipe), so a SUCCESSFUL exec closes it
+# and the parent's read returns EOF. A FAILING exec writes the reason through
+# it first. The parent therefore blocks until the child has really detached
+# and really crossed exec, and reports whichever actually happened.
+read_fd, write_fd = os.pipe()
+
+pid = os.fork()
+if pid > 0:
+    os.close(write_fd)
+    reply = b""
+    while True:
+        chunk = os.read(read_fd, 4096)
+        if not chunk:
+            break
+        reply += chunk
+    os.close(read_fd)
+    # EOF ALONE IS NOT SUCCESS. A child killed between fork and exec — a
+    # signal, an OOM kill, an interpreter crash — closes the pipe without
+    # writing, which is byte-for-byte what a successful exec looks like. The
+    # child therefore sends a READY sentinel immediately before exec: EOF
+    # preceded by the sentinel means exec ran, EOF without it means the child
+    # died before reaching exec, and a sentinel followed by text means exec
+    # itself failed and said why.
+    if not reply.startswith(b"\x01"):
+        # A reason means the child reported its own failure before reaching
+        # the sentinel; print it as it stands rather than wrapping it in a
+        # verdict of our own, which would both double the prefix and claim
+        # something less precise than what the child already said.
+        sys.stderr.write(
+            reply.decode("utf-8", "replace") if reply
+            else "auto-build: the detached child died before it could start the run"
+                 " (no reason reported)\n"
+        )
+        raise SystemExit(127)
+    reason = reply[1:]
+    if reason:
+        sys.stderr.write(reason.decode("utf-8", "replace"))
+        raise SystemExit(127)
+    print(f"auto-build detached — pid {pid}, log: {log}")
+    print(f"follow it with:  tail -f {log}")
+    raise SystemExit(0)
+
+os.close(read_fd)
+try:
+    # New session: no controlling terminal, so tcsetattr in any descendant
+    # returns ENOTTY instead of stopping the run, and closing the terminal
+    # cannot deliver SIGHUP to it.
+    os.setsid()
+    os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
+    fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    os.dup2(fd, 1)
+    os.dup2(fd, 2)
+    os.chdir(project)
+    # READY: everything that can fail before exec has succeeded. Written
+    # before execvp so a successful exec leaves exactly this byte, and a
+    # death before this point leaves nothing.
+    os.write(write_fd, b"\x01")
+    os.execvp("bash", ["bash", script] + passthrough)
+except BaseException as exc:
+    detail = (
+        f"auto-build: could not start the detached run: {exc}\n"
+        f"  tried: bash {script} {' '.join(passthrough)}\n"
+    )
+    try:
+        os.write(write_fd, detail.encode())
+    except OSError:
+        pass
+    # Also to the log, for the case where the parent is already gone.
+    try:
+        sys.stderr.write(detail)
+        sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(127)
+DETACH_PY
+    exit $?
+fi
 LEDGER_DIR="$PROJECT_DIR/$AUTOBUILD_ROOT/$FEATURE_ID"
 STATE="$LEDGER_DIR/state.json"
 EVENTS="$LEDGER_DIR/events.jsonl"
@@ -886,11 +1024,7 @@ preflight() {
     # gh preflight (FR-2a): required only when the profile can push / open PRs.
     if [[ "$CAN_PUSH" == "true" ]]; then
         local gh_fail_kind=""
-        if ! "$GH_BIN" --version >/dev/null 2>&1; then
-            gh_fail_kind="binary"
-        elif ! ( cd "$PROJECT_DIR" && "$GH_BIN" auth status ) >/dev/null 2>&1; then
-            gh_fail_kind="auth"
-        fi
+        gh_fail_kind="$(gh_probe)"
         if [[ -n "$gh_fail_kind" ]]; then
             if [[ "$PROFILE" == "unattended" ]]; then
                 # #191 FR-5: push/PR artifacts are BEST-EFFORT under
@@ -927,6 +1061,18 @@ preflight() {
             state_set '.capability_downgrade = null'
         fi
     fi
+
+    # CALLED AFTER THE gh PREFLIGHT, DELIBERATELY, and through the same
+    # function the dry run uses. Under `unattended` an unusable or
+    # unauthenticated gh DOWNGRADES CAN_OPEN_PR to false and the run
+    # continues without push/PR artifacts by design (#191 FR-5, best-effort
+    # publication protecting the terminate-only contract). Asked before that
+    # downgrade, this refused runs that were never going to open a pull
+    # request at all. The dry run must therefore apply the same downgrade
+    # before asking, or the two paths would answer the same config
+    # differently — which is the defect this check exists to prevent, one
+    # level up.
+    close_target_check "$CAN_OPEN_PR" || exit 1
 
     # Origin gate — exit >= 2 parks and is never auto-resolved.
     # Skip for unattended: the admission bar (validate-spec.sh --unattended)
@@ -1926,6 +2072,89 @@ import_preflight_result() {
 
     rm -f "$result_file"
     echo "[auto-build] preflight result imported (path: $PREFLIGHT_PATH)" >&2
+}
+
+# gh_probe — can gh publish from here? Echoes "" (yes), "binary" or "auth".
+# READ-ONLY: --version and auth status write nothing, so a dry run may ask
+# the same question the real run asks, and get the same answer.
+gh_probe() {
+    if ! "$GH_BIN" --version >/dev/null 2>&1; then
+        echo "binary"
+    elif ! ( cd "$PROJECT_DIR" && "$GH_BIN" auth status ) >/dev/null 2>&1; then
+        echo "auth"
+    fi
+}
+
+# close_target_check <effective-can-open-pr> — the ONE decision, so the dry
+# run and the real run cannot disagree about the same config.
+#
+# Takes the publish capability AFTER any gh downgrade has been applied: under
+# `unattended` an unusable gh sets CAN_OPEN_PR=false and the run continues
+# without PR artifacts by design (#191 FR-5), and a config that will never
+# open a pull request must not be refused for lacking a close target.
+#
+# Prints its reason and returns: 0 nothing to refuse, 1 no target, 2 the
+# target could not be read.
+close_target_check() {
+    local can_open_pr="$1" closes rc=0
+    [[ "$can_open_pr" == "true" ]] || return 0
+    closes=$(derive_close_ids) || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+        echo "Error: could not determine the PR close target — derive_close_ids exited $rc." >&2
+        echo "This is a driver fault, not a configuration one: the close target was never read." >&2
+        return 2
+    fi
+    if [[ -z "$closes" ]]; then
+        echo "Error: profile '$PROFILE' opens a pull request, but no close target is configured." >&2
+        echo "Set pr.closes in $CONFIG_PATH, or an 'issue:' in $SPEC_DIR/plan.md frontmatter." >&2
+        echo "(Checked before the run, so it cannot build everything and then refuse to publish.)" >&2
+        return 1
+    fi
+    return 0
+}
+
+# These three are defined HERE, above preflight, because preflight calls
+# them. A bash function exists only once its definition has EXECUTED: left
+# at its old position further down the file, the preflight call to
+# derive_close_ids failed 'command not found' and the empty output read as
+# "no close target" — a refusal for the wrong reason, indistinguishable
+# from the right one.
+derive_close_ids() {
+    # Echo comma-separated issue numbers for the PR "Closes #N" marker.
+    # Config pr.closes wins; else the spec's origin-frontmatter issue number.
+    #
+    # A READ FAILURE AND AN ABSENT TARGET ARE DIFFERENT ANSWERS, and this
+    # function is the only place that can tell them apart. It used to
+    # suppress jq's status, fall through to the plan, and end on a bare
+    # `echo` — so it returned 0 no matter what broke, and the caller's
+    # "driver fault" branch could never run. Nonzero here now means the
+    # target could not be READ; empty-with-zero means there genuinely is
+    # none.
+    local ids jq_rc=0
+    ids=$(jq -r '(.pr.closes // []) | map(tostring) | join(",")' "$CONFIG_SNAPSHOT" 2>/dev/null) || jq_rc=$?
+    if [[ "$jq_rc" -ne 0 ]]; then
+        echo "derive_close_ids: jq could not read $CONFIG_SNAPSHOT (exit $jq_rc)" >&2
+        return 2
+    fi
+    if [[ -n "$ids" && "$ids" != "null" ]]; then
+        echo "$ids"; return 0
+    fi
+    local plan="$SPEC_DIR/plan.md"
+    # Absent is a legitimate "no target". Present-but-unreadable is not: it
+    # is a target this function was prevented from reading.
+    if [[ -e "$plan" && ! -r "$plan" ]]; then
+        echo "derive_close_ids: $plan exists but is not readable" >&2
+        return 2
+    fi
+    local raw=""
+    if [[ -r "$plan" ]]; then
+        raw=$(sed -n '/^---$/,/^---$/p' "$plan" \
+              | { grep -E '^[[:space:]]*issue:' || true; } \
+              | head -1 | sed -E 's/^[[:space:]]*issue:[[:space:]]*//')
+    fi
+    raw="${raw##*#}"
+    printf '%s' "$raw" | tr -cd '0-9'
+    echo
 }
 
 # ── Worktree prune (T7 — FR-8) ───────────────────────────────
@@ -4758,11 +4987,46 @@ if [[ "$DRY_RUN" == "true" ]]; then
             echo "  milestone-paused (exit 3) — human sign-off required"
         fi
     done
-    if [[ "$CAN_OPEN_PR" == "true" ]]; then
+    # A DRY RUN MUST PREDICT THE REAL RUN. preflight() is never called here,
+    # so the publish capability is recomputed the same way it would be there:
+    # probe gh (read-only), apply the #191 FR-5 downgrade for `unattended`,
+    # then ask the SAME close_target_check with the SAME exit code. Warning
+    # instead would let a dry run exit 0 on a config the real run refuses —
+    # a false green for anything gating on it.
+    DRY_CAN_OPEN_PR="$CAN_OPEN_PR"
+    DRY_GH="$(gh_probe)"
+    DRY_GH_FATAL=false
+    if [[ -n "$DRY_GH" && "$CAN_PUSH" == "true" ]]; then
+        if [[ "$PROFILE" == "unattended" ]]; then
+            DRY_CAN_OPEN_PR=false
+        else
+            # For pr/merge an unusable gh is FATAL in preflight, not a
+            # downgrade. The dry run refuses for it too: reporting a refusal
+            # and then exiting 0 is the same false green as warning about a
+            # missing close target and exiting 0.
+            DRY_GH_FATAL=true
+        fi
+    fi
+    if [[ "$DRY_GH_FATAL" == "true" ]]; then
+        echo "  finalizing -> REFUSED: profile '$PROFILE' requires gh, and gh is not usable here ($DRY_GH)"
+    elif [[ "$DRY_CAN_OPEN_PR" == "true" ]]; then
         echo "  finalizing -> done ($PROFILE: push + PR per profile)"
+    elif [[ -n "$DRY_GH" && "$PROFILE" == "unattended" ]]; then
+        echo "  finalizing -> done (unattended: gh unusable ($DRY_GH) — nothing pushed, FR-5)"
     else
         echo "  finalizing -> done ($PROFILE: nothing pushed)"
     fi
+    if [[ "$DRY_GH_FATAL" == "true" ]]; then
+        echo "Error: gh is not usable ($DRY_GH) — required for profile '$PROFILE'." >&2
+        exit 1
+    fi
+    # EXIT 1 FROM BOTH CALLERS. close_target_check distinguishes "no target"
+    # (1) from "target unreadable" (2) in its RETURN so each caller can say
+    # which happened, but the driver's documented preflight failure is exit 1
+    # and exit >= 2 already means parked elsewhere. The distinction lives in
+    # the message, not the status, or the same config would leave a dry run
+    # with 2 and a real run with 1.
+    close_target_check "$DRY_CAN_OPEN_PR" || exit 1
     exit 0
 fi
 
@@ -5334,21 +5598,6 @@ resume_parked() {
 
 # ── PR create / idempotent update (FR-3..FR-7, pr profile) ──
 
-derive_close_ids() {
-    # Echo comma-separated issue numbers for the PR "Closes #N" marker.
-    # Config pr.closes wins; else the spec's origin-frontmatter issue number.
-    local ids
-    ids=$(jq -r '(.pr.closes // []) | map(tostring) | join(",")' "$CONFIG_SNAPSHOT" 2>/dev/null)
-    if [[ -n "$ids" && "$ids" != "null" ]]; then
-        echo "$ids"; return 0
-    fi
-    local raw
-    raw=$(sed -n '/^---$/,/^---$/p' "$SPEC_DIR/plan.md" 2>/dev/null \
-          | grep -E '^[[:space:]]*issue:' | head -1 | sed -E 's/^[[:space:]]*issue:[[:space:]]*//')
-    raw="${raw##*#}"
-    printf '%s' "$raw" | tr -cd '0-9'
-    echo
-}
 
 compose_pr_body() {
     # compose_pr_body <out-file>

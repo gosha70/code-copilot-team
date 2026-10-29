@@ -1447,8 +1447,14 @@ echo "=== #191: unattended — fail-closed + terminate-only dispatch ==="
 # Rewrites a fixture to a valid schema_version-2 unattended config
 # (explicit caps + terminate-only dispositions, per the validator).
 unattended_cfg() {
+    # pr.closes is part of a valid unattended config: the profile opens a
+    # pull request, and preflight refuses a PR-opening profile with no
+    # close target. Every `pr`/`merge` fixture below already sets it; the
+    # omission here was invisible while the close-target check lived at
+    # finalizing, which these tests do not reach.
     cfg_set "$1" '.schema_version=2 | .profile="unattended"
         | .caps={cost_usd:12, wall_clock_sec:3600}
+        | .pr={closes:[1], title:"demo-feat [auto-build]"}
         | .unattended={on_review_breaker:"terminate", on_stale_finding:"terminate", on_origin_gate:"terminate"}'
 }
 
@@ -1492,6 +1498,192 @@ assert_eq "refused run writes no termination artifact" "0" \
 # test.command) — the planning surface is unchanged.
 run_driver "$P" --dry-run
 assert_exit "unattended dry run skips admission (exit 0)" 0 "$RC"
+rm -rf "$P"
+
+# ── the PR close target: ONE decision, asked by both paths ──────────
+#
+# WHY. The refusal used to land at `finalizing`, after three phases, three
+# reviewer rounds and a push: one observed run spent $1.75 to report that
+# pr.closes was []. It is now decided before the run — and the DRY RUN asks
+# the SAME function with the SAME exit code, because a dry run that exits 0
+# on a config the real run refuses is a false green for anything gating on
+# it, and two paths answering one config differently is the defect this
+# check exists to prevent, one level up.
+#
+# gh is STUBBED here on purpose: the decision depends on whether gh can
+# publish, so leaving that to the host's auth state would make the outcome
+# of these assertions depend on where they run.
+cto_run() {  # cto_run <project> [extra driver args…]
+    local project="$1"; shift
+    RC=0
+    OUTPUT=$(cd "$project" && CCT_PROJECT_DIR="$project" \
+        CCT_CLAUDE_BIN="$MOCK_BIN/claude" CCT_GH_BIN="$GH_STUB" \
+        GH_AUTH_FAIL="${GH_AUTH_FAIL:-}" \
+        bash "$DRIVER" demo-feat "$@" 2>&1) || RC=$?
+}
+
+P=$(setup_project); unattended_cfg "$P"
+cfg_set "$P" '.pr.closes=[]'
+cto_run "$P" --dry-run
+assert_exit "a dry run REFUSES a config the real run would refuse (exit 1)" 1 "$RC"
+assert_contains "the refusal names the close target, not something else" "$OUTPUT" \
+    "no close target is configured"
+assert_contains "the refusal names pr.closes as one remedy" "$OUTPUT" "pr.closes"
+assert_contains "the refusal names plan.md frontmatter as the other" "$OUTPUT" "plan.md"
+assert_eq "the dry run still wrote no ledger" "0" \
+    "$([[ -f "$P/.cct/auto-build/demo-feat/state.json" ]] && echo 1 || echo 0)"
+
+# #191 FR-5: an unusable gh downgrades CAN_OPEN_PR under `unattended`, and a
+# run that will never open a pull request must NOT be refused for lacking a
+# close target. The dry run has to apply that downgrade too, or it would
+# refuse a config the real run continues.
+GH_AUTH_FAIL=1 cto_run "$P" --dry-run
+assert_exit "with gh unusable, unattended is NOT refused for a close target" 0 "$RC"
+assert_contains "and the plan says why nothing will be pushed" "$OUTPUT" "gh unusable"
+assert_eq "no close-target refusal is printed in that case" "0" \
+    "$(printf '%s' "$OUTPUT" | grep -c 'no close target is configured' || true)"
+
+# A target that cannot be READ is a driver fault, not a missing config.
+chmod 000 "$P/specs/demo-feat/plan.md"
+cto_run "$P" --dry-run
+# Exit 1, not 2: close_target_check RETURNS 2 for an unreadable target so the
+# caller can say which happened, but both callers exit 1 — the driver's
+# documented preflight failure — because exit >= 2 already means parked, and
+# a config must not exit 2 from one path and 1 from the other.
+assert_exit "an unreadable plan.md is refused (exit 1, reason in the message)" 1 "$RC"
+assert_contains "a read failure is named as a DRIVER fault" "$OUTPUT" \
+    "could not determine the PR close target"
+assert_eq "it is NOT reported as a missing close target" "0" \
+    "$(printf '%s' "$OUTPUT" | grep -c 'no close target is configured' || true)"
+chmod 644 "$P/specs/demo-feat/plan.md"
+cto_run "$P" --dry-run
+assert_contains "and readable again gives the OTHER answer" "$OUTPUT" \
+    "no close target is configured"
+
+# An 'issue:' in plan.md frontmatter is a target on its own.
+printf -- '---\nspec_mode: lightweight\nfeature_id: demo-feat\nstatus: approved\ndate: 2026-07-13\nissue: 4242\norigin:\n  type: internal\n  reason: driver test fixture\n  origin_claim: |\n    Toy feature for auto-build driver tests.\n---\n# Plan: demo\n' > "$P/specs/demo-feat/plan.md"
+cto_run "$P" --dry-run
+assert_exit "an 'issue:' in plan.md satisfies the close target (exit 0)" 0 "$RC"
+rm -rf "$P"
+
+# For pr/merge an unusable gh is FATAL in preflight, not a downgrade — so the
+# dry run must refuse for it as well. Reporting "the real run refuses" and
+# then exiting 0 is the same false green as warning about a missing target.
+P=$(setup_project)
+cfg_set "$P" '.profile="pr" | .pr={closes:[99], title:""}'
+GH_AUTH_FAIL=1 cto_run "$P" --dry-run
+assert_exit "a dry run refuses an unusable gh for a pr profile (exit 1)" 1 "$RC"
+assert_contains "and names gh as the reason, not the close target" "$OUTPUT" \
+    "requires gh"
+rm -rf "$P"
+
+# advisory publishes nothing, so the check must not apply to it at all.
+P=$(setup_project)
+cfg_set "$P" '.pr.closes=[]'
+cto_run "$P" --dry-run
+assert_exit "advisory opens no PR, so an empty close target is fine (exit 0)" 0 "$RC"
+rm -rf "$P"
+
+# The REAL path refuses before any phase runs — the dry run cannot prove that,
+# because it never starts one.
+P=$(setup_project); unattended_cfg "$P"; admit_project "$P"
+cfg_set "$P" '.pr.closes=[]'
+cto_run "$P"
+assert_exit "the real run is refused too (exit 1)" 1 "$RC"
+assert_contains "with the same message the dry run gave" "$OUTPUT" \
+    "no close target is configured"
+assert_eq "and refused BEFORE any phase ran" "0" \
+    "$([[ -f "$P/.cct/auto-build/demo-feat/state.json" ]] && echo 1 || echo 0)"
+rm -rf "$P"
+
+# FR-5 ON THE REAL PATH. The bug fixed here was in preflight(): the check ran
+# ABOVE the gh downgrade, so an unattended run with gh unusable was refused
+# for lacking a close target it would never have used. The dry-run case above
+# exercises the dry run's OWN recomputation of that downgrade — it cannot
+# guard preflight's ordering, which is the thing that broke. This does: a real
+# run, gh failing auth, no close target, must DOWNGRADE and continue rather
+# than refuse.
+P=$(setup_project); unattended_cfg "$P"; admit_project "$P"
+cfg_set "$P" '.pr.closes=[]'
+GH_AUTH_FAIL=1 cto_run "$P"
+assert_eq "a real unattended run with gh unusable is NOT refused for a close target" "0" \
+    "$(printf '%s' "$OUTPUT" | grep -c 'no close target is configured' || true)"
+assert_contains "it downgrades and says so (FR-5)" "$OUTPUT" \
+    "continues without push/PR artifacts"
+assert_eq "and it got past preflight into the run" "1" \
+    "$([[ -f "$P/.cct/auto-build/demo-feat/state.json" ]] && echo 1 || echo 0)"
+rm -rf "$P"
+
+# Refusal ORDER: an illegal profile upgrade is a property of the request and
+# must be reported before a publish-step requirement.
+P=$(setup_project)
+cfg_set "$P" '.pr.closes=[]'
+cto_run "$P" --profile unattended --dry-run
+assert_contains "an illegal profile upgrade still names the declaration rule" "$OUTPUT" \
+    "must be declared"
+rm -rf "$P"
+
+# ── --detach: an unattended run that survives the terminal ──────────
+#
+# `nohup driver &` stops instantly with "suspended (tty output)": something
+# in the toolchain calls tcsetattr, which raises SIGTTOU from a background
+# process group whatever `tostop` says. --detach forks and setsid()s so
+# there is no controlling terminal to configure.
+P=$(setup_project); unattended_cfg "$P"
+cfg_set "$P" '.pr.closes=[]'
+RC=0
+OUTPUT=$(cd "$P" && CCT_PROJECT_DIR="$P" bash "$DRIVER" demo-feat --detach --dry-run 2>&1) || RC=$?
+assert_exit "--detach with --dry-run is refused (exit 1)" 1 "$RC"
+assert_contains "and says why they contradict" "$OUTPUT" "contradictory"
+RC=0
+OUTPUT=$(cd "$P" && CCT_PROJECT_DIR="$P" bash "$DRIVER" demo-feat --profile unattended --detach 2>&1) || RC=$?
+assert_exit "--detach returns immediately (exit 0 from the parent)" 0 "$RC"
+assert_contains "--detach reports the log it writes to" "$OUTPUT" "auto-build detached"
+# The child inherits the argv minus --detach. Proven by its REFUSAL: only
+# a child that received "demo-feat --profile unattended" reaches the
+# close-target gate at all. Captured from the log, not the terminal.
+DETACH_LOG="$P/.cct/auto-build/demo-feat.log"
+# Wait on the EXACT PID the parent reported, not a process-NAME pattern: a
+# pattern can be searched before the child's argv becomes the driver's,
+# conclude the child is gone, and remove the fixture out from under it. The
+# handshake means the log file already exists by the time the parent returns.
+DETACH_PID=$(printf '%s' "$OUTPUT" | sed -n 's/.*pid \([0-9][0-9]*\),.*/\1/p' | head -1)
+assert_eq "--detach reports the child's pid" "1" \
+    "$([[ "$DETACH_PID" =~ ^[0-9]+$ ]] && echo 1 || echo 0)"
+assert_eq "the log file exists as soon as the parent returns" "1" \
+    "$([[ -e "$DETACH_LOG" ]] && echo 1 || echo 0)"
+for _i in $(seq 1 60); do
+    kill -0 "$DETACH_PID" 2>/dev/null || break
+    sleep 1
+done
+assert_eq "the detached child exited rather than outliving its fixture" "0" \
+    "$(kill -0 "$DETACH_PID" 2>/dev/null && echo 1 || echo 0)"
+# The marker is the admission line, which names BOTH the feature id and the
+# unattended profile — so it can only appear if the child received
+# "demo-feat --profile unattended". A gate-specific message would not do:
+# which gate fires first is an implementation detail that has already moved
+# once, and a passthrough test must not break when it moves again.
+assert_contains "the detached child ran with the argv minus --detach" \
+    "$(cat "$DETACH_LOG" 2>/dev/null)" "--unattended --feature-id demo-feat"
+# `grep -c` PRINTS 0 and EXITS 1 on no match, so `|| echo 0` would emit a
+# second line and the comparison would read "0\n0". `|| true` keeps grep's
+# own count as the only value.
+assert_eq "the detached child did not fail to exec" "0" \
+    "$(grep -c 'could not start the detached run' "$DETACH_LOG" 2>/dev/null || true)"
+# EOF ALONE IS NOT SUCCESS. A child that dies between fork and exec closes
+# the pipe without writing, which is byte-identical to a successful exec. The
+# ready sentinel is what separates them, and this proves it separates them:
+# the same launcher with the sentinel write replaced by an immediate exit must
+# refuse, not report a launch.
+DETACH_MUTANT="$P/mutant-predeath.sh"
+sed 's|    os.write(write_fd, b"\\x01")|    os._exit(9)|' "$DRIVER" > "$DETACH_MUTANT"
+RC=0
+OUTPUT=$(cd "$P" && CCT_PROJECT_DIR="$P" bash "$DETACH_MUTANT" demo-feat --profile unattended --detach 2>&1) || RC=$?
+assert_exit "a child dying before exec is refused, not reported as launched" 127 "$RC"
+assert_contains "and says the child died before starting the run" "$OUTPUT" \
+    "died before it could start the run"
+assert_eq "it does NOT claim a successful detach" "0" \
+    "$(printf '%s' "$OUTPUT" | grep -c 'auto-build detached' || true)"
 rm -rf "$P"
 
 # The A-era test seam is deleted — real admission replaced it.
