@@ -36,9 +36,9 @@ If `specs/<feature-id>/automation.json` does not exist, copy
   in `automation.json` (schema_version 2, explicit caps, an `unattended`
   block) and pass admission (`validate-spec.sh --unattended`) before anything
   runs.
-- `pr.closes` — required for any profile that opens a pull request. Without a
-  close target here, or an `issue:` in `plan.md` frontmatter, the run is
-  refused at preflight.
+- `pr.closes` — required for any profile that opens a pull request. With no
+  close target here and no `issue:` in `plan.md` frontmatter, the driver
+  cannot open the pull request and the run stops without publishing one.
 - Caps: keep the defaults unless the user asks (phases 8, fix sessions 3,
   wall-clock 4h, cost $25)
 
@@ -61,6 +61,11 @@ scripts/auto-build-loop.sh <feature-id> [--dry-run]
 Recommend `--dry-run` first to preview the phase plan. Explain the exit codes:
 `0` done, `3` milestone-paused (sign off with an `approved-by:` line in
 `specs/<feature-id>/automation-summary.md`, then `--resume`), `4` parked
-(inspect `.cct/auto-build/<feature-id>/escalations/`), `1` preflight failure.
+(inspect `.cct/auto-build/<feature-id>/escalations/`), `1` preflight failure,
+and — for `unattended`, where it is the expected stop — `6` terminated at a
+policy boundary. A `6` is resumable only for `provider_unavailable`,
+`review_breaker` and `review_inconclusive`, and only while the phase's build
+commit is still the branch head; every other reason needs a fresh run. The
+`auto-build-loop` skill carries the full outcome table.
 
 See the `auto-build-loop` skill for the full protocol and gate mapping.
