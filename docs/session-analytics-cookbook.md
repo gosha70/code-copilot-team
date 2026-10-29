@@ -73,8 +73,8 @@ CCT_SA_DB=sqlite:////Users/you/.cct/session-analytics.db
 > keeps working; the next Save from Settings rewrites it under the new
 > name. The CLI flag is `--db` (`--dsn` still accepted).
 
-21 of the 24 subcommands take `--db …`, to use a store without touching
-`.env`. The three that do not are `list` and `calibrate`, which never open a
+Every subcommand that opens a store takes `--db …`, to use one without
+touching `.env`. The exceptions are `list` and `calibrate`, which never open a
 store, and `start`, which configures one: point `start` at a different store
 with `setup --db <dsn>` first, or by setting `CCT_SA_DB`.
 Precedence, lowest to highest: packaged defaults → `~/.cct/session-analytics.json`

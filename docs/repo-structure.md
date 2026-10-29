@@ -9,7 +9,7 @@ code-copilot-team/
 │   ├── docs/                            8 tool-agnostic reference docs
 │   ├── review/                          Independent-reviewer sources (CODE_REVIEW.md, loader, project-config template)
 │   ├── templates/                       11 stacks × PROJECT.md + commands/
-│   ├── templates/sdd/                   10 SDD templates (spec, plan, tasks, automation, collaboration, lessons-learned, pitch, hill-chart, cycle-retro, cooldown-report) + validate-pitch.sh
+│   ├── templates/sdd/                   10 SDD templates (spec, plan, tasks, automation, collaboration, lessons-learned, pitch, hill-chart, cycle-retro, cooldown-report), plus validate-pitch.sh
 │   └── templates/provider-profile-template.toml  Peer provider profile seed
 ├── specs/                               ← SDD artifacts per feature (versioned)
 │   └── <feature-id>/                    plan.md, spec.md, tasks.md, lessons-learned.md

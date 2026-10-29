@@ -157,7 +157,9 @@ render_config_layers() {
   printf '%-34s %s\n' "~/.claude/settings.json" "← Hooks wiring and global settings"
   # setup.sh installs CCT's own slash commands here (COMMANDS_TARGET); the tree
   # listed only the PROJECT command layer, so the global one was invisible.
-  printf '%-34s %s\n' "~/.claude/commands/*.md" "← CCT slash commands (14, installed by setup.sh)"
+  local n_cmds
+  n_cmds=$(find "$REPO_DIR/adapters/claude-code/.claude/commands" -name '*.md' -type f | wc -l | tr -d ' ')
+  printf '%-34s %s\n' "~/.claude/commands/*.md" "← CCT slash commands ($n_cmds, installed by setup.sh)"
   printf '%-34s %s\n' "./CLAUDE.md" "← Project-level (overrides global)"
   printf '%-34s %s\n' "./.claude/commands/*.md" "← Project slash commands"
   printf '%-34s %s\n' "./CLAUDE.local.md" "← Personal overrides (gitignored)"

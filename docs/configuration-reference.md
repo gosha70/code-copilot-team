@@ -7,8 +7,8 @@
 > names in `scripts/session_analytics/config.py`. To change an entry, edit
 > the source — a drift guard (`--check`) fails the build if this file is stale.
 
-Every setting the harness reads, by the file it lives in. From a checkout of
-`master` (the `cct` front door does not exist in the v1.1.0 tag),
+Every setting the harness reads, by the file it lives in. From a repository checkout
+(the `cct` front door is newer than the latest release tag),
 `./scripts/cct config explain <key>` answers the same questions for one key —
 including the value in effect and which layer set it. `./scripts/cct config
 validate` checks the provider profile, the feature catalog and the capability
