@@ -99,6 +99,7 @@ RESUME=false
 DRY_RUN=false
 MAX_PHASES_ARG=""
 START_PHASE_ARG=""
+DETACH=false
 
 usage() {
     # Print the header comment block (everything from line 4 to the first
@@ -106,11 +107,21 @@ usage() {
     awk 'NR < 4 { next } !/^#/ { exit } { print }' "$0" | sed 's/^# \{0,1\}//'
 }
 
+# The argv --detach re-execs with, minus --detach itself. Captured BEFORE
+# the parse loop, which shifts "$@" empty.
+ORIGINAL_ARGS=()
+for _arg in "$@"; do
+    [[ "$_arg" == "--detach" ]] && continue
+    ORIGINAL_ARGS+=("$_arg")
+done
+unset _arg
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --profile)     PROFILE_ARG="${2:?--profile requires a value}"; shift 2 ;;
         --config)      CONFIG_PATH="${2:?--config requires a path}"; shift 2 ;;
         --resume)      RESUME=true; shift ;;
+        --detach)      DETACH=true; shift ;;
         --dry-run)     DRY_RUN=true; shift ;;
         --max-phases)  MAX_PHASES_ARG="${2:?--max-phases requires a number}"; shift 2 ;;
         --start-phase) START_PHASE_ARG="${2:?--start-phase requires a number}"; shift 2 ;;
@@ -136,6 +147,62 @@ fi
 
 SPEC_DIR="$PROJECT_DIR/specs/$FEATURE_ID"
 CONFIG_PATH="${CONFIG_PATH:-$SPEC_DIR/automation.json}"
+
+# ── --detach: start an unattended run that survives the terminal ──────
+#
+# WHY THIS EXISTS. `nohup auto-build-loop.sh … &` does not work, and the
+# failure looks like a hang: the job stops immediately with "suspended
+# (tty output)". The cause is not the `tostop` tty flag — the observed
+# failure happened with tostop OFF. Something in the toolchain calls
+# tcsetattr() to configure the terminal, and tcsetattr from a background
+# process group raises SIGTTOU unconditionally. Redirecting stdout and
+# stderr cannot help, because the call is on the terminal itself rather
+# than on a stream.
+#
+# The only reliable fix is to leave the terminal's session, so there is
+# no controlling terminal to configure: fork, setsid, then exec. macOS
+# ships no setsid(1), so python3 performs the fork — it is already a hard
+# dependency of this toolkit.
+#
+# Observed 2026-10-28: a run launched with `nohup … &` sat stopped at
+# preflight indefinitely, doing nothing, while appearing to be running.
+if [[ "$DETACH" == "true" ]]; then
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo "Error: --detach and --dry-run are contradictory (a dry run prints its plan to this terminal)." >&2
+        exit 1
+    fi
+    if ! command -v python3 &>/dev/null; then
+        echo "Error: --detach needs python3 (macOS has no setsid(1))." >&2
+        exit 1
+    fi
+    DETACH_LOG="${CCT_AUTOBUILD_LOG:-$PROJECT_DIR/$AUTOBUILD_ROOT/$FEATURE_ID.log}"
+    mkdir -p "$(dirname "$DETACH_LOG")"
+    # CCT_AUTOBUILD_DETACHED stops the re-exec from detaching again.
+    CCT_AUTOBUILD_DETACHED=1 python3 - "$0" "$DETACH_LOG" "$PROJECT_DIR" \
+        "${ORIGINAL_ARGS[@]}" <<'DETACH_PY'
+import os, sys
+
+script, log, project = sys.argv[1], sys.argv[2], sys.argv[3]
+passthrough = sys.argv[4:]
+
+if os.fork() > 0:
+    print(f"auto-build detached — log: {log}")
+    print(f"follow it with:  tail -f {log}")
+    raise SystemExit(0)
+
+# New session: no controlling terminal, so tcsetattr in any descendant
+# returns ENOTTY instead of stopping the run, and closing the terminal
+# cannot deliver SIGHUP to it.
+os.setsid()
+os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
+fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+os.dup2(fd, 1)
+os.dup2(fd, 2)
+os.chdir(project)
+os.execvp("bash", ["bash", script] + passthrough)
+DETACH_PY
+    exit $?
+fi
 LEDGER_DIR="$PROJECT_DIR/$AUTOBUILD_ROOT/$FEATURE_ID"
 STATE="$LEDGER_DIR/state.json"
 EVENTS="$LEDGER_DIR/events.jsonl"
@@ -786,6 +853,49 @@ load_config() {
         echo "(schema_version 2, explicit caps, unattended block) — it cannot be" >&2
         echo "requested via --profile or CCT_AUTOBUILD_PROFILE." >&2
         exit 1
+    fi
+    # A profile that opens a PR needs a close target, and open_pr refuses
+    # without one. That refusal used to land at `finalizing` — AFTER every
+    # phase was built, reviewed and pushed — so a whole run was spent to
+    # report a pure config defect. Nothing about the close target is
+    # learned by running: it is `pr.closes` in the config, or an `issue:`
+    # in plan.md frontmatter, both readable now. It is decided for
+    # --dry-run too: a dry run that promises "push + PR" while the PR step
+    # cannot succeed is worse than no dry run at all.
+    #
+    # ORDER MATTERS, AND IT IS ASSERTED. This sits BELOW the profile
+    # legality gates above. Profile legality is a property of the
+    # REQUEST; a close target is a property of the PUBLISH step. Placed
+    # first, this check answered an illegal `--profile unattended`
+    # upgrade with "no close target", which is the right refusal for the
+    # wrong reason — the exact failure shape this check exists to stop.
+    #
+    # Observed 2026-10-28 (harness-studio-nav): three phases built, three
+    # reviewer PASSes, six verifier gates green, branch pushed, $1.75
+    # spent — then terminated_policy/pr_config because pr.closes was [].
+    if [[ "$CAN_OPEN_PR" == "true" ]]; then
+        # STATUS, NOT JUST OUTPUT. A derive that ERRORS and a derive that
+        # returns EMPTY are different facts. Reading only the output
+        # conflated them once already: with the helper defined further
+        # down the file it failed `command not found`, and the empty
+        # result read as "no close target configured" — a refusal for the
+        # wrong reason, indistinguishable from the right one. Relocating
+        # the helper fixed that instance; reading $? fixes the next
+        # refactor too.
+        local _closes _closes_rc=0
+        _closes=$(derive_close_ids) || _closes_rc=$?
+        if [[ "$_closes_rc" -ne 0 ]]; then
+            echo "Error: could not determine the PR close target — derive_close_ids exited $_closes_rc." >&2
+            echo "This is a driver fault, not a configuration one: the close target was never read." >&2
+            exit 1
+        fi
+        if [[ -z "$_closes" ]]; then
+            echo "Error: profile '$PROFILE' opens a pull request, but no close target is configured." >&2
+            echo "Set pr.closes in $CONFIG_PATH, or an 'issue:' in $SPEC_DIR/plan.md frontmatter." >&2
+            echo "(Checked here rather than at finalizing, so a run cannot build everything" >&2
+            echo " and then refuse to publish it.)" >&2
+            exit 1
+        fi
     fi
     # #193 (Increment B of #190): REAL admission control. An unattended
     # run must pass the machine-checkable §11 bar (finalized
@@ -1926,6 +2036,29 @@ import_preflight_result() {
 
     rm -f "$result_file"
     echo "[auto-build] preflight result imported (path: $PREFLIGHT_PATH)" >&2
+}
+
+# derive_close_ids is defined HERE, well before preflight, because
+# preflight now reads it. A bash function only exists once its
+# definition has EXECUTED: left at its old position further down the
+# file, the preflight call failed with 'command not found' and the
+# empty result read as 'no close target' — a check that refused for
+# the wrong reason, which is indistinguishable from refusing for the
+# right one.
+derive_close_ids() {
+    # Echo comma-separated issue numbers for the PR "Closes #N" marker.
+    # Config pr.closes wins; else the spec's origin-frontmatter issue number.
+    local ids
+    ids=$(jq -r '(.pr.closes // []) | map(tostring) | join(",")' "$CONFIG_SNAPSHOT" 2>/dev/null)
+    if [[ -n "$ids" && "$ids" != "null" ]]; then
+        echo "$ids"; return 0
+    fi
+    local raw
+    raw=$(sed -n '/^---$/,/^---$/p' "$SPEC_DIR/plan.md" 2>/dev/null \
+          | grep -E '^[[:space:]]*issue:' | head -1 | sed -E 's/^[[:space:]]*issue:[[:space:]]*//')
+    raw="${raw##*#}"
+    printf '%s' "$raw" | tr -cd '0-9'
+    echo
 }
 
 # ── Worktree prune (T7 — FR-8) ───────────────────────────────
@@ -5334,21 +5467,6 @@ resume_parked() {
 
 # ── PR create / idempotent update (FR-3..FR-7, pr profile) ──
 
-derive_close_ids() {
-    # Echo comma-separated issue numbers for the PR "Closes #N" marker.
-    # Config pr.closes wins; else the spec's origin-frontmatter issue number.
-    local ids
-    ids=$(jq -r '(.pr.closes // []) | map(tostring) | join(",")' "$CONFIG_SNAPSHOT" 2>/dev/null)
-    if [[ -n "$ids" && "$ids" != "null" ]]; then
-        echo "$ids"; return 0
-    fi
-    local raw
-    raw=$(sed -n '/^---$/,/^---$/p' "$SPEC_DIR/plan.md" 2>/dev/null \
-          | grep -E '^[[:space:]]*issue:' | head -1 | sed -E 's/^[[:space:]]*issue:[[:space:]]*//')
-    raw="${raw##*#}"
-    printf '%s' "$raw" | tr -cd '0-9'
-    echo
-}
 
 compose_pr_body() {
     # compose_pr_body <out-file>

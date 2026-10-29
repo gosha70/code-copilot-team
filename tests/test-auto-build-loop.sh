@@ -1447,8 +1447,14 @@ echo "=== #191: unattended — fail-closed + terminate-only dispatch ==="
 # Rewrites a fixture to a valid schema_version-2 unattended config
 # (explicit caps + terminate-only dispositions, per the validator).
 unattended_cfg() {
+    # pr.closes is part of a valid unattended config: the profile opens a
+    # pull request, and preflight refuses a PR-opening profile with no
+    # close target. Every `pr`/`merge` fixture below already sets it; the
+    # omission here was invisible while the close-target check lived at
+    # finalizing, which these tests do not reach.
     cfg_set "$1" '.schema_version=2 | .profile="unattended"
         | .caps={cost_usd:12, wall_clock_sec:3600}
+        | .pr={closes:[1], title:"demo-feat [auto-build]"}
         | .unattended={on_review_breaker:"terminate", on_stale_finding:"terminate", on_origin_gate:"terminate"}'
 }
 
@@ -1492,6 +1498,71 @@ assert_eq "refused run writes no termination artifact" "0" \
 # test.command) — the planning surface is unchanged.
 run_driver "$P" --dry-run
 assert_exit "unattended dry run skips admission (exit 0)" 0 "$RC"
+rm -rf "$P"
+
+# ── the PR close target is decided at preflight, not at finalizing ──
+#
+# WHY THESE EXIST. The close-target refusal used to land at `finalizing`,
+# after every phase was built, reviewed and pushed: one observed run spent
+# $1.75 to report that pr.closes was []. The check moved into preflight,
+# and unattended_cfg above now supplies a target — which means nothing
+# else in this suite exercises the EMPTY path any more. These do.
+P=$(setup_project); unattended_cfg "$P"
+cfg_set "$P" '.pr.closes=[]'
+run_driver "$P" --dry-run
+assert_exit "unattended with no close target is refused at preflight (exit 1)" 1 "$RC"
+assert_contains "the refusal names the close target, not something else" "$OUTPUT" \
+    "no close target is configured"
+assert_contains "the refusal names pr.closes as one remedy" "$OUTPUT" "pr.closes"
+assert_contains "the refusal names plan.md frontmatter as the other" "$OUTPUT" "plan.md"
+assert_eq "it is refused BEFORE any phase runs" "0" \
+    "$([[ -f "$P/.cct/auto-build/demo-feat/state.json" ]] && echo 1 || echo 0)"
+# plan.md frontmatter is the second source of a target, and it is enough
+# on its own: this fixture's config carries none.
+printf -- '---\nspec_mode: lightweight\nfeature_id: demo-feat\nstatus: approved\ndate: 2026-07-13\nissue: 4242\norigin:\n  type: internal\n  reason: driver test fixture\n  origin_claim: |\n    Toy feature for auto-build driver tests.\n---\n# Plan: demo\n' > "$P/specs/demo-feat/plan.md"
+run_driver "$P" --dry-run
+assert_exit "an 'issue:' in plan.md frontmatter satisfies the close target (exit 0)" 0 "$RC"
+rm -rf "$P"
+# advisory publishes nothing, so it must NOT be subject to the check.
+P=$(setup_project)
+cfg_set "$P" '.pr.closes=[]'
+run_driver "$P" --dry-run
+assert_exit "advisory opens no PR, so an empty close target is fine (exit 0)" 0 "$RC"
+rm -rf "$P"
+# Refusal ORDER: an illegal profile upgrade is a property of the request
+# and must be reported before a publish-step requirement. Placed first,
+# the close-target check answered this case with "no close target" — the
+# right refusal for the wrong reason.
+P=$(setup_project)
+cfg_set "$P" '.pr.closes=[]'
+run_driver "$P" --profile unattended --dry-run
+assert_contains "an illegal profile upgrade still names the declaration rule" "$OUTPUT" \
+    "must be declared"
+rm -rf "$P"
+
+# ── --detach: an unattended run that survives the terminal ──────────
+#
+# `nohup driver &` stops instantly with "suspended (tty output)": something
+# in the toolchain calls tcsetattr, which raises SIGTTOU from a background
+# process group whatever `tostop` says. --detach forks and setsid()s so
+# there is no controlling terminal to configure.
+P=$(setup_project); unattended_cfg "$P"
+cfg_set "$P" '.pr.closes=[]'
+RC=0
+OUTPUT=$(cd "$P" && CCT_PROJECT_DIR="$P" bash "$DRIVER" demo-feat --detach --dry-run 2>&1) || RC=$?
+assert_exit "--detach with --dry-run is refused (exit 1)" 1 "$RC"
+assert_contains "and says why they contradict" "$OUTPUT" "contradictory"
+RC=0
+OUTPUT=$(cd "$P" && CCT_PROJECT_DIR="$P" bash "$DRIVER" demo-feat --profile unattended --detach 2>&1) || RC=$?
+assert_exit "--detach returns immediately (exit 0 from the parent)" 0 "$RC"
+assert_contains "--detach reports the log it writes to" "$OUTPUT" "auto-build detached"
+# The child inherits the argv minus --detach. Proven by its REFUSAL: only
+# a child that received "demo-feat --profile unattended" reaches the
+# close-target gate at all. Captured from the log, not the terminal.
+DETACH_LOG="$P/.cct/auto-build/demo-feat.log"
+for _i in 1 2 3 4 5 6 7 8 9 10; do [[ -s "$DETACH_LOG" ]] && break; sleep 1; done
+assert_contains "the detached child ran with the argv minus --detach" \
+    "$(cat "$DETACH_LOG" 2>/dev/null)" "no close target is configured"
 rm -rf "$P"
 
 # The A-era test seam is deleted — real admission replaced it.
