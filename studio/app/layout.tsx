@@ -2,35 +2,13 @@ import "./globals.css";
 import type { Metadata } from "next";
 import Link from "next/link";
 import FirstRunBanner from "@/components/FirstRunBanner";
-import NavTabs, { type NavTab } from "@/components/NavTabs";
+import NavTabs from "@/components/NavTabs";
+import { NAV_GROUPS, PRODUCT_NAME, SETTINGS_ITEM } from "@/lib/nav";
 
 export const metadata: Metadata = {
-  title: "Session Analytics Studio",
+  title: PRODUCT_NAME,
   description: "Copilot session analytics & process mining (CCT #63)",
 };
-
-// #307: only pages that answer a question a person has. Clusters is
-// gone (falsified on real data — one giant component); Graph explores
-// a session or a project and what it is connected to. Search is gone —
-// it read only archived text, which most stores have none of; Ask
-// answers questions in words through read-only lookups, text search
-// among them. Routing is a card on Benchmark (both are
-// benchmark-derived, /routing stays); the client-side Agents stub is
-// gone — Learn (#309) carries the real catalogue of docs, skills and
-// agents from the repo itself.
-const TABS: NavTab[] = [
-  { href: "/", label: "Dashboard", also: ["/labels"] },
-  { href: "/sessions", label: "Sessions" },
-  { href: "/search", label: "Search" },
-  { href: "/team", label: "Team" },
-  { href: "/runs", label: "Runs" },
-  { href: "/ask", label: "Ask" },
-  { href: "/graph", label: "Graph" },
-  { href: "/analysis", label: "Analysis" },
-  { href: "/benchmark", label: "Benchmark", also: ["/routing"] },
-  { href: "/learn", label: "Learn" },
-  { href: "/settings", label: "Settings" },
-];
 
 export default function RootLayout({
   children,
@@ -42,7 +20,7 @@ export default function RootLayout({
       <body>
         <div className="min-h-screen flex flex-col">
           <header className="bg-slate-900 text-white">
-            <div className="max-w-7xl mx-auto px-4 flex items-center gap-6 h-14">
+            <div className="max-w-7xl mx-auto px-4 flex items-center gap-6 min-h-14 py-2">
               {/* The logo links home — a wordmark in a nav bar that is not
                   clickable is a dead spot users try anyway. */}
               <Link
@@ -63,9 +41,9 @@ export default function RootLayout({
                   height={28}
                   className="w-7 h-7 object-contain"
                 />
-                Session Analytics
+                {PRODUCT_NAME}
               </Link>
-              <NavTabs tabs={TABS} />
+              <NavTabs groups={NAV_GROUPS} settings={SETTINGS_ITEM} />
             </div>
           </header>
           <FirstRunBanner />
