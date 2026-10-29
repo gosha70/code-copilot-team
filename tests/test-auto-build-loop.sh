@@ -1546,7 +1546,11 @@ assert_eq "no close-target refusal is printed in that case" "0" \
 # A target that cannot be READ is a driver fault, not a missing config.
 chmod 000 "$P/specs/demo-feat/plan.md"
 cto_run "$P" --dry-run
-assert_exit "an unreadable plan.md is refused (exit 2)" 2 "$RC"
+# Exit 1, not 2: close_target_check RETURNS 2 for an unreadable target so the
+# caller can say which happened, but both callers exit 1 — the driver's
+# documented preflight failure — because exit >= 2 already means parked, and
+# a config must not exit 2 from one path and 1 from the other.
+assert_exit "an unreadable plan.md is refused (exit 1, reason in the message)" 1 "$RC"
 assert_contains "a read failure is named as a DRIVER fault" "$OUTPUT" \
     "could not determine the PR close target"
 assert_eq "it is NOT reported as a missing close target" "0" \
@@ -1560,6 +1564,17 @@ assert_contains "and readable again gives the OTHER answer" "$OUTPUT" \
 printf -- '---\nspec_mode: lightweight\nfeature_id: demo-feat\nstatus: approved\ndate: 2026-07-13\nissue: 4242\norigin:\n  type: internal\n  reason: driver test fixture\n  origin_claim: |\n    Toy feature for auto-build driver tests.\n---\n# Plan: demo\n' > "$P/specs/demo-feat/plan.md"
 cto_run "$P" --dry-run
 assert_exit "an 'issue:' in plan.md satisfies the close target (exit 0)" 0 "$RC"
+rm -rf "$P"
+
+# For pr/merge an unusable gh is FATAL in preflight, not a downgrade — so the
+# dry run must refuse for it as well. Reporting "the real run refuses" and
+# then exiting 0 is the same false green as warning about a missing target.
+P=$(setup_project)
+cfg_set "$P" '.profile="pr" | .pr={closes:[99], title:""}'
+GH_AUTH_FAIL=1 cto_run "$P" --dry-run
+assert_exit "a dry run refuses an unusable gh for a pr profile (exit 1)" 1 "$RC"
+assert_contains "and names gh as the reason, not the close target" "$OUTPUT" \
+    "requires gh"
 rm -rf "$P"
 
 # advisory publishes nothing, so the check must not apply to it at all.
@@ -1578,6 +1593,24 @@ assert_exit "the real run is refused too (exit 1)" 1 "$RC"
 assert_contains "with the same message the dry run gave" "$OUTPUT" \
     "no close target is configured"
 assert_eq "and refused BEFORE any phase ran" "0" \
+    "$([[ -f "$P/.cct/auto-build/demo-feat/state.json" ]] && echo 1 || echo 0)"
+rm -rf "$P"
+
+# FR-5 ON THE REAL PATH. The bug fixed here was in preflight(): the check ran
+# ABOVE the gh downgrade, so an unattended run with gh unusable was refused
+# for lacking a close target it would never have used. The dry-run case above
+# exercises the dry run's OWN recomputation of that downgrade — it cannot
+# guard preflight's ordering, which is the thing that broke. This does: a real
+# run, gh failing auth, no close target, must DOWNGRADE and continue rather
+# than refuse.
+P=$(setup_project); unattended_cfg "$P"; admit_project "$P"
+cfg_set "$P" '.pr.closes=[]'
+GH_AUTH_FAIL=1 cto_run "$P"
+assert_eq "a real unattended run with gh unusable is NOT refused for a close target" "0" \
+    "$(printf '%s' "$OUTPUT" | grep -c 'no close target is configured' || true)"
+assert_contains "it downgrades and says so (FR-5)" "$OUTPUT" \
+    "continues without push/PR artifacts"
+assert_eq "and it got past preflight into the run" "1" \
     "$([[ -f "$P/.cct/auto-build/demo-feat/state.json" ]] && echo 1 || echo 0)"
 rm -rf "$P"
 
@@ -1631,7 +1664,7 @@ assert_eq "the detached child exited rather than outliving its fixture" "0" \
 # which gate fires first is an implementation detail that has already moved
 # once, and a passthrough test must not break when it moves again.
 assert_contains "the detached child ran with the argv minus --detach" \
-    "$(cat "$DETACH_LOG" 2>/dev/null)" "--feature-id demo-feat"
+    "$(cat "$DETACH_LOG" 2>/dev/null)" "--unattended --feature-id demo-feat"
 # `grep -c` PRINTS 0 and EXITS 1 on no match, so `|| echo 0` would emit a
 # second line and the comparison would read "0\n0". `|| true` keeps grep's
 # own count as the only value.

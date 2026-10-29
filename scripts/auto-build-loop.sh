@@ -221,10 +221,14 @@ if pid > 0:
     # died before reaching exec, and a sentinel followed by text means exec
     # itself failed and said why.
     if not reply.startswith(b"\x01"):
+        # A reason means the child reported its own failure before reaching
+        # the sentinel; print it as it stands rather than wrapping it in a
+        # verdict of our own, which would both double the prefix and claim
+        # something less precise than what the child already said.
         sys.stderr.write(
-            "auto-build: the detached child died before it could start the run"
-            + (" — " + reply.decode("utf-8", "replace") if reply else " (no reason reported)")
-            + "\n"
+            reply.decode("utf-8", "replace") if reply
+            else "auto-build: the detached child died before it could start the run"
+                 " (no reason reported)\n"
         )
         raise SystemExit(127)
     reason = reply[1:]
@@ -2070,13 +2074,6 @@ import_preflight_result() {
     echo "[auto-build] preflight result imported (path: $PREFLIGHT_PATH)" >&2
 }
 
-# derive_close_ids is defined HERE, well before preflight, because
-# preflight now reads it. A bash function only exists once its
-# definition has EXECUTED: left at its old position further down the
-# file, the preflight call failed with 'command not found' and the
-# empty result read as 'no close target' — a check that refused for
-# the wrong reason, which is indistinguishable from refusing for the
-# right one.
 # gh_probe — can gh publish from here? Echoes "" (yes), "binary" or "auth".
 # READ-ONLY: --version and auth status write nothing, so a dry run may ask
 # the same question the real run asks, and get the same answer.
@@ -2116,6 +2113,12 @@ close_target_check() {
     return 0
 }
 
+# These three are defined HERE, above preflight, because preflight calls
+# them. A bash function exists only once its definition has EXECUTED: left
+# at its old position further down the file, the preflight call to
+# derive_close_ids failed 'command not found' and the empty output read as
+# "no close target" — a refusal for the wrong reason, indistinguishable
+# from the right one.
 derive_close_ids() {
     # Echo comma-separated issue numbers for the PR "Closes #N" marker.
     # Config pr.closes wins; else the spec's origin-frontmatter issue number.
@@ -4992,21 +4995,38 @@ if [[ "$DRY_RUN" == "true" ]]; then
     # a false green for anything gating on it.
     DRY_CAN_OPEN_PR="$CAN_OPEN_PR"
     DRY_GH="$(gh_probe)"
+    DRY_GH_FATAL=false
     if [[ -n "$DRY_GH" && "$CAN_PUSH" == "true" ]]; then
         if [[ "$PROFILE" == "unattended" ]]; then
             DRY_CAN_OPEN_PR=false
         else
-            echo "  gh is not usable here ($DRY_GH) — profile '$PROFILE' requires it; the real run refuses."
+            # For pr/merge an unusable gh is FATAL in preflight, not a
+            # downgrade. The dry run refuses for it too: reporting a refusal
+            # and then exiting 0 is the same false green as warning about a
+            # missing close target and exiting 0.
+            DRY_GH_FATAL=true
         fi
     fi
-    if [[ "$DRY_CAN_OPEN_PR" == "true" ]]; then
+    if [[ "$DRY_GH_FATAL" == "true" ]]; then
+        echo "  finalizing -> REFUSED: profile '$PROFILE' requires gh, and gh is not usable here ($DRY_GH)"
+    elif [[ "$DRY_CAN_OPEN_PR" == "true" ]]; then
         echo "  finalizing -> done ($PROFILE: push + PR per profile)"
     elif [[ -n "$DRY_GH" && "$PROFILE" == "unattended" ]]; then
         echo "  finalizing -> done (unattended: gh unusable ($DRY_GH) — nothing pushed, FR-5)"
     else
         echo "  finalizing -> done ($PROFILE: nothing pushed)"
     fi
-    close_target_check "$DRY_CAN_OPEN_PR" || exit $?
+    if [[ "$DRY_GH_FATAL" == "true" ]]; then
+        echo "Error: gh is not usable ($DRY_GH) — required for profile '$PROFILE'." >&2
+        exit 1
+    fi
+    # EXIT 1 FROM BOTH CALLERS. close_target_check distinguishes "no target"
+    # (1) from "target unreadable" (2) in its RETURN so each caller can say
+    # which happened, but the driver's documented preflight failure is exit 1
+    # and exit >= 2 already means parked elsewhere. The distinction lives in
+    # the message, not the status, or the same config would leave a dry run
+    # with 2 and a real run with 1.
+    close_target_check "$DRY_CAN_OPEN_PR" || exit 1
     exit 0
 fi
 
