@@ -34,7 +34,7 @@ Each template ships a `.github/workflows/` file so CI is wired up the moment the
 
 **Auto-skip on empty project.** Each workflow's job is gated on a toolchain marker (`pyproject.toml` / `setup.py` / `setup.cfg` for Python, `package.json` for Node, `gradlew` for Gradle — the wrapper, since build steps invoke `./gradlew`). A freshly bootstrapped project with no marker yet gets a green skip rather than a red failure. The job activates as soon as the consumer adds the marker file. Gradle projects that have build scripts but no wrapper get a notice nudging them to run `gradle wrapper`.
 
-**Matrix override via `workflow_dispatch`.** Every workflow accepts a manual trigger with an optional version input (e.g. `python-version: "3.12"` or `node-version: "20"`). Leave it blank to run the full matrix; set it to a specific version to run that one only.
+**Matrix override via `workflow_dispatch`.** The nine toolchain workflows — the Python, Node and Gradle ones — accept a manual trigger with an optional version input (e.g. `python-version: "3.12"` or `node-version: "20"`). Leave it blank to run the full matrix; set it to a specific version to run that one only. The three pack workflows have no matrix to override: `domain-pack/pack-publish.yml` and `gradle-plugin/gradle-plugin.yml` take a manual trigger without a version input, and `domain-pack/pack-content.yml` runs on push and pull request only.
 
 **Dual-branch trigger.** All workflows fire on push to `master` or `main` — whichever convention a project uses.
 
