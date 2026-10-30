@@ -58,8 +58,8 @@ auto-merge at finalize (the driver never merges locally):
   GitHub performs the merge only once the branch-protection required checks
   pass — CI is enforced by branch protection, not by this driver, which
   never polls CI and never force-merges. (`merge.require_green_ci` used to
-  appear in the template; it was never read by anything and was removed on
-  2026-10-29. A legacy config still carrying it validates unchanged.)
+  appear in the template; it was never read by anything and was removed in
+  the merge-profile cleanup, 2026-10-29. A legacy config still carrying it validates unchanged.)
 - The arm is idempotent (ledger `pr.auto_merge_armed`, else `gh pr view
   --json autoMergeRequest`); resume never re-arms. A `merge_blocked` park
   resolves once branch protection exists (or `merge.enabled` is flipped).

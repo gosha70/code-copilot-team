@@ -28,7 +28,7 @@ origin:
     records auto_merge_armed/merge_method and resume never re-arms; the driver
     never merges locally, never forces, never commits/pushes to the base;
     advisory/pr never invoke pr merge. Tests via gh argv + api stub. Completes
-    the series A–F.
+    the series A–F.  *(historical: the key was never read — see the correction at the top of this file)*
 ---
 
 > **Correction, 2026-10-29.** `merge.require_green_ci` was never read. The
@@ -37,8 +37,12 @@ origin:
 > has always come from GitHub branch protection via `gh pr merge --auto`. The
 > key was removed from the shipped template on that date. Requirements below
 > that describe it as "delegated" are retained as the record of what was
-> specified; they overstate what shipped. A legacy config still carrying the
-> key validates unchanged — `merge` is an open object in the schema.
+> specified; they overstate what shipped, and the affected lines are marked
+> inline. A legacy config still carrying the key validates unchanged,
+> because the `merge` block is not checked for unknown keys — one of six
+> bare object blocks in a schema whose root is open too. That is an
+> accident of how the schema grew, not a guarantee it offers; the
+> guarantee is the assertion added with this change.
 
 
 # Plan: auto-build-loop `merge` profile (increment F)
@@ -69,7 +73,7 @@ preflight from #75; `GH_BIN`/`BRANCH_BASE`/`BRANCH_REMOTE` globals in place.
 5. **Config**: add `merge.method` to `automation-template.json`; document the
    `merge` block + `CCT_AUTOBUILD_*` in settings.json.
 6. **Tests** (`tests/test-auto-build-loop.sh`) per FR-7; register counts.
-7. **Docs**: skill `merge` row live; regenerate adapters (zero drift).
+7. **Docs**: skill `merge` row live; regenerate adapters (zero drift).  *(historical: the key was never read — see the correction at the top of this file)*
 
 ## Design decisions to confirm at approval
 
