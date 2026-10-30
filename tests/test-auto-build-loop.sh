@@ -1290,7 +1290,10 @@ assert_eq "driver contains no --force code path" "0" "$(grep -c -- '--force' "$D
 # false claim, so the shipped template no longer advertises it.
 #
 # REMOVING A KEY IS ONLY SAFE IF OLD CONFIGS STILL VALIDATE — which is what
-# the third assertion checks, and all it checks. The three run records on
+# "a LEGACY config still carrying require_green_ci validates" checks below,
+# and all it checks. (Named, not numbered: it was "the third assertion" until
+# two existence checks were inserted above it, at which point the comment
+# described a different assertion than the one it meant.) The three run records on
 # master that still carry the key are not re-run here; the MERGE_CFG fixture
 # below is what exercises the key at RUNTIME, deliberately.
 #
