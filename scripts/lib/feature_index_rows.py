@@ -66,7 +66,19 @@ def scalar(raw: str) -> str:
     """
     value = cct_features.unquote(raw)
     if len(raw) >= 2 and raw[0] == raw[-1] == '"':
-        value = value.replace('\\"', '"').replace("\\\\", "\\")
+        # SINGLE PASS, left to right. Chained .replace() calls decode in the
+        # wrong order: unescaping \\" first and \\\\ second mis-reads a literal
+        # backslash followed by an escaped quote.
+        out, i = [], 0
+        while i < len(value):
+            if value[i] == "\\" and i + 1 < len(value):
+                nxt = value[i + 1]
+                out.append({"n": "\n", "t": "\t"}.get(nxt, nxt))
+                i += 2
+            else:
+                out.append(value[i])
+                i += 1
+        value = "".join(out)
     return value
 
 
@@ -87,7 +99,9 @@ def read_capabilities(path: Path) -> list[dict]:
 
     def flush() -> None:
         nonlocal key, block
-        if current is not None and key and block:
+        if current is not None and key:
+            # An opened block with no lines is the empty string, which is what
+            # ruby yields. Dropping the field instead made it disappear.
             current[key] = " ".join(b.strip() for b in block).strip()
         key, block = None, []
 
@@ -100,7 +114,8 @@ def read_capabilities(path: Path) -> list[dict]:
             if current is not None:
                 entries.append(current)
                 current = None
-            in_capabilities = line.startswith("capabilities:")
+            # EXACT key: startswith() also matched capabilities_v2:
+            in_capabilities = line.rstrip() == "capabilities:"
             continue
         if not in_capabilities:
             continue
@@ -116,13 +131,27 @@ def read_capabilities(path: Path) -> list[dict]:
         if m:
             flush()
             name, value = m.group(1), m.group(2).strip()
-            if value in (">-", "|-", ">", "|"):
+            if value in (">-", ">"):
                 key = name
+            elif value in ("|-", "|", "|+", ">+"):
+                # A LITERAL block keeps newlines; this reader folds with
+                # spaces. Neither catalog uses one today, and quietly folding
+                # it would be wrong, so it refuses.
+                raise ValueError(
+                    f"literal/keep block scalar at {name!r} is not supported by this reader"
+                )
             elif value.startswith("[") and value.endswith("]"):
                 # An inline flow sequence: `requires: [a, b]`. Found by the
                 # agreement test against ruby — without it this read as the
                 # literal string "[a, b]" and said nothing.
                 inner = value[1:-1].strip()
+                if '"' in inner or "'" in inner:
+                    # Splitting on every comma would break a quoted element
+                    # containing one. No catalog has such an element; refuse
+                    # rather than mis-split.
+                    raise ValueError(
+                        f"quoted element in the flow sequence at {name!r} is not supported"
+                    )
                 current[name] = (
                     [scalar(v.strip()) for v in inner.split(",") if v.strip()]
                     if inner else []
@@ -177,6 +206,9 @@ def main(argv: list[str]) -> int:
               file=sys.stderr)
         return 2
     mode, path = argv[1], Path(argv[2])
+    if mode not in ("capabilities", "features", "support"):
+        print(f"[ERROR] unknown mode {mode!r}", file=sys.stderr)
+        return 2
     if not path.is_file():
         print(f"[ERROR] {path} not found", file=sys.stderr)
         return 1

@@ -41,9 +41,9 @@ echo "=== feature index renders without ruby ==="
 COMMITTED="$REPO_DIR/docs/features.md"
 CAPS="$REPO_DIR/shared/capabilities/catalog.yaml"
 TMPD=$(mktemp -d)
-cleanup_port() { cp "$TMPD/caps.bak" "$CAPS" 2>/dev/null || true; rm -rf "$TMPD"; }
-trap cleanup_port EXIT
-cp "$CAPS" "$TMPD/caps.bak"
+trap 'rm -rf "$TMPD"' EXIT
+
+
 
 # 1. The port's output IS the committed document. No hash literal: the
 #    checked-in file is the reference, and --check already compares to it.
@@ -54,10 +54,13 @@ assert "the port renders exactly the committed docs/features.md" \
 # 2. …with ruby absent from PATH. This is the bug: two renderers refused to
 #    run without ruby and a third rendered an EMPTY section.
 mkdir -p "$TMPD/bin"
-for _b in bash sh env python3 find sort grep sed awk basename dirname cat wc tr head date git mktemp rm cp diff; do
+for _b in bash sh env python3 find sort grep sed awk basename dirname cat wc tr head tail \
+          date git mktemp rm cp mv diff printf test readlink realpath pwd uname stat chmod ln; do
     _p=$(command -v "$_b" 2>/dev/null) && ln -sf "$_p" "$TMPD/bin/$_b"
 done
-PATH="$TMPD/bin" bash "$GENERATE" --stdout > "$TMPD/noruby.md" 2>/dev/null
+_norc=0
+PATH="$TMPD/bin" bash "$GENERATE" --stdout > "$TMPD/noruby.md" 2>/dev/null || _norc=$?
+assert "it exits 0 with ruby off PATH" "[[ '$_norc' == '0' ]]"
 assert "it renders identically with ruby off PATH" \
     "[[ -z \"\$(PATH='$TMPD/bin' command -v ruby || true)\" ]] && diff -q '$COMMITTED' '$TMPD/noruby.md' >/dev/null"
 
@@ -99,19 +102,85 @@ assert "a title of 'Yes' renders as the text Yes, not true" \
 #    `render >"$tmp" || { … }` — so before the fix: --stdout 1, --check 1,
 #    --write 0 WITH docs/features.md overwritten minus the table.
 printf 'schema_version: 1\nkind: catalog\ncapabilities:\n' > "$TMPD/empty-caps.yaml"
-cp "$TMPD/empty-caps.yaml" "$CAPS"
+# The fixture is passed by ENV, so the repository's own catalog is never
+# edited. A test that mutates it in place leaves a broken catalog behind if
+# it is interrupted between the edit and the restore.
 BEFORE_SUM=$(shasum -a 256 "$COMMITTED" | awk '{print $1}')
 for _m in --stdout --check --write; do
     # Capture the status explicitly: `set -e` is active here, so letting the
     # generator fail inline would abort the suite, and `$?` inside assert's
     # eval'd string would not refer to it anyway.
     _rc=0
-    bash "$GENERATE" "$_m" >/dev/null 2>&1 || _rc=$?
+    CCT_FEATURE_INDEX_CATALOG="$TMPD/empty-caps.yaml" CCT_FEATURE_INDEX_OUT="$TMPD/out.md" \
+        bash "$GENERATE" "$_m" >/dev/null 2>&1 || _rc=$?
     assert "an empty capabilities catalog fails $_m" "[[ '$_rc' != '0' ]]"
 done
 AFTER_SUM=$(shasum -a 256 "$COMMITTED" | awk '{print $1}')
 assert "--write left the committed document untouched" "[[ '$BEFORE_SUM' == '$AFTER_SUM' ]]"
-cp "$TMPD/caps.bak" "$CAPS"
+# EVERY file the generator can touch, not only the ones it reads. Making the
+# inputs overridable without the output introduced a hazard: --write against
+# a VALID fixture rewrote the real docs/features.md with fixture content and
+# exited 0. The empty-catalog case above was safe only because it fails
+# before writing.
+assert "nothing the generator can touch was modified" \
+    "git -C '$REPO_DIR' diff --quiet -- shared/capabilities/catalog.yaml shared/features/catalog.yaml docs/features.md"
+
+# The hazard itself, pinned: a VALID fixture under --write must land in the
+# redirected output and leave the committed document alone.
+cat > "$TMPD/valid-caps.yaml" <<'VALIDCAPS'
+schema_version: 1
+kind: catalog
+capabilities:
+  - id: only.one
+    description: >-
+      A fixture capability.
+VALIDCAPS
+_vrc=0
+CCT_FEATURE_INDEX_CATALOG="$TMPD/valid-caps.yaml" CCT_FEATURE_INDEX_OUT="$TMPD/valid-out.md" \
+    bash "$GENERATE" --write >/dev/null 2>&1 || _vrc=$?
+assert "a valid fixture renders under --write" "[[ '$_vrc' == '0' ]]"
+assert "…into the redirected output" "[[ -s '$TMPD/valid-out.md' ]]"
+assert "…leaving the committed document untouched" \
+    "git -C '$REPO_DIR' diff --quiet -- docs/features.md"
+
+# A PARTIAL OVERRIDE IS REFUSED WHEN WRITING. Overriding an input without the
+# output renders a different catalog into the committed document. Reproduced
+# before the guard existed: one stale export plus an ordinary --write rewrote
+# docs/features.md with fixture content and exited 0. The tests are safe
+# because they set all three; a leftover export in a shell sets one.
+_prc=0
+CCT_FEATURE_INDEX_CATALOG="$TMPD/valid-caps.yaml" bash "$GENERATE" --write >/dev/null 2>&1 || _prc=$?
+assert "--write refuses an input override with no output override" "[[ '$_prc' != '0' ]]"
+assert "…and the committed document is untouched" \
+    "git -C '$REPO_DIR' diff --quiet -- docs/features.md"
+# CAPTURE, THEN GREP. Piping the generator into grep under `pipefail` takes
+# the pipeline's status from the generator — which exits 1 here on purpose —
+# so the assertion failed while the message was perfectly correct.
+_perr=$(CCT_FEATURE_INDEX_CATALOG="$TMPD/valid-caps.yaml" bash "$GENERATE" --write 2>&1 || true)
+assert "…and the error names the variable that is set" \
+    "[[ '$_perr' == *'CCT_FEATURE_INDEX_CATALOG is set'* ]]"
+
+# --check gets the same refusal for a different reason: it writes nothing, so
+# it is safe, but with an input overridden it compares a FIXTURE render
+# against the real document and reports "[STALE] docs/features.md is out of
+# date" for a file that is current — telling the reader to regenerate
+# something that needs no regenerating.
+_crc=0
+CCT_FEATURE_INDEX_CATALOG="$TMPD/valid-caps.yaml" bash "$GENERATE" --check >/dev/null 2>&1 || _crc=$?
+assert "--check refuses a partial override too" "[[ '$_crc' != '0' ]]"
+_cerr=$(CCT_FEATURE_INDEX_CATALOG="$TMPD/valid-caps.yaml" bash "$GENERATE" --check 2>&1 || true)
+assert "…and does not call the current document stale" \
+    "[[ '$_cerr' != *'is out of date'* ]]"
+
+# A reader that cannot be sure REFUSES, and the refusal travels the same path
+# as the empty catalog: non-zero from render, exit 1 in every mode.
+printf 'schema_version: 1\nkind: catalog\ncapabilities:\n  - id: a\n    description: |-\n      literal\n' > "$TMPD/literal-caps.yaml"
+for _m in --stdout --check --write; do
+    _lrc=0
+    CCT_FEATURE_INDEX_CATALOG="$TMPD/literal-caps.yaml" CCT_FEATURE_INDEX_OUT="$TMPD/out.md" \
+        bash "$GENERATE" "$_m" >/dev/null 2>&1 || _lrc=$?
+    assert "a literal block scalar is refused by $_m" "[[ '$_lrc' != '0' ]]"
+done
 
 if ! command -v ruby >/dev/null 2>&1; then
   echo "[SKIP] ruby not found — feature catalog tests skipped."

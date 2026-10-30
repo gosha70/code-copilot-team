@@ -25,9 +25,20 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SKILLS_DIR="$REPO_DIR/shared/skills"
 CMDS_DIR="$REPO_DIR/adapters/claude-code/.claude/commands"
-CATALOG="$REPO_DIR/shared/capabilities/catalog.yaml"
-FEATURES="$REPO_DIR/shared/features/catalog.yaml"
-OUT="$REPO_DIR/docs/features.md"
+# Overridable so a test can point the render at a fixture instead of
+# mutating the repository's own catalog in place — a test that edits the real
+# file leaves a broken catalog behind if it is interrupted between the edit
+# and the restore.
+# All three share the CCT_FEATURE_INDEX_ prefix so they read as one triple,
+# and so a generic name exported by another tool cannot reach this script.
+CATALOG="${CCT_FEATURE_INDEX_CATALOG:-$REPO_DIR/shared/capabilities/catalog.yaml}"
+FEATURES="${CCT_FEATURE_INDEX_FEATURES:-$REPO_DIR/shared/features/catalog.yaml}"
+# Overridable TOGETHER WITH the inputs above. Making only the inputs
+# overridable introduced a hazard: `--write` against a valid fixture rewrote
+# the real docs/features.md with fixture content, exit 0 — verified before
+# this line existed. A stale CCT_CAPABILITIES_CATALOG left exported in a
+# shell would have done the same during an ordinary `cct list --write`.
+OUT="${CCT_FEATURE_INDEX_OUT:-$REPO_DIR/docs/features.md}"
 DASH="—"
 
 # First non-empty, non-heading, non-frontmatter line of a command file → its
@@ -202,10 +213,36 @@ ${cap_rows}
 EOF
 }
 
+# A PARTIAL OVERRIDE IS REFUSED WHEN WRITING.
+#
+# Overriding an input without the output renders a different catalog INTO the
+# committed document. Verified before this guard existed: one stale export
+# plus an ordinary `--write` rewrote docs/features.md with fixture content and
+# exited 0. The tests are safe because they set all three; a leftover export
+# in a shell sets one, which is the case this refuses.
+assert_override_consistency() {
+  [[ -n "${CCT_FEATURE_INDEX_OUT:-}" ]] && return 0
+  local set_var=""
+  [[ -n "${CCT_FEATURE_INDEX_CATALOG:-}" ]] && set_var="CCT_FEATURE_INDEX_CATALOG"
+  [[ -n "${CCT_FEATURE_INDEX_FEATURES:-}" ]] && set_var="${set_var:+$set_var and }CCT_FEATURE_INDEX_FEATURES"
+  [[ -z "$set_var" ]] && return 0
+  echo "[ERROR] $set_var is set but CCT_FEATURE_INDEX_OUT is not." >&2
+  echo "        Writing would render that catalog into $OUT." >&2
+  echo "        Set CCT_FEATURE_INDEX_OUT too, or unset $set_var." >&2
+  return 1
+}
+
 main() {
   case "${1:-write}" in
     --stdout)        render ;;
     --check)
+      # Same refusal as --write, for a different reason. --check writes
+      # nothing, so it is safe — but with an input overridden it compares a
+      # FIXTURE render against the real document and reports
+      # "[STALE] docs/features.md is out of date" for a file that is current,
+      # telling the reader to regenerate something that needs no regenerating.
+      # --stdout needs no guard: its output goes wherever the caller sends it.
+      assert_override_consistency || exit 1
       local tmp; tmp="$(mktemp)"
       render >"$tmp"
       if ! diff -u "$OUT" "$tmp" >/dev/null 2>&1; then
@@ -219,6 +256,7 @@ main() {
       # Render to a temp file first: a render that fails half-way (the
       # feature table refuses to degrade) must not leave a truncated index.
       local tmp; tmp="$(mktemp)"
+      assert_override_consistency || exit 1
       render >"$tmp" || { rm -f "$tmp"; exit 1; }
       mv "$tmp" "$OUT"
       echo "[OK] wrote $OUT" >&2 ;;
