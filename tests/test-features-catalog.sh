@@ -228,8 +228,12 @@ python3 "$REPO_DIR/scripts/lib/feature_index_rows.py" features \
     "$TMPD/edge-features.yaml" > "$TMPD/port-edgef.txt" 2>/dev/null
 assert "a missing maturity and since render as nothing, as ruby did" \
     "[[ -s '$TMPD/ruby-edgef.txt' ]] && [[ -s '$TMPD/port-edgef.txt' ]] && diff -q '$TMPD/ruby-edgef.txt' '$TMPD/port-edgef.txt' >/dev/null"
+# `! grep -q` passes on an empty file, and `[[ -s ]]` is NOT enough to stop
+# it: a renderer that produces no rows still prints a newline, so the file is
+# one byte and counts as non-empty. Found by mutating feature_rows to return
+# nothing — `-s` passed. The guard is therefore "contains a row".
 assert "…and specifically not the word None" \
-    "! grep -q 'None' '$TMPD/port-edgef.txt'"
+    "grep -q '^|' '$TMPD/port-edgef.txt' && ! grep -q 'None' '$TMPD/port-edgef.txt'"
 
 ruby -ryaml -e '
     doc = YAML.load_file(ARGV[0])
