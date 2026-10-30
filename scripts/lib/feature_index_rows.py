@@ -177,7 +177,11 @@ def capability_rows(catalog: Path) -> list[str]:
         # returned 0 here and the section rendered empty.
         raise ValueError(f"{catalog}: no capabilities found")
     return [
-        f"| `{c['id']}` | {fold(c.get('description'))} | {c.get('default') or DASH} |"
+        # An EMPTY default renders as nothing, not as the dash: ruby's `||`
+        # only falls through on nil/false, and "" is true in ruby. Only a
+        # genuinely absent default gets the dash.
+        f"| `{c['id']}` | {fold(c.get('description'))} | "
+        f"{DASH if c.get('default') is None else c['default']} |"
         for c in caps
     ]
 
@@ -187,7 +191,14 @@ def feature_rows(features: list[dict]) -> list[str]:
     for f in features:
         guide = f.get("guide") or ""
         title = f"[{f['title']}](../{guide})" if guide else f["title"]
-        rows.append(f"| {title} | {fold(f.get('problem'))} | {f.get('maturity')} | {f.get('since')} |")
+        # `or ""`: a missing field is NOTHING, as ruby rendered it. An
+        # f-string on None writes the word "None" into the document, and the
+        # validator that would have refused such a catalog is skipped off CI
+        # without ruby — exactly the machine this port serves.
+        rows.append(
+            f"| {title} | {fold(f.get('problem'))} | "
+            f"{f.get('maturity') or ''} | {f.get('since') or ''} |"
+        )
     return rows
 
 

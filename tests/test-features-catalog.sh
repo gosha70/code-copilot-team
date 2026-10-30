@@ -192,8 +192,59 @@ fi
 # that used to fail silently. Field-by-field, not just rendered output: the
 # agreement check found an inline flow sequence read as a literal string and
 # a double-quoted scalar left escaped — neither changes today's render.
-assert "ruby renders the same committed document" \
-    "ruby -ryaml -rjson -e 'true' 2>/dev/null && diff -q '$COMMITTED' <(bash '$GENERATE' --stdout 2>/dev/null) >/dev/null"
+# THE RUBY RENDERERS STAY HERE AS THE REFERENCE.
+#
+# The generator no longer calls ruby, so diffing the committed file against
+# the generator compares the port with itself — harmless today only because
+# ruby produced the committed file, and meaningless the moment the next
+# `cct list --write` regenerates it with the port. Field-level agreement is
+# covered elsewhere; the RENDERING — guide links, whitespace folding, missing
+# values — is only compared here. These are the one-liners the generator used
+# to run, kept verbatim.
+ruby -ryaml -e '
+    doc = YAML.load_file(ARGV[0])
+    (doc["features"] || []).each do |f|
+      problem = (f["problem"] || "").gsub(/\s+/, " ").strip
+      guide = f["guide"].to_s
+      title = guide.empty? ? f["title"] : "[#{f["title"]}](../#{guide})"
+      printf("| %s | %s | %s | %s |\n", title, problem, f["maturity"], f["since"])
+    end
+  ' "$REPO_DIR/shared/features/catalog.yaml" > "$TMPD/ruby-features.txt" 2>/dev/null
+python3 "$REPO_DIR/scripts/lib/feature_index_rows.py" features \
+    "$REPO_DIR/shared/features/catalog.yaml" > "$TMPD/port-features.txt" 2>/dev/null
+assert "the port renders feature rows exactly as ruby did" \
+    "diff -q '$TMPD/ruby-features.txt' '$TMPD/port-features.txt' >/dev/null"
+
+ruby -ryaml -e '
+    doc = YAML.load_file(ARGV[0])
+    (doc["capabilities"] || []).each do |c|
+      desc = (c["description"] || "").gsub(/\s+/, " ").strip
+      printf("| `%s` | %s | %s |\n", c["id"], desc, c["default"] || "-")
+    end
+  ' "$CAPS" > "$TMPD/ruby-caps.txt" 2>/dev/null
+python3 "$REPO_DIR/scripts/lib/feature_index_rows.py" capabilities "$CAPS" \
+    > "$TMPD/port-caps.txt" 2>/dev/null
+assert "the port renders capability rows exactly as ruby did" \
+    "diff -q '$TMPD/ruby-caps.txt' '$TMPD/port-caps.txt' >/dev/null"
+
+ruby -ryaml -e '
+    doc = YAML.load_file(ARGV[0])
+    adapters = ARGV[1].split(" ")
+    mark = { "enforced" => "enforced", "advisory" => "advisory", "unsupported" => "—", "neutral" => "n/a" }
+    (doc["features"] || []).each do |f|
+      cells = adapters.map { |a| mark.fetch((f["adapters"] || {})[a].to_s, "?") }
+      printf("| %s | %s |\n", f["title"], cells.join(" | "))
+    end
+  ' "$REPO_DIR/shared/features/catalog.yaml" \
+    "$(find "$REPO_DIR/adapters" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort | tr '\n' ' ')" \
+    > "$TMPD/ruby-support.txt" 2>/dev/null
+# shellcheck disable=SC2046
+python3 "$REPO_DIR/scripts/lib/feature_index_rows.py" support \
+    "$REPO_DIR/shared/features/catalog.yaml" \
+    $(find "$REPO_DIR/adapters" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort) \
+    > "$TMPD/port-support.txt" 2>/dev/null
+assert "the port renders support rows exactly as ruby did" \
+    "diff -q '$TMPD/ruby-support.txt' '$TMPD/port-support.txt' >/dev/null"
 assert "the capabilities reader agrees with ruby, field for field" \
     "python3 - <<'AGREE'
 import json, pathlib, subprocess, sys

@@ -36,7 +36,7 @@ FEATURES="${CCT_FEATURE_INDEX_FEATURES:-$REPO_DIR/shared/features/catalog.yaml}"
 # Overridable TOGETHER WITH the inputs above. Making only the inputs
 # overridable introduced a hazard: `--write` against a valid fixture rewrote
 # the real docs/features.md with fixture content, exit 0 — verified before
-# this line existed. A stale CCT_CAPABILITIES_CATALOG left exported in a
+# this line existed. A stale CCT_FEATURE_INDEX_CATALOG left exported in a
 # shell would have done the same during an ordinary `cct list --write`.
 OUT="${CCT_FEATURE_INDEX_OUT:-$REPO_DIR/docs/features.md}"
 DASH="—"
@@ -255,8 +255,9 @@ main() {
       mkdir -p "$(dirname "$OUT")"
       # Render to a temp file first: a render that fails half-way (the
       # feature table refuses to degrade) must not leave a truncated index.
-      local tmp; tmp="$(mktemp)"
+      # BEFORE mktemp: refusing after it leaks the temp file.
       assert_override_consistency || exit 1
+      local tmp; tmp="$(mktemp)"
       render >"$tmp" || { rm -f "$tmp"; exit 1; }
       mv "$tmp" "$OUT"
       echo "[OK] wrote $OUT" >&2 ;;
