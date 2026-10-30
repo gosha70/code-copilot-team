@@ -31,10 +31,112 @@ assert() {
   fi
 }
 
+# ══════════════════════════════════════════════════════════════
+# The render runs on python3, not ruby — so these run BEFORE the ruby skip
+# below. A no-ruby machine is exactly the machine the port exists for; tests
+# that skip there would verify it where it already worked and nowhere else.
+# ══════════════════════════════════════════════════════════════
+echo "=== feature index renders without ruby ==="
+
+COMMITTED="$REPO_DIR/docs/features.md"
+CAPS="$REPO_DIR/shared/capabilities/catalog.yaml"
+TMPD=$(mktemp -d)
+cleanup_port() { cp "$TMPD/caps.bak" "$CAPS" 2>/dev/null || true; rm -rf "$TMPD"; }
+trap cleanup_port EXIT
+cp "$CAPS" "$TMPD/caps.bak"
+
+# 1. The port's output IS the committed document. No hash literal: the
+#    checked-in file is the reference, and --check already compares to it.
+bash "$GENERATE" --stdout > "$TMPD/port.md" 2>/dev/null
+assert "the port renders exactly the committed docs/features.md" \
+    "diff -q '$COMMITTED' '$TMPD/port.md' >/dev/null"
+
+# 2. …with ruby absent from PATH. This is the bug: two renderers refused to
+#    run without ruby and a third rendered an EMPTY section.
+mkdir -p "$TMPD/bin"
+for _b in bash sh env python3 find sort grep sed awk basename dirname cat wc tr head date git mktemp rm cp diff; do
+    _p=$(command -v "$_b" 2>/dev/null) && ln -sf "$_p" "$TMPD/bin/$_b"
+done
+PATH="$TMPD/bin" bash "$GENERATE" --stdout > "$TMPD/noruby.md" 2>/dev/null
+assert "it renders identically with ruby off PATH" \
+    "[[ -z \"\$(PATH='$TMPD/bin' command -v ruby || true)\" ]] && diff -q '$COMMITTED' '$TMPD/noruby.md' >/dev/null"
+
+# 3. It must not consult PyYAML. A checked-in file compared by --check cannot
+#    depend on whether a library happens to be installed: PyYAML follows
+#    YAML 1.1, where `yes` loads as True and a bare date becomes a date.
+#    A poisoned module proves independence — anything consulting it breaks.
+mkdir -p "$TMPD/poison"
+cat > "$TMPD/poison/yaml.py" <<'POISON'
+__version__ = "0.0.0-poison"
+def safe_load(*a, **k):
+    return {"features": [{"id": "POISONED", "title": "POISONED", "problem": "x",
+                          "maturity": "stable", "since": "v1.0.0", "adapters": {}}]}
+def load(*a, **k): return safe_load()
+POISON
+PYTHONPATH="$TMPD/poison" bash "$GENERATE" --stdout > "$TMPD/poisoned.md" 2>/dev/null
+assert "a poisoned yaml module changes nothing (PyYAML is not consulted)" \
+    "diff -q '$COMMITTED' '$TMPD/poisoned.md' >/dev/null"
+
+# 4. Free text stays text. `title: Yes` is legal input — no enum covers
+#    title — and ruby coerced it to the boolean true.
+cat > "$TMPD/yes.yaml" <<'YES'
+schema_version: 1
+kind: features
+features:
+  - id: a
+    title: Yes
+    problem: >-
+      No
+    maturity: stable
+    since: v1.0.0
+YES
+assert "a title of 'Yes' renders as the text Yes, not true" \
+    "python3 '$REPO_DIR/scripts/lib/feature_index_rows.py' features '$TMPD/yes.yaml' | grep -q '^| Yes | No |'"
+
+# 5. AN EMPTY CAPABILITIES SECTION IS A FAILURE, IN EVERY MODE.
+#    This is the original bug. `set -e` does NOT apply inside a function body
+#    when the function is the left operand of `||`, and --write calls
+#    `render >"$tmp" || { … }` — so before the fix: --stdout 1, --check 1,
+#    --write 0 WITH docs/features.md overwritten minus the table.
+printf 'schema_version: 1\nkind: catalog\ncapabilities:\n' > "$TMPD/empty-caps.yaml"
+cp "$TMPD/empty-caps.yaml" "$CAPS"
+BEFORE_SUM=$(shasum -a 256 "$COMMITTED" | awk '{print $1}')
+for _m in --stdout --check --write; do
+    # Capture the status explicitly: `set -e` is active here, so letting the
+    # generator fail inline would abort the suite, and `$?` inside assert's
+    # eval'd string would not refer to it anyway.
+    _rc=0
+    bash "$GENERATE" "$_m" >/dev/null 2>&1 || _rc=$?
+    assert "an empty capabilities catalog fails $_m" "[[ '$_rc' != '0' ]]"
+done
+AFTER_SUM=$(shasum -a 256 "$COMMITTED" | awk '{print $1}')
+assert "--write left the committed document untouched" "[[ '$BEFORE_SUM' == '$AFTER_SUM' ]]"
+cp "$TMPD/caps.bak" "$CAPS"
+
 if ! command -v ruby >/dev/null 2>&1; then
   echo "[SKIP] ruby not found — feature catalog tests skipped."
   exit 0
 fi
+# ── the ruby comparison: only where ruby exists ──────────────
+# The port must agree with the renderer it replaces, and with the sibling
+# reader for the capabilities catalog, which is NEW parsing code on the path
+# that used to fail silently. Field-by-field, not just rendered output: the
+# agreement check found an inline flow sequence read as a literal string and
+# a double-quoted scalar left escaped — neither changes today's render.
+assert "ruby renders the same committed document" \
+    "ruby -ryaml -rjson -e 'true' 2>/dev/null && diff -q '$COMMITTED' <(bash '$GENERATE' --stdout 2>/dev/null) >/dev/null"
+assert "the capabilities reader agrees with ruby, field for field" \
+    "python3 - <<'AGREE'
+import json, pathlib, subprocess, sys
+sys.path.insert(0, '$REPO_DIR/scripts/lib')
+import feature_index_rows as fir
+rb = json.loads(subprocess.run(['ruby','-ryaml','-rjson','-e',
+    'print JSON.generate(YAML.load_file(ARGV[0])[\"capabilities\"])',
+    '$CAPS'], capture_output=True, text=True).stdout)
+py = fir.read_capabilities(pathlib.Path('$CAPS'))
+sys.exit(0 if rb == py else 1)
+AGREE"
+
 
 echo "=== feature catalog ==="
 

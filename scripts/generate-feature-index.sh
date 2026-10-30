@@ -52,23 +52,22 @@ fm_value() {
   ' "$1"
 }
 
-# Capability rows via ruby -ryaml (same substrate as the other generators).
-# Isolated so a ruby failure degrades to an empty section, never aborts render.
+# The three table renderers run on python3, not ruby. They were
+# `ruby -ryaml` one-liners: two refused to run without ruby, so `cct list`
+# failed on a machine without it, and the third degraded to an EMPTY
+# capabilities section — a success that printed an incomplete catalog, which
+# is the worse of the two. python3 is already a hard prerequisite here.
+#
+# scripts/lib/feature_index_rows.py explains which reader it uses and why it
+# does not prefer PyYAML. All three now FAIL LOUDLY: a catalog that cannot be
+# read, or that yields no entries, stops the render instead of thinning it.
+ROWS="$REPO_DIR/scripts/lib/feature_index_rows.py"
+
 capability_rows() {
-  command -v ruby >/dev/null 2>&1 || return 0
-  [[ -f "$CATALOG" ]] || return 0
-  ruby -ryaml -e '
-    doc = YAML.load_file(ARGV[0])
-    (doc["capabilities"] || []).each do |c|
-      desc = (c["description"] || "").gsub(/\s+/, " ").strip
-      printf("| `%s` | %s | %s |\n", c["id"], desc, c["default"] || "-")
-    end
-  ' "$CATALOG" 2>/dev/null || return 0
+  [[ -f "$CATALOG" ]] || { echo "[ERROR] $CATALOG not found" >&2; return 1; }
+  python3 "$ROWS" capabilities "$CATALOG"
 }
 
-# Feature rows from shared/features/catalog.yaml. Unlike capability_rows this
-# does NOT degrade to an empty section: the catalog is the index's headline
-# table, and a render that silently drops it would pass --check while lying.
 # The adapter columns are the adapters/ directory in sorted order, read from
 # the schema-validated catalog, so a new adapter shows up as a column without
 # touching this script.
@@ -78,16 +77,7 @@ feature_adapters() {
 
 feature_rows() {
   [[ -f "$FEATURES" ]] || { echo "[ERROR] $FEATURES not found" >&2; return 1; }
-  command -v ruby >/dev/null 2>&1 || { echo "[ERROR] ruby is required to render the feature table" >&2; return 1; }
-  ruby -ryaml -e '
-    doc = YAML.load_file(ARGV[0])
-    (doc["features"] || []).each do |f|
-      problem = (f["problem"] || "").gsub(/\s+/, " ").strip
-      guide = f["guide"].to_s
-      title = guide.empty? ? f["title"] : "[#{f["title"]}](../#{guide})"
-      printf("| %s | %s | %s | %s |\n", title, problem, f["maturity"], f["since"])
-    end
-  ' "$FEATURES"
+  python3 "$ROWS" features "$FEATURES"
 }
 
 # The adapter-support matrix is its own table: one short cell per adapter.
@@ -96,16 +86,8 @@ feature_rows() {
 # scroll (Studio Learn, 2026-09-13); apart, both tables fit a page.
 feature_support_rows() {
   [[ -f "$FEATURES" ]] || { echo "[ERROR] $FEATURES not found" >&2; return 1; }
-  command -v ruby >/dev/null 2>&1 || { echo "[ERROR] ruby is required to render the feature table" >&2; return 1; }
-  ruby -ryaml -e '
-    doc = YAML.load_file(ARGV[0])
-    adapters = ARGV[1].split(" ")
-    mark = { "enforced" => "enforced", "advisory" => "advisory", "unsupported" => "—", "neutral" => "n/a" }
-    (doc["features"] || []).each do |f|
-      cells = adapters.map { |a| mark.fetch((f["adapters"] || {})[a].to_s, "?") }
-      printf("| %s | %s |\n", f["title"], cells.join(" | "))
-    end
-  ' "$FEATURES" "$(feature_adapters | tr "\n" " ")"
+  # shellcheck disable=SC2046  # adapters are directory names: no spaces
+  python3 "$ROWS" support "$FEATURES" $(feature_adapters)
 }
 
 render() {
@@ -131,7 +113,18 @@ render() {
     done < <(find "$SKILLS_DIR" -name 'SKILL.md' -print0 | sort -z)
   fi
 
-  cap_rows="$(capability_rows)"
+  # EVERY row capture ends in `|| return 1`, including this one.
+  #
+  # `set -e` does NOT apply inside a function body when the function is the
+  # left operand of `||`, and --write calls `render >"$tmp" || { … }`. With a
+  # bare assignment here, a failing capability renderer left the section
+  # empty, render carried on, and --write rewrote docs/features.md MISSING
+  # that table and exited 0 — reproduced on this generator before the fix:
+  #   --stdout exit=1   --check exit=1   --write exit=0, file overwritten.
+  # That is how an empty capabilities section reaches a committed file
+  # without anyone hearing about it, and a Python port alone does not close
+  # it: the swallowing happens in the shell.
+  cap_rows="$(capability_rows)" || return 1
   cap_count="$(printf '%s' "$cap_rows" | grep -c '^|' || true)"
 
   feature_rows="$(feature_rows)" || return 1
