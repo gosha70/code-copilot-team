@@ -1282,6 +1282,36 @@ rm -rf "$P" "$BARE" "$GH_LOG"
 assert_eq "driver contains no --force code path" "0" "$(grep -c -- '--force' "$DRIVER")"
 
 # ── F: merge profile — gated GitHub-native auto-merge ──
+# ── review.round_timeout_sec was inert and is gone ──────────────────
+#
+# It had NO code reference at all: the two mentions in the driver are
+# comments, the validator's is a comment, and the schema's was prose inside
+# loop_timeout_sec's description. It was never declared as a schema property
+# either — `review` declares only max_rounds and loop_timeout_sec — so the
+# template offered a key the schema never knew about.
+#
+# The repository already said so. validate-automation-config.sh argues, in a
+# comment, that "an unattended contract that accepts enforcement-looking
+# settings which do nothing is worse than one that refuses them (see #205's
+# inert round_timeout_sec …)" — and then the template shipped it anyway.
+#
+# NOT REJECTED, DELIBERATELY. The validator has only a fatal channel, and the
+# three run records under specs/ carry "round_timeout_sec": 900. Refusing the
+# key would break records of runs that already happened; that is a
+# compatibility decision, not a cleanup, and it is not taken here.
+TEMPLATE_PATH="$SCRIPT_DIR/../shared/templates/sdd/automation-template.json"
+assert_eq "the shipped template exists to be checked" "1" \
+    "$([[ -f "$TEMPLATE_PATH" ]] && echo 1 || echo 0)"
+assert_eq "the shipped template no longer advertises round_timeout_sec" "0" \
+    "$(grep -c 'round_timeout_sec' "$TEMPLATE_PATH" 2>/dev/null || true)"
+assert_eq "no code reads it (comments do not count as readers)" "0" \
+    "$(grep -c '^[^#]*round_timeout_sec' "$DRIVER" 2>/dev/null || true)"
+P=$(setup_project)
+cfg_set "$P" '.review.round_timeout_sec=900'
+RC=0; OUTPUT=$(bash "$SCRIPT_DIR/../scripts/validate-automation-config.sh" "$P/specs/demo-feat/automation.json" 2>&1) || RC=$?
+assert_exit "a config still carrying round_timeout_sec validates" 0 "$RC"
+rm -rf "$P"
+
 # ── merge.require_green_ci was inert and is gone ────────────────────
 #
 # It had ONE production assignment and no reader: CI has always been enforced

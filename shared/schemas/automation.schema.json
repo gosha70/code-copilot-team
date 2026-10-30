@@ -125,7 +125,7 @@
         "loop_timeout_sec": {
           "type": "integer",
           "minimum": 1,
-          "description": "Wall-clock budget for the WHOLE review loop across rounds (default 900). Restarts when a parked run resumes, so time spent waiting for a human is not counted against it (#205). Distinct from round_timeout_sec, and from the per-provider timeout_sec in providers.toml which bounds a SINGLE reviewer invocation."
+          "description": "Wall-clock budget for the WHOLE review loop across rounds (default 900). Restarts when a parked run resumes, so time spent waiting for a human is not counted against it (#205). Bounds the loop, not one round: the per-provider timeout_sec in providers.toml bounds a SINGLE reviewer invocation. (`review.round_timeout_sec` appeared in the template until 2026-10-29 but was never declared here and never read by anything; it is not a review knob. A config still carrying it validates, because `review` declares no additionalProperties.)"
         }
       }
     },
