@@ -1,5 +1,15 @@
 # Spec: auto-build-loop `merge` profile — gated auto-merge (increment F)
 
+> **Correction, 2026-10-29.** `merge.require_green_ci` was never read. The
+> driver assigned it to `MERGE_REQUIRE_GREEN_CI` and nothing consumed that
+> variable, so the key influenced no behaviour at any point: CI enforcement
+> has always come from GitHub branch protection via `gh pr merge --auto`. The
+> key was removed from the shipped template on that date. Requirements below
+> that describe it as "delegated" are retained as the record of what was
+> specified; they overstate what shipped. A legacy config still carrying the
+> key validates unchanged — `merge` is an open object in the schema.
+
+
 Issue #80. Base: `pr` profile + reviewer panel merged in #75/#79. Design:
 `specs/auto-build-loop/design.md` §F, decision 3, Finalize + Safety rails.
 The profile ladder and the `merge{enabled, require_green_ci,

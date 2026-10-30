@@ -21,7 +21,7 @@ breakers. Design: `specs/auto-build-loop/design.md`.
 | Commit gate (8) | auto-commit, local only, isolated branch | auto-commit | auto-commit |
 | Wait-for-approval (9) | auto-advance; hard pause at milestones | same | same |
 | Origin gate exit >= 2 (10) | **always escalate to human** | **always escalate** | **always escalate** |
-| Peer review (11) | driver-run, gating, driver verifies PASS | same | same + green CI |
+| Peer review (11) | driver-run, gating, driver verifies PASS | same | same; CI is GitHub's gate, not the driver's |
 | Push / PR / merge | never / never / never | auto / auto / never | auto / auto / gated auto |
 
 All three attended profiles — `advisory`, `pr`, and `merge` — are
@@ -56,8 +56,10 @@ auto-merge at finalize (the driver never merges locally):
   (`merge_blocked`) if it is not.
 - It then runs `gh pr merge <n> --auto --<merge.method>` (default `squash`);
   GitHub performs the merge only once the branch-protection required checks
-  pass — so `merge.require_green_ci` is delegated to GitHub's own rules. The
-  driver never polls CI and never force-merges.
+  pass — CI is enforced by branch protection, not by this driver, which
+  never polls CI and never force-merges. (`merge.require_green_ci` used to
+  appear in the template; it was never read by anything and was removed on
+  2026-10-29. A legacy config still carrying it validates unchanged.)
 - The arm is idempotent (ledger `pr.auto_merge_armed`, else `gh pr view
   --json autoMergeRequest`); resume never re-arms. A `merge_blocked` park
   resolves once branch protection exists (or `merge.enabled` is flipped).

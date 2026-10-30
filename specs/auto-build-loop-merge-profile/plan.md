@@ -31,6 +31,16 @@ origin:
     the series A–F.
 ---
 
+> **Correction, 2026-10-29.** `merge.require_green_ci` was never read. The
+> driver assigned it to `MERGE_REQUIRE_GREEN_CI` and nothing consumed that
+> variable, so the key influenced no behaviour at any point: CI enforcement
+> has always come from GitHub branch protection via `gh pr merge --auto`. The
+> key was removed from the shipped template on that date. Requirements below
+> that describe it as "delegated" are retained as the record of what was
+> specified; they overstate what shipped. A legacy config still carrying the
+> key validates unchanged — `merge` is an open object in the schema.
+
+
 # Plan: auto-build-loop `merge` profile (increment F)
 
 Design: `specs/auto-build-loop/design.md` §F + Finalize + Safety rails.

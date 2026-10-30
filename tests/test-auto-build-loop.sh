@@ -1282,6 +1282,33 @@ rm -rf "$P" "$BARE" "$GH_LOG"
 assert_eq "driver contains no --force code path" "0" "$(grep -c -- '--force' "$DRIVER")"
 
 # ── F: merge profile — gated GitHub-native auto-merge ──
+# ── merge.require_green_ci was inert and is gone ────────────────────
+#
+# It had ONE production assignment and no reader: CI has always been enforced
+# by GitHub branch protection through `gh pr merge --auto`, never by this
+# driver. A config key that reads as a safety control and does nothing is a
+# false claim, so the shipped template no longer advertises it.
+#
+# REMOVING A KEY IS ONLY SAFE IF OLD CONFIGS STILL WORK. `merge` is an open
+# object in the schema and the validator has no unknown-key check for it, so
+# the four historical automation.json files that still carry the key — the
+# records of runs that actually happened — keep validating untouched. These
+# two assertions are what make that a guarantee rather than an observation.
+assert_eq "the shipped template no longer advertises require_green_ci" "0" \
+    "$(grep -c 'require_green_ci' "$SCRIPT_DIR/../shared/templates/sdd/automation-template.json" || true)"
+assert_eq "nothing in the driver reads it any more" "0" \
+    "$(grep -c 'MERGE_REQUIRE_GREEN_CI' "$DRIVER" || true)"
+P=$(setup_project)
+cfg_set "$P" '.profile="merge" | .pr={closes:[99],title:""} | .merge={enabled:true,require_branch_protection:true,require_green_ci:true,method:"squash"}'
+RC=0; OUTPUT=$(bash "$SCRIPT_DIR/../scripts/validate-automation-config.sh" "$P/specs/demo-feat/automation.json" 2>&1) || RC=$?
+assert_exit "a LEGACY config still carrying require_green_ci validates" 0 "$RC"
+rm -rf "$P"
+
+# NOTE: this fixture deliberately still sets `require_green_ci`, a key the
+# shipped template no longer carries. It is LEGACY COMPATIBILITY COVERAGE —
+# every merge-profile case below therefore runs against a config shaped like
+# the ones already committed under specs/, proving they keep working. Do not
+# delete it as dead config; deleting it silently removes that coverage.
 MERGE_CFG='.profile="merge" | .phases.milestone_every=0 | .pr={closes:[99],title:""} | .merge={enabled:true,require_branch_protection:true,require_green_ci:true,method:"squash"}'
 
 # F1: enabled + protected → arms auto-merge exactly once
