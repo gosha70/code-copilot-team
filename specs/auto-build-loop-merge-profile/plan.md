@@ -58,7 +58,7 @@ preflight from #75; `GH_BIN`/`BRANCH_BASE`/`BRANCH_REMOTE` globals in place.
 1. **Ladder** (`load_config`): replace the `merge` refusal with
    `CAN_PUSH=true; CAN_OPEN_PR=true; CAN_MERGE=true`; read `merge.enabled`,
    `merge.require_branch_protection`, `merge.method` (default squash),
-   `merge.require_green_ci` into globals.
+   `merge.require_green_ci` into globals.  *(historical: the key was never read — see the correction at the top of this file)*
 2. **`arm_auto_merge`** helper (finalize, `CAN_MERGE` + `merge.enabled`):
    verify branch protection (`gh api`) when required → park `merge_blocked` if
    absent; run `gh pr merge <n> --auto --<method>` (idempotent — skip if the
@@ -73,7 +73,7 @@ preflight from #75; `GH_BIN`/`BRANCH_BASE`/`BRANCH_REMOTE` globals in place.
 5. **Config**: add `merge.method` to `automation-template.json`; document the
    `merge` block + `CCT_AUTOBUILD_*` in settings.json.
 6. **Tests** (`tests/test-auto-build-loop.sh`) per FR-7; register counts.
-7. **Docs**: skill `merge` row live; regenerate adapters (zero drift).  *(historical: the key was never read — see the correction at the top of this file)*
+7. **Docs**: skill `merge` row live; regenerate adapters (zero drift).
 
 ## Design decisions to confirm at approval
 
