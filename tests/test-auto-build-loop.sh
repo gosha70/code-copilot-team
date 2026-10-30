@@ -1282,6 +1282,53 @@ rm -rf "$P" "$BARE" "$GH_LOG"
 assert_eq "driver contains no --force code path" "0" "$(grep -c -- '--force' "$DRIVER")"
 
 # ── F: merge profile — gated GitHub-native auto-merge ──
+# ── merge.require_green_ci was inert and is gone ────────────────────
+#
+# It had ONE production assignment and no reader: CI has always been enforced
+# by GitHub branch protection through `gh pr merge --auto`, never by this
+# driver. A config key that reads as a safety control and does nothing is a
+# false claim, so the shipped template no longer advertises it.
+#
+# REMOVING A KEY IS ONLY SAFE IF OLD CONFIGS STILL VALIDATE — which is what
+# "a LEGACY config still carrying require_green_ci validates" checks below,
+# and all it checks. (Named, not numbered: it was "the third assertion" until
+# two existence checks were inserted above it, at which point the comment
+# described a different assertion than the one it meant.) The three run records on
+# master that still carry the key are not re-run here; the MERGE_CFG fixture
+# below is what exercises the key at RUNTIME, deliberately.
+#
+# They validate because the `merge` block is not checked for unknown keys,
+# and that is not a design decision being leaned on: only `verification`,
+# `routing` and `unattended` declare additionalProperties:false, the root
+# declares none, and six blocks are bare objects. There is no closure policy
+# with exceptions; there is no policy. This assertion is therefore not
+# defending an exception to a rule — it records the one guarantee those run
+# records depend on, and it fails BEFORE any of them breaks if the block is
+# later closed.
+# The file must EXIST before "0 occurrences" means anything: `grep -c` on a
+# missing path prints nothing and `|| true` turns that into an empty string,
+# which compares equal to "0" — so a moved or deleted template would read as
+# "the key is gone" and pass. Assert existence first, separately.
+TEMPLATE_PATH="$SCRIPT_DIR/../shared/templates/sdd/automation-template.json"
+assert_eq "the shipped template exists to be checked" "1" \
+    "$([[ -f "$TEMPLATE_PATH" ]] && echo 1 || echo 0)"
+assert_eq "the shipped template no longer advertises require_green_ci" "0" \
+    "$(grep -c 'require_green_ci' "$TEMPLATE_PATH" 2>/dev/null || true)"
+assert_eq "the driver exists to be checked" "1" \
+    "$([[ -f "$DRIVER" ]] && echo 1 || echo 0)"
+assert_eq "nothing in the driver reads it any more" "0" \
+    "$(grep -c 'MERGE_REQUIRE_GREEN_CI' "$DRIVER" 2>/dev/null || true)"
+P=$(setup_project)
+cfg_set "$P" '.profile="merge" | .pr={closes:[99],title:""} | .merge={enabled:true,require_branch_protection:true,require_green_ci:true,method:"squash"}'
+RC=0; OUTPUT=$(bash "$SCRIPT_DIR/../scripts/validate-automation-config.sh" "$P/specs/demo-feat/automation.json" 2>&1) || RC=$?
+assert_exit "a LEGACY config still carrying require_green_ci validates" 0 "$RC"
+rm -rf "$P"
+
+# NOTE: this fixture deliberately still sets `require_green_ci`, a key the
+# shipped template no longer carries. It is LEGACY COMPATIBILITY COVERAGE —
+# every merge-profile case below therefore runs against a config shaped like
+# the ones already committed under specs/, proving they keep working. Do not
+# delete it as dead config; deleting it silently removes that coverage.
 MERGE_CFG='.profile="merge" | .phases.milestone_every=0 | .pr={closes:[99],title:""} | .merge={enabled:true,require_branch_protection:true,require_green_ci:true,method:"squash"}'
 
 # F1: enabled + protected → arms auto-merge exactly once

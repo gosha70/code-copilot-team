@@ -894,7 +894,6 @@ load_config() {
     # switch; require_branch_protection guards merging into an unprotected base.
     MERGE_ENABLED=$(cfg '.merge.enabled' 'false')
     MERGE_REQUIRE_PROTECTION=$(cfg '.merge.require_branch_protection' 'true')
-    MERGE_REQUIRE_GREEN_CI=$(cfg '.merge.require_green_ci' 'true')
     MERGE_METHOD=$(cfg '.merge.method' 'squash')
     [[ "$CAN_MERGE" == "true" ]] && validate_merge_method
     if [[ -z "$TEST_CMD" ]]; then
