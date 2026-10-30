@@ -1304,11 +1304,39 @@ assert_eq "the shipped template exists to be checked" "1" \
     "$([[ -f "$TEMPLATE_PATH" ]] && echo 1 || echo 0)"
 assert_eq "the shipped template no longer advertises round_timeout_sec" "0" \
     "$(grep -c 'round_timeout_sec' "$TEMPLATE_PATH" 2>/dev/null || true)"
-# ACROSS scripts/, not just the driver: the claim is "nothing reads it", so
-# checking one file would be a name wider than its check. Comment lines are
-# excluded because the driver and the validator both DISCUSS the key.
-assert_eq "no non-comment line in scripts/ reads it" "0" \
-    "$(grep -rh '^[^#]*round_timeout_sec' "$SCRIPT_DIR/../scripts" 2>/dev/null | wc -l | tr -d ' ')"
+# AN ALLOWLIST, BECAUSE GREP CANNOT TELL "READS" FROM "MENTIONS".
+# Static grep cannot decide, across shell, Python, JSON and TypeScript,
+# whether an occurrence READS the setting. So the five known explanatory
+# occurrences are pinned by PATH AND EXACT CONTENT, and anything else fails.
+#
+# This assertion was wrong three times before this form, and each is why a
+# piece of it looks the way it does:
+#   - it grepped only $DRIVER, then only scripts/, while the commit widening
+#     it named adapters as covered. Hence: every production root.
+#   - `^[^#]*token` is not a comment test, it is a "no hash earlier on the
+#     line" test — it misreads `#205` inside a JSON string. Hence: no regex
+#     comment heuristic at all.
+#   - pinning file-level COUNTS let one explanation be swapped for one reader
+#     in the same file without changing the signature. Hence: content.
+#
+# `git grep` over TRACKED files, so ignored build output (studio/node_modules,
+# .next) is irrelevant rather than slow or fatal. Line numbers are stripped
+# and runs of spaces collapsed, so MOVING a line or reformatting whitespace
+# within it is harmless. Re-wrapping is NOT: it moves words on and off the
+# matched line, which changes the content and therefore the hash — correctly,
+# under this policy, since what the line says is what is being pinned.
+#
+# DELIBERATELY BRITTLE: any new mention fails the suite, including a
+# legitimate one. That is the point — a human classifies it and updates the
+# hash below. Regenerate with:
+#   git grep -n round_timeout_sec -- scripts adapters shared studio \
+#     | sed -E 's/^([^:]*):[0-9]+:/\1: /' | tr -s ' \t' ' ' \
+#     | sed -E 's/ +$//' | sort | shasum -a 256
+REVIEW_KEY_SIG=$(cd "$SCRIPT_DIR/.." && git grep -n 'round_timeout_sec' -- scripts adapters shared studio \
+    | sed -E 's/^([^:]*):[0-9]+:/\1: /' | tr -s ' \t' ' ' | sed -E 's/ +$//' | sort | shasum -a 256 | awk '{print $1}')
+assert_eq "only the five known explanatory mentions of round_timeout_sec exist" \
+    "5660e8d326ca065f68595efeeb85fc45fdd55653d43c8233ba4f627ec47969d5" \
+    "$REVIEW_KEY_SIG"
 P=$(setup_project)
 cfg_set "$P" '.review.round_timeout_sec=900'
 RC=0; OUTPUT=$(bash "$SCRIPT_DIR/../scripts/validate-automation-config.sh" "$P/specs/demo-feat/automation.json" 2>&1) || RC=$?

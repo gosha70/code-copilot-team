@@ -107,16 +107,24 @@ def automation_section(repo: Path) -> str:
     note = ""
     if described < len(rows):
         note = (f"\n{len(rows) - described} of these keys carry no description in the schema; "
-                "their shape is still enforced by `scripts/validate-automation-config.sh`, "
-                "which refuses any key the schema does not declare.\n")
+                "their shape is still enforced by `scripts/validate-automation-config.sh` "
+                "wherever the schema declares a block closed.\n")
     return (f"""## `specs/<feature-id>/automation.json`
 
 Per-feature automation contract for an auto-build run: which phases exist,
 how the branch is named, what counts as a passing test, which reviewer
 gates, and the caps that stop the run. Written from
 `shared/templates/sdd/automation-template.json` by `/auto-build`, validated
-by `scripts/validate-automation-config.sh`. The schema is closed: an
-unknown key is an error, not an ignored line.
+by `scripts/validate-automation-config.sh`.
+
+Three blocks are closed, and an unknown key inside them is an error rather
+than an ignored line: `verification`, `routing` and `unattended`. The rest —
+and the document root — declare no `additionalProperties`, so an undeclared
+key there is accepted and ignored. That is how configs written from older
+templates keep validating: `review.round_timeout_sec` and
+`merge.require_green_ci` were both removed from the template after it was
+established that nothing read them, and configs still carrying them are
+accepted.
 {note}
 {table(rows, ("Key", "Type", "Required", "What it does"))}
 """)
