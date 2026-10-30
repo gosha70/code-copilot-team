@@ -1304,8 +1304,11 @@ assert_eq "the shipped template exists to be checked" "1" \
     "$([[ -f "$TEMPLATE_PATH" ]] && echo 1 || echo 0)"
 assert_eq "the shipped template no longer advertises round_timeout_sec" "0" \
     "$(grep -c 'round_timeout_sec' "$TEMPLATE_PATH" 2>/dev/null || true)"
-assert_eq "no code reads it (comments do not count as readers)" "0" \
-    "$(grep -c '^[^#]*round_timeout_sec' "$DRIVER" 2>/dev/null || true)"
+# ACROSS scripts/, not just the driver: the claim is "nothing reads it", so
+# checking one file would be a name wider than its check. Comment lines are
+# excluded because the driver and the validator both DISCUSS the key.
+assert_eq "no non-comment line in scripts/ reads it" "0" \
+    "$(grep -rh '^[^#]*round_timeout_sec' "$SCRIPT_DIR/../scripts" 2>/dev/null | wc -l | tr -d ' ')"
 P=$(setup_project)
 cfg_set "$P" '.review.round_timeout_sec=900'
 RC=0; OUTPUT=$(bash "$SCRIPT_DIR/../scripts/validate-automation-config.sh" "$P/specs/demo-feat/automation.json" 2>&1) || RC=$?
