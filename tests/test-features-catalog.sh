@@ -187,12 +187,72 @@ if ! command -v ruby >/dev/null 2>&1; then
   exit 0
 fi
 # ── the ruby comparison: only where ruby exists ──────────────
+
+# EDGE CASES THE REAL CATALOGS DO NOT CONTAIN. The comparisons below run on
+# the shipped catalogs, which have no missing maturity/since and no empty
+# default — so without these fixtures the two fixes for them are each one
+# careless edit from coming back unnoticed. Same ruby one-liners, same port,
+# a fixture that exercises both.
+cat > "$TMPD/edge-features.yaml" <<'EDGEF'
+schema_version: 1
+kind: features
+features:
+  - id: no-maturity-no-since
+    title: T
+    problem: >-
+      p
+EDGEF
+cat > "$TMPD/edge-caps.yaml" <<'EDGEC'
+schema_version: 1
+kind: catalog
+capabilities:
+  - id: empty.default
+    description: >-
+      d
+    default: ""
+  - id: absent.default
+    description: >-
+      d
+EDGEC
+
+ruby -ryaml -e '
+    doc = YAML.load_file(ARGV[0])
+    (doc["features"] || []).each do |f|
+      problem = (f["problem"] || "").gsub(/\s+/, " ").strip
+      guide = f["guide"].to_s
+      title = guide.empty? ? f["title"] : "[#{f["title"]}](../#{guide})"
+      printf("| %s | %s | %s | %s |\n", title, problem, f["maturity"], f["since"])
+    end
+  ' "$TMPD/edge-features.yaml" > "$TMPD/ruby-edgef.txt" 2>/dev/null
+python3 "$REPO_DIR/scripts/lib/feature_index_rows.py" features \
+    "$TMPD/edge-features.yaml" > "$TMPD/port-edgef.txt" 2>/dev/null
+assert "a missing maturity and since render as nothing, as ruby did" \
+    "[[ -s '$TMPD/ruby-edgef.txt' ]] && [[ -s '$TMPD/port-edgef.txt' ]] && diff -q '$TMPD/ruby-edgef.txt' '$TMPD/port-edgef.txt' >/dev/null"
+assert "…and specifically not the word None" \
+    "! grep -q 'None' '$TMPD/port-edgef.txt'"
+
+ruby -ryaml -e '
+    doc = YAML.load_file(ARGV[0])
+    (doc["capabilities"] || []).each do |c|
+      desc = (c["description"] || "").gsub(/\s+/, " ").strip
+      printf("| `%s` | %s | %s |\n", c["id"], desc, c["default"] || "-")
+    end
+  ' "$TMPD/edge-caps.yaml" > "$TMPD/ruby-edgec.txt" 2>/dev/null
+python3 "$REPO_DIR/scripts/lib/feature_index_rows.py" capabilities \
+    "$TMPD/edge-caps.yaml" > "$TMPD/port-edgec.txt" 2>/dev/null
+assert "an empty default renders as nothing and an absent one as the dash" \
+    "[[ -s '$TMPD/ruby-edgec.txt' ]] && [[ -s '$TMPD/port-edgec.txt' ]] && diff -q '$TMPD/ruby-edgec.txt' '$TMPD/port-edgec.txt' >/dev/null"
+
 # The port must agree with the renderer it replaces, and with the sibling
 # reader for the capabilities catalog, which is NEW parsing code on the path
 # that used to fail silently. Field-by-field, not just rendered output: the
 # agreement check found an inline flow sequence read as a literal string and
 # a double-quoted scalar left escaped — neither changes today's render.
 # THE RUBY RENDERERS STAY HERE AS THE REFERENCE.
+#
+# Each comparison asserts BOTH files are non-empty first: if ruby and the
+# port both produced nothing, the diff would match and the assertion would
+# pass having compared nothing.
 #
 # The generator no longer calls ruby, so diffing the committed file against
 # the generator compares the port with itself — harmless today only because
@@ -213,7 +273,7 @@ ruby -ryaml -e '
 python3 "$REPO_DIR/scripts/lib/feature_index_rows.py" features \
     "$REPO_DIR/shared/features/catalog.yaml" > "$TMPD/port-features.txt" 2>/dev/null
 assert "the port renders feature rows exactly as ruby did" \
-    "diff -q '$TMPD/ruby-features.txt' '$TMPD/port-features.txt' >/dev/null"
+    "[[ -s '$TMPD/ruby-features.txt' ]] && [[ -s '$TMPD/port-features.txt' ]] && diff -q '$TMPD/ruby-features.txt' '$TMPD/port-features.txt' >/dev/null"
 
 ruby -ryaml -e '
     doc = YAML.load_file(ARGV[0])
@@ -225,7 +285,7 @@ ruby -ryaml -e '
 python3 "$REPO_DIR/scripts/lib/feature_index_rows.py" capabilities "$CAPS" \
     > "$TMPD/port-caps.txt" 2>/dev/null
 assert "the port renders capability rows exactly as ruby did" \
-    "diff -q '$TMPD/ruby-caps.txt' '$TMPD/port-caps.txt' >/dev/null"
+    "[[ -s '$TMPD/ruby-caps.txt' ]] && [[ -s '$TMPD/port-caps.txt' ]] && diff -q '$TMPD/ruby-caps.txt' '$TMPD/port-caps.txt' >/dev/null"
 
 ruby -ryaml -e '
     doc = YAML.load_file(ARGV[0])
@@ -244,7 +304,7 @@ python3 "$REPO_DIR/scripts/lib/feature_index_rows.py" support \
     $(find "$REPO_DIR/adapters" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort) \
     > "$TMPD/port-support.txt" 2>/dev/null
 assert "the port renders support rows exactly as ruby did" \
-    "diff -q '$TMPD/ruby-support.txt' '$TMPD/port-support.txt' >/dev/null"
+    "[[ -s '$TMPD/ruby-support.txt' ]] && [[ -s '$TMPD/port-support.txt' ]] && diff -q '$TMPD/ruby-support.txt' '$TMPD/port-support.txt' >/dev/null"
 assert "the capabilities reader agrees with ruby, field for field" \
     "python3 - <<'AGREE'
 import json, pathlib, subprocess, sys
