@@ -258,6 +258,14 @@ assert "an empty default renders as nothing and an absent one as the dash" \
 # port both produced nothing, the diff would match and the assertion would
 # pass having compared nothing.
 #
+# THE RUBY SIDE IS WHAT MAKES `-s` SUFFICIENT HERE, and that is not obvious
+# from reading the assertion. With no rows, ruby prints NOTHING — 0 bytes, so
+# `-s` fails. The port prints a newline — 1 byte, so `-s` passes. Measured.
+# A comparison simplified to check only the port's file would therefore pass
+# on an empty render, which is why the None assertion further down requires a
+# ROW (`grep -q '^|'`) rather than a non-empty file. Do not drop the ruby-side
+# `-s` from any of these.
+#
 # The generator no longer calls ruby, so diffing the committed file against
 # the generator compares the port with itself — harmless today only because
 # ruby produced the committed file, and meaningless the moment the next
