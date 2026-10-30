@@ -1281,7 +1281,6 @@ rm -rf "$P" "$BARE" "$GH_LOG"
 # G: the driver has no --force / force-push code path anywhere
 assert_eq "driver contains no --force code path" "0" "$(grep -c -- '--force' "$DRIVER")"
 
-# ── F: merge profile — gated GitHub-native auto-merge ──
 # ── review.round_timeout_sec was inert and is gone ──────────────────
 #
 # It had NO code reference at all: the two mentions in the driver are
@@ -1331,9 +1330,21 @@ assert_eq "the shipped template no longer advertises round_timeout_sec" "0" \
 # hash below. Regenerate with:
 #   git grep -n round_timeout_sec -- scripts adapters shared studio \
 #     | sed -E 's/^([^:]*):[0-9]+:/\1: /' | tr -s ' \t' ' ' \
-#     | sed -E 's/ +$//' | sort | shasum -a 256
+#     | sed -E 's/ +$//' | LC_ALL=C sort | shasum -a 256
+#
+# LC_ALL=C IS LOAD-BEARING. A bare `sort` collates by the CALLER'S LOCALE, so
+# without it this hash depends on an environment setting nobody declared —
+# which is reason enough on its own, and is the reason to rely on.
+#
+# The specific risk, NOT OBSERVED by anyone: two pinned lines differ only
+# after "# ", one continuing with a backtick and the other with a letter, and
+# a collation that ignores punctuation on its first pass (glibc's
+# en_US.UTF-8 is said to) MAY order them the other way and change the hash.
+# That was not reproduced — BSD sort gives byte order for every locale, and
+# CI's C.UTF-8 matches byte order too — so treat it as a plausible mechanism
+# rather than a demonstrated one. Byte order produced the pinned value.
 REVIEW_KEY_SIG=$(cd "$SCRIPT_DIR/.." && git grep -n 'round_timeout_sec' -- scripts adapters shared studio \
-    | sed -E 's/^([^:]*):[0-9]+:/\1: /' | tr -s ' \t' ' ' | sed -E 's/ +$//' | sort | shasum -a 256 | awk '{print $1}')
+    | sed -E 's/^([^:]*):[0-9]+:/\1: /' | tr -s ' \t' ' ' | sed -E 's/ +$//' | LC_ALL=C sort | shasum -a 256 | awk '{print $1}')
 assert_eq "only the five known explanatory mentions of round_timeout_sec exist" \
     "5660e8d326ca065f68595efeeb85fc45fdd55653d43c8233ba4f627ec47969d5" \
     "$REVIEW_KEY_SIG"
@@ -1343,6 +1354,7 @@ RC=0; OUTPUT=$(bash "$SCRIPT_DIR/../scripts/validate-automation-config.sh" "$P/s
 assert_exit "a config still carrying round_timeout_sec validates" 0 "$RC"
 rm -rf "$P"
 
+# ── F: merge profile — gated GitHub-native auto-merge ──
 # ── merge.require_green_ci was inert and is gone ────────────────────
 #
 # It had ONE production assignment and no reader: CI has always been enforced
