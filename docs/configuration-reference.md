@@ -28,10 +28,18 @@ Per-feature automation contract for an auto-build run: which phases exist,
 how the branch is named, what counts as a passing test, which reviewer
 gates, and the caps that stop the run. Written from
 `shared/templates/sdd/automation-template.json` by `/auto-build`, validated
-by `scripts/validate-automation-config.sh`. The schema is closed: an
-unknown key is an error, not an ignored line.
+by `scripts/validate-automation-config.sh`.
 
-29 of these keys carry no description in the schema; their shape is still enforced by `scripts/validate-automation-config.sh`, which refuses any key the schema does not declare.
+Three blocks are closed, and an unknown key inside them is an error rather
+than an ignored line: `verification`, `routing` and `unattended`. The rest —
+and the document root — declare no `additionalProperties`, so an undeclared
+key there is accepted and ignored. That is how configs written from older
+templates keep validating: `review.round_timeout_sec` and
+`merge.require_green_ci` were both removed from the template after it was
+established that nothing read them, and configs still carrying them are
+accepted.
+
+29 of these keys carry no description in the schema; their shape is still enforced by `scripts/validate-automation-config.sh` wherever the schema declares a block closed.
 
 | Key | Type | Required | What it does |
 |---|---|---|---|
@@ -69,7 +77,7 @@ unknown key is an error, not an ignored line.
 | `verification.visual.skip_is_failure` | boolean |  | Defaults to TRUE and is frozen with the contract: a result that is degraded, skipped, or does not declare its mode FAILS the gate even when it reports passed. Setting it false is the ONLY way a degraded result lands — an explicit, frozen, auditable choice. |
 | `review` | object |  |  |
 | `review.max_rounds` | integer |  | Rounds allowed PER ATTEMPT in the gating review loop (default 5). Read by the driver and passed to the runner; CCT_REVIEW_MAX_ROUNDS still overrides. The budget is per attempt so /review-decide retry can actually run another round — a cumulative ceiling made retry a no-op (#227). |
-| `review.loop_timeout_sec` | integer |  | Wall-clock budget for the WHOLE review loop across rounds (default 900). Restarts when a parked run resumes, so time spent waiting for a human is not counted against it (#205). Distinct from round_timeout_sec, and from the per-provider timeout_sec in providers.toml which bounds a SINGLE reviewer invocation. |
+| `review.loop_timeout_sec` | integer |  | Wall-clock budget for the WHOLE review loop across rounds (default 900). Restarts when a parked run resumes, so time spent waiting for a human is not counted against it (#205). Bounds the loop, not one round: the per-provider timeout_sec in providers.toml bounds a SINGLE reviewer invocation. `review.round_timeout_sec` is not a review knob: it was never declared here and never read. |
 | `caps` | object |  |  |
 | `caps.wall_clock_sec` | number |  |  |
 | `caps.cost_usd` | number |  |  |

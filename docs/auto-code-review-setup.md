@@ -197,7 +197,6 @@ or fall back:
     { "provider": "deepseek", "specialization": "correctness", "scope": "both", "gating": true }
   ],
   "max_rounds": 3,
-  "round_timeout_sec": 900,
   "loop_timeout_sec": 600
 }
 ```

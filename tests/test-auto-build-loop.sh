@@ -1281,6 +1281,79 @@ rm -rf "$P" "$BARE" "$GH_LOG"
 # G: the driver has no --force / force-push code path anywhere
 assert_eq "driver contains no --force code path" "0" "$(grep -c -- '--force' "$DRIVER")"
 
+# ── review.round_timeout_sec was inert and is gone ──────────────────
+#
+# It had NO code reference at all: the two mentions in the driver are
+# comments, the validator's is a comment, and the schema's was prose inside
+# loop_timeout_sec's description. It was never declared as a schema property
+# either — `review` declares only max_rounds and loop_timeout_sec — so the
+# template offered a key the schema never knew about.
+#
+# The repository already said so. validate-automation-config.sh argues, in a
+# comment, that "an unattended contract that accepts enforcement-looking
+# settings which do nothing is worse than one that refuses them (see #205's
+# inert round_timeout_sec …)" — and then the template shipped it anyway.
+#
+# NOT REJECTED, DELIBERATELY. The validator has only a fatal channel, and the
+# three run records under specs/ carry "round_timeout_sec": 900. Refusing the
+# key would break records of runs that already happened; that is a
+# compatibility decision, not a cleanup, and it is not taken here.
+TEMPLATE_PATH="$SCRIPT_DIR/../shared/templates/sdd/automation-template.json"
+assert_eq "the shipped template exists to be checked" "1" \
+    "$([[ -f "$TEMPLATE_PATH" ]] && echo 1 || echo 0)"
+assert_eq "the shipped template no longer advertises round_timeout_sec" "0" \
+    "$(grep -c 'round_timeout_sec' "$TEMPLATE_PATH" 2>/dev/null || true)"
+# AN ALLOWLIST, BECAUSE GREP CANNOT TELL "READS" FROM "MENTIONS".
+# Static grep cannot decide, across shell, Python, JSON and TypeScript,
+# whether an occurrence READS the setting. So the five known explanatory
+# occurrences are pinned by PATH AND EXACT CONTENT, and anything else fails.
+#
+# This assertion was wrong three times before this form, and each is why a
+# piece of it looks the way it does:
+#   - it grepped only $DRIVER, then only scripts/, while the commit widening
+#     it named adapters as covered. Hence: every production root.
+#   - `^[^#]*token` is not a comment test, it is a "no hash earlier on the
+#     line" test — it misreads `#205` inside a JSON string. Hence: no regex
+#     comment heuristic at all.
+#   - pinning file-level COUNTS let one explanation be swapped for one reader
+#     in the same file without changing the signature. Hence: content.
+#
+# `git grep` over TRACKED files, so ignored build output (studio/node_modules,
+# .next) is irrelevant rather than slow or fatal. Line numbers are stripped
+# and runs of spaces collapsed, so MOVING a line or reformatting whitespace
+# within it is harmless. Re-wrapping is NOT: it moves words on and off the
+# matched line, which changes the content and therefore the hash — correctly,
+# under this policy, since what the line says is what is being pinned.
+#
+# DELIBERATELY BRITTLE: any new mention fails the suite, including a
+# legitimate one. That is the point — a human classifies it and updates the
+# hash below. Regenerate with:
+#   git grep -n round_timeout_sec -- scripts adapters shared studio \
+#     | sed -E 's/^([^:]*):[0-9]+:/\1: /' | tr -s ' \t' ' ' \
+#     | sed -E 's/ +$//' | LC_ALL=C sort | shasum -a 256
+#
+# LC_ALL=C IS LOAD-BEARING. A bare `sort` collates by the CALLER'S LOCALE, so
+# without it this hash depends on an environment setting nobody declared —
+# which is reason enough on its own, and is the reason to rely on.
+#
+# The specific risk, NOT OBSERVED by anyone: two pinned lines differ only
+# after "# ", one continuing with a backtick and the other with a letter, and
+# a collation that ignores punctuation on its first pass (glibc's
+# en_US.UTF-8 is said to) MAY order them the other way and change the hash.
+# That was not reproduced — BSD sort gives byte order for every locale, and
+# CI's C.UTF-8 matches byte order too — so treat it as a plausible mechanism
+# rather than a demonstrated one. Byte order produced the pinned value.
+REVIEW_KEY_SIG=$(cd "$SCRIPT_DIR/.." && git grep -n 'round_timeout_sec' -- scripts adapters shared studio \
+    | sed -E 's/^([^:]*):[0-9]+:/\1: /' | tr -s ' \t' ' ' | sed -E 's/ +$//' | LC_ALL=C sort | shasum -a 256 | awk '{print $1}')
+assert_eq "only the five known explanatory mentions of round_timeout_sec exist" \
+    "5660e8d326ca065f68595efeeb85fc45fdd55653d43c8233ba4f627ec47969d5" \
+    "$REVIEW_KEY_SIG"
+P=$(setup_project)
+cfg_set "$P" '.review.round_timeout_sec=900'
+RC=0; OUTPUT=$(bash "$SCRIPT_DIR/../scripts/validate-automation-config.sh" "$P/specs/demo-feat/automation.json" 2>&1) || RC=$?
+assert_exit "a config still carrying round_timeout_sec validates" 0 "$RC"
+rm -rf "$P"
+
 # ── F: merge profile — gated GitHub-native auto-merge ──
 # ── merge.require_green_ci was inert and is gone ────────────────────
 #
