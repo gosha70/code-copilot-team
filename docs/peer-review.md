@@ -67,10 +67,17 @@ Code Copilot Team supports **dual-copilot peer review** — a second AI provider
    > repository the marker sits in, prints the verdict, and DELETES the
    > marker when it finishes or refuses.
    >
-   > Expect `PASS` or `FAIL`. **`INCONCLUSIVE` with zero blocking findings
-   > usually means there was nothing to review** — a `feature_id` with no
-   > `specs/<id>/` artifacts, or a `target_ref` that produces an empty diff.
-   > That is the reviewer answering correctly, not a failure of the run.
+   > Expect `PASS` or `FAIL`. **`INCONCLUSIVE` with zero blocking findings**
+   > has three common causes, and only the first two are the reviewer
+   > answering correctly:
+   >
+   > - a `feature_id` with no `specs/<id>/` artifacts;
+   > - a `target_ref` that produces an empty diff;
+   > - a provider whose output the verdict parser could not read — a CLI that
+   >   printed an error, or a model that answered without the verdict line.
+   >
+   > Read the artifact under `specs/<feature_id>/collaboration/` to tell them
+   > apart: the first two say so in the summary.
 
 2. **Install the peer provider CLI** — the peer provider must be available on your machine. For example, to use OpenAI Codex as a peer reviewer, install the Codex CLI first.
 

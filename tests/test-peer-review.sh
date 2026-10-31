@@ -801,7 +801,12 @@ assert_exit "the marker is consumed" 0 \
 # So setup.sh runs for real against an isolated HOME. It is interactive only
 # in the backend choice, which "2" (tmux) answers.
 INST_HOME=$(mktemp -d)
-printf '2\n' | HOME="$INST_HOME" bash "$SCRIPT_DIR/../adapters/claude-code/setup.sh" >/dev/null 2>&1 || true
+# Capture the status: swallowing it meant a setup.sh that FAILED outright
+# would leave both files absent and the two assertions below would report
+# "not installed" without ever saying the installer had died.
+_setup_rc=0
+printf '2\n' | HOME="$INST_HOME" bash "$SCRIPT_DIR/../adapters/claude-code/setup.sh" >/dev/null 2>&1 || _setup_rc=$?
+assert_exit "setup.sh completes against an isolated HOME" 0 "$_setup_rc"
 assert_exit "setup.sh installs peer-review-runner.sh" 0 \
     "$([[ -f "$INST_HOME/.local/bin/peer-review-runner.sh" ]] && echo 0 || echo 1)"
 assert_exit "setup.sh installs lib/review-verdict.sh BESIDE it" 0 \

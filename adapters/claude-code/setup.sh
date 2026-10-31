@@ -1594,21 +1594,25 @@ BIN_TARGET="$HOME/.local/bin"
 
 mkdir -p "$BIN_TARGET"
 
+# lib/review-verdict.sh IS A HARD DEPENDENCY of the runner, not an extra:
+# the runner sources it at startup and exits with "missing … (verdict
+# parser)" without it. Installing the runner alone shipped a copy that failed
+# on first use, which is the bug this block fixes.
+#
+# BOTH OR NEITHER. If the lib is missing from the repo, the runner is NOT
+# installed either — a missing command is a clearer signal than one that
+# fails confusingly when someone finally runs it.
 if [[ -f "$REPO_SCRIPTS/peer-review-runner.sh" ]]; then
-    cp "$REPO_SCRIPTS/peer-review-runner.sh" "$BIN_TARGET/peer-review-runner.sh"
-    chmod +x "$BIN_TARGET/peer-review-runner.sh"
-    # lib/review-verdict.sh IS A HARD DEPENDENCY, not an extra. The runner
-    # sources it at startup and exits with "missing … (verdict parser)" when
-    # it is absent, so installing the runner alone shipped a copy that failed
-    # on first use. The provider adapters it calls were already installed
-    # beside it; this was the only missing piece.
     if [[ -f "$REPO_SCRIPTS/lib/review-verdict.sh" ]]; then
+        cp "$REPO_SCRIPTS/peer-review-runner.sh" "$BIN_TARGET/peer-review-runner.sh"
+        chmod +x "$BIN_TARGET/peer-review-runner.sh"
         mkdir -p "$BIN_TARGET/lib"
         cp "$REPO_SCRIPTS/lib/review-verdict.sh" "$BIN_TARGET/lib/review-verdict.sh"
         echo "[done] Installed peer-review-runner.sh (+ lib/review-verdict.sh) to $BIN_TARGET"
     else
-        echo "[skip] peer-review-runner.sh installed WITHOUT lib/review-verdict.sh" >&2
-        echo "       — it will refuse to run. Missing: $REPO_SCRIPTS/lib/review-verdict.sh" >&2
+        echo "[skip] peer-review-runner.sh NOT installed: its verdict parser is missing" >&2
+        echo "       ($REPO_SCRIPTS/lib/review-verdict.sh). Installing the runner" >&2
+        echo "       without it would place a command that cannot start." >&2
     fi
 else
     echo "[skip] peer-review-runner.sh not found at $REPO_SCRIPTS"

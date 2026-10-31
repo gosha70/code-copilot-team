@@ -49,7 +49,7 @@ code-copilot-team/
 │   ├── test-litellm-proxy-deps.sh       13 benchmark proxy pin tests (+11 with --online)
 │   ├── test-coverage-parse.sh           46 coverage parser + safety tests
 │   ├── test-verification-preset.sh      43 preset resolution tests
-│   ├── test-peer-review.sh             67 peer-review runner tests
+│   ├── test-peer-review.sh             68 peer-review runner tests
 │   ├── test-review-loop.sh           213 review loop integration tests
 │   ├── test-setup-reviewer.sh           42 copilot reviewer installer tests
 │   ├── test-auto-build-loop.sh        1250 auto-build driver tests
