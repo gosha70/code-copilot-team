@@ -1597,7 +1597,19 @@ mkdir -p "$BIN_TARGET"
 if [[ -f "$REPO_SCRIPTS/peer-review-runner.sh" ]]; then
     cp "$REPO_SCRIPTS/peer-review-runner.sh" "$BIN_TARGET/peer-review-runner.sh"
     chmod +x "$BIN_TARGET/peer-review-runner.sh"
-    echo "[done] Installed peer-review-runner.sh to $BIN_TARGET"
+    # lib/review-verdict.sh IS A HARD DEPENDENCY, not an extra. The runner
+    # sources it at startup and exits with "missing … (verdict parser)" when
+    # it is absent, so installing the runner alone shipped a copy that failed
+    # on first use. The provider adapters it calls were already installed
+    # beside it; this was the only missing piece.
+    if [[ -f "$REPO_SCRIPTS/lib/review-verdict.sh" ]]; then
+        mkdir -p "$BIN_TARGET/lib"
+        cp "$REPO_SCRIPTS/lib/review-verdict.sh" "$BIN_TARGET/lib/review-verdict.sh"
+        echo "[done] Installed peer-review-runner.sh (+ lib/review-verdict.sh) to $BIN_TARGET"
+    else
+        echo "[skip] peer-review-runner.sh installed WITHOUT lib/review-verdict.sh" >&2
+        echo "       — it will refuse to run. Missing: $REPO_SCRIPTS/lib/review-verdict.sh" >&2
+    fi
 else
     echo "[skip] peer-review-runner.sh not found at $REPO_SCRIPTS"
 fi
@@ -1683,7 +1695,8 @@ echo "  - build                — team lead, delegates + integrates (sonnet)"
 echo "  - review               — holistic review, tests, integration (opus)"
 echo ""
 echo "Peer review scripts installed:"
-echo "  - peer-review-runner.sh  — executes peer provider and writes artifacts"
+echo "  - peer-review-runner.sh  — standalone: reviews one marker you write"
+echo "                             (the automatic flow uses /review-submit)"
 echo "  - providers-health.sh    — checks availability of configured providers"
 echo ""
 echo "Rules installed:"

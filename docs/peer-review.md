@@ -8,11 +8,56 @@ Code Copilot Team supports **dual-copilot peer review** — a second AI provider
 
 ### Prerequisites
 
-1. **Install Code Copilot Team** — run `setup.sh --claude-code` (see [Quick Start](../README.md#quick-start)). This installs all peer review components:
-   - `peer-review-runner.sh` and `providers-health.sh` to `~/.local/bin/`
+1. **Install Code Copilot Team** — run `./scripts/setup.sh --claude-code` (see [Quick Start](../README.md#quick-start)). This installs the peer review components, in two groups:
+   What the automatic flow uses:
    - `peer-review-on-stop.sh` hook to `~/.claude/hooks/`
    - `/phase-complete` command to `~/.claude/commands/`
    - Provider profile seed to `~/.code-copilot-team/providers.toml`
+
+   > **Upgrading?** `./scripts/setup.sh --sync --claude-code` refreshes
+   > templates and the launcher but does **not** reinstall `~/.local/bin`.
+   > If you installed before `lib/review-verdict.sh` shipped, the runner
+   > there will still refuse to start; a full
+   > `./scripts/setup.sh --claude-code` run installs the pair.
+
+   Installed for use by hand, not called by the flow:
+   - `providers-health.sh` to `~/.local/bin/`
+   - `peer-review-runner.sh` to `~/.local/bin/`, with its verdict parser at
+     `~/.local/bin/lib/review-verdict.sh` — the runner sources that file at
+     startup and refuses to run without it.
+
+   > **`peer-review-runner.sh` reviews one marker you write yourself.**
+   > Nothing in the product calls it: the review a session runs is driven by
+   > `/review-submit`, which uses `scripts/review-round-runner.sh` from a
+   > checkout. The runner takes the path to a JSON marker and reads six
+   > fields — `feature_id`, `phase`, `target_ref` and `subject_provider` are
+   > required; `peer_provider` falls back to the profile default and
+   > `review_scope` to `both`:
+   >
+   > ```bash
+   > cat > /tmp/pending.json <<'JSON'
+   > {
+   >   "feature_id": "my-feature",
+   >   "phase": "build",
+   >   "target_ref": "HEAD",
+   >   "subject_provider": "claude",
+   >   "peer_provider": "deepseek",
+   >   "review_scope": "both"
+   > }
+   > JSON
+   > ~/.local/bin/peer-review-runner.sh /tmp/pending.json
+   > ```
+   >
+   > `target_ref` is the ref the review diffs against, so point it at a
+   > commit with real changes — `HEAD~1`, a branch point, a tag. It writes
+   > the artifact under `specs/<feature_id>/collaboration/`, relative to the
+   > repository the marker sits in, prints the verdict, and DELETES the
+   > marker when it finishes or refuses.
+   >
+   > Expect `PASS` or `FAIL`. **`INCONCLUSIVE` with zero blocking findings
+   > usually means there was nothing to review** — a `feature_id` with no
+   > `specs/<id>/` artifacts, or a `target_ref` that produces an empty diff.
+   > That is the reviewer answering correctly, not a failure of the run.
 
 2. **Install the peer provider CLI** — the peer provider must be available on your machine. For example, to use OpenAI Codex as a peer reviewer, install the Codex CLI first.
 

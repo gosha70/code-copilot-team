@@ -723,6 +723,96 @@ assert_contains "same identity error" "$OUTPUT" "Subject and peer provider are t
 echo ""
 
 # ══════════════════════════════════════════════════════════════
+# ── the INSTALLED layout, not the repo layout ───────────────────────
+#
+# setup.sh copies peer-review-runner.sh to ~/.local/bin. The runner SOURCES
+# scripts/lib/review-verdict.sh at startup and exits when it is absent, so
+# installing the script alone shipped a copy that failed on first use:
+#
+#   Error: missing <bin>/lib/review-verdict.sh (verdict parser)
+#
+# Reproduced by copying the script on its own, which is what this pins. The
+# provider adapters were already installed beside it; the lib was the only
+# missing dependency.
+echo ""
+echo "=== installed layout ==="
+INST=$(mktemp -d)
+cp "$RUNNER" "$INST/peer-review-runner.sh"
+cat > "$INST/marker.json" <<'MARKER'
+{"feature_id":"demo","phase":"build","target_ref":"HEAD","subject_provider":"claude"}
+MARKER
+
+# WITHOUT the lib: refuses, and says which file is missing.
+_out=$(bash "$INST/peer-review-runner.sh" "$INST/marker.json" 2>&1 || true)
+assert_contains "the runner alone refuses to run" "$_out" "review-verdict.sh"
+assert_contains "…and names it as the verdict parser" "$_out" "verdict parser"
+
+# WITH the lib beside it, as setup.sh now installs it: the whole path runs.
+#
+# A STUB PROVIDER, NOT A LIVE ONE. CI cannot reach a hosted API, and a test
+# that needs one proves nothing where it matters. The `cli` type runs a
+# command, so the stub prints a fixed review with a recognisable verdict and
+# the runner parses it exactly as it would a real reviewer's.
+mkdir -p "$INST/lib"
+cp "$SCRIPT_DIR/../scripts/lib/review-verdict.sh" "$INST/lib/review-verdict.sh"
+
+cat > "$INST/stub-review.sh" <<'STUB'
+#!/usr/bin/env bash
+cat <<'BODY'
+## Summary
+A stub reviewer. No findings.
+
+### Verdict
+PASS
+BODY
+STUB
+chmod +x "$INST/stub-review.sh"
+
+STUB_PROFILE="$TMP/installed-stub.toml"
+write_profile "$STUB_PROFILE" <<PROFILE
+[defaults]
+peer_for.claude = "stubbed"
+[providers.stubbed]
+type = "cli"
+command = "$INST/stub-review.sh {review_request}"
+timeout_sec = 60
+healthcheck = "true"
+PROFILE
+
+STUB_PROJECT=$(setup_project)
+_out2=$(CCT_PROVIDER_PROFILE="$STUB_PROFILE" \
+    bash "$INST/peer-review-runner.sh" "$STUB_PROJECT/.cct/review/pending.json" 2>&1 || true)
+assert_not_contains "with the lib beside it, it gets past the source check" "$_out2" "review-verdict.sh"
+assert_contains "the stubbed reviewer's verdict is parsed" "$_out2" "PASS"
+assert_exit "the artifact is written where the doc says" 0 \
+    "$([[ -f "$STUB_PROJECT/specs/test-feature/collaboration/build-review.md" ]] && echo 0 || echo 1)"
+assert_exit "the marker is consumed" 0 \
+    "$([[ -f "$STUB_PROJECT/.cct/review/pending.json" ]] && echo 1 || echo 0)"
+
+# AND setup.sh IS WHAT PUTS IT THERE — run, not grepped.
+#
+# The defect was that setup.sh did not copy the lib. Everything above builds
+# the installed layout with its own `cp` lines, so it would keep passing with
+# that copy deleted: it tests the RUNNER, not the INSTALL. A source grep is
+# not enough either — tests/test-auto-build-loop.sh:5866 records the same
+# lesson in this repo ("A source-grep here would pass with the sync branch
+# broken (it did)").
+#
+# So setup.sh runs for real against an isolated HOME. It is interactive only
+# in the backend choice, which "2" (tmux) answers.
+INST_HOME=$(mktemp -d)
+printf '2\n' | HOME="$INST_HOME" bash "$SCRIPT_DIR/../adapters/claude-code/setup.sh" >/dev/null 2>&1 || true
+assert_exit "setup.sh installs peer-review-runner.sh" 0 \
+    "$([[ -f "$INST_HOME/.local/bin/peer-review-runner.sh" ]] && echo 0 || echo 1)"
+assert_exit "setup.sh installs lib/review-verdict.sh BESIDE it" 0 \
+    "$([[ -f "$INST_HOME/.local/bin/lib/review-verdict.sh" ]] && echo 0 || echo 1)"
+# The installed pair is what must work, so the refusal is checked on it.
+_inst_out=$(bash "$INST_HOME/.local/bin/peer-review-runner.sh" 2>&1 || true)
+assert_not_contains "the INSTALLED runner does not fail on its verdict parser" \
+    "$_inst_out" "verdict parser"
+rm -rf "$INST_HOME"
+rm -rf "$INST"
+
 # Summary
 # ══════════════════════════════════════════════════════════════
 
