@@ -805,8 +805,12 @@ INST_HOME=$(mktemp -d)
 # would leave both files absent and the two assertions below would report
 # "not installed" without ever saying the installer had died.
 _setup_rc=0
-printf '2\n' | HOME="$INST_HOME" bash "$SCRIPT_DIR/../adapters/claude-code/setup.sh" >/dev/null 2>&1 || _setup_rc=$?
+_setup_out=$(printf '2\n' | HOME="$INST_HOME" bash "$SCRIPT_DIR/../adapters/claude-code/setup.sh" 2>&1) || _setup_rc=$?
 assert_exit "setup.sh completes against an isolated HOME" 0 "$_setup_rc"
+# The closing summary is part of what the installer tells the reader, so it is
+# read here rather than discarded.
+assert_contains "…and its summary names the runner it installed" \
+    "$_setup_out" "peer-review-runner.sh  —"
 assert_exit "setup.sh installs peer-review-runner.sh" 0 \
     "$([[ -f "$INST_HOME/.local/bin/peer-review-runner.sh" ]] && echo 0 || echo 1)"
 assert_exit "setup.sh installs lib/review-verdict.sh BESIDE it" 0 \
@@ -817,6 +821,205 @@ assert_not_contains "the INSTALLED runner does not fail on its verdict parser" \
     "$_inst_out" "verdict parser"
 rm -rf "$INST_HOME"
 rm -rf "$INST"
+
+echo ""
+
+# ══════════════════════════════════════════════════════════════
+echo "=== installer: a broken install is repaired, or the install fails ==="
+# ══════════════════════════════════════════════════════════════
+#
+# Skipping the pair governed only a FRESH install. Measured on the version
+# before this section: with a runner already in ~/.local/bin and the parser
+# missing from the checkout, setup.sh printed its [skip] notice, EXITED 0,
+# left the unusable runner exactly where it was, and the closing summary
+# still advertised it. Three cases pin the three halves of that.
+
+# (1) AN EXISTING BROKEN INSTALL, complete checkout: the re-run repairs it.
+BROKEN_HOME="$TMP/broken-home"
+mkdir -p "$BROKEN_HOME/.local/bin"
+printf '#!/usr/bin/env bash\necho stale\n' > "$BROKEN_HOME/.local/bin/peer-review-runner.sh"
+chmod +x "$BROKEN_HOME/.local/bin/peer-review-runner.sh"
+_broken_rc=0
+printf '2\n' | HOME="$BROKEN_HOME" bash "$SCRIPT_DIR/../adapters/claude-code/setup.sh" \
+    >/dev/null 2>&1 || _broken_rc=$?
+assert_exit "a re-run over a broken install succeeds" 0 "$_broken_rc"
+assert_exit "…and the parser it was missing is now beside the runner" 0 \
+    "$([[ -f "$BROKEN_HOME/.local/bin/lib/review-verdict.sh" ]] && echo 0 || echo 1)"
+# The stale one-liner must be REPLACED. An installer that treated an existing
+# file as "already installed" would leave it, and the pair would still be
+# broken in the other direction.
+assert_contains "…and the stale runner was overwritten with the real one" \
+    "$(cat "$BROKEN_HOME/.local/bin/peer-review-runner.sh")" "verdict parser"
+
+# (2) A CHECKOUT WITHOUT THE PARSER: the install fails, nonzero.
+#
+# setup.sh resolves its source tree from its own path (`readlink -f "$0"`), so
+# this case cannot be staged by copying the script somewhere else — it needs a
+# checkout with the parser gone. The shipped lines are extracted and run with
+# their two inputs supplied instead. The extraction is asserted FIRST: a sed
+# range that stopped matching would run nothing at all and report success.
+INSTALL_BLOCK=$(sed -n '/^PEER_RUNNER_INSTALLED=false$/,/^fi$/p' \
+    "$SCRIPT_DIR/../adapters/claude-code/setup.sh")
+assert_contains "the installer block was extracted" "$INSTALL_BLOCK" 'PEER_RUNNER_INSTALLED=true'
+assert_contains "…including its refusal" "$INSTALL_BLOCK" 'cannot be installed'
+
+FAKE_SCRIPTS="$TMP/checkout-without-parser/scripts"
+mkdir -p "$FAKE_SCRIPTS"
+cp "$RUNNER" "$FAKE_SCRIPTS/peer-review-runner.sh"   # lib/review-verdict.sh absent
+FAKE_BIN="$TMP/fake-bin"
+mkdir -p "$FAKE_BIN"
+printf '#!/usr/bin/env bash\necho stale\n' > "$FAKE_BIN/peer-review-runner.sh"
+_block_rc=0
+_block_out=$(REPO_SCRIPTS="$FAKE_SCRIPTS" BIN_TARGET="$FAKE_BIN" \
+    bash -c "$INSTALL_BLOCK" 2>&1) || _block_rc=$?
+assert_exit "a checkout without the parser fails the install" 1 "$_block_rc"
+assert_contains "…and names the parser it could not find" "$_block_out" "review-verdict.sh"
+assert_contains "…and names the leftover copy that cannot start" \
+    "$_block_out" "$FAKE_BIN/peer-review-runner.sh"
+assert_exit "…and installs no parser over the top" 0 \
+    "$([[ -f "$FAKE_BIN/lib/review-verdict.sh" ]] && echo 1 || echo 0)"
+
+# (3) THE SUMMARY names the runner only when it was installed. Extracted for
+# the same reason as (2): the case worth pinning is the one a full run of the
+# real checkout cannot stage.
+SUMMARY_BLOCK=$(sed -n '/^echo "Peer review scripts installed:"$/,/providers-health.sh    —/p' \
+    "$SCRIPT_DIR/../adapters/claude-code/setup.sh")
+assert_contains "the summary block was extracted" "$SUMMARY_BLOCK" "providers-health.sh"
+assert_not_contains "the summary is silent about a runner it did not install" \
+    "$(PEER_RUNNER_INSTALLED=false bash -c "$SUMMARY_BLOCK")" "peer-review-runner.sh"
+assert_contains "…and names it when it did install one" \
+    "$(PEER_RUNNER_INSTALLED=true bash -c "$SUMMARY_BLOCK")" "peer-review-runner.sh"
+
+echo ""
+
+# ══════════════════════════════════════════════════════════════
+echo "=== the documented standalone procedure, run as written ==="
+# ══════════════════════════════════════════════════════════════
+#
+# The PR that documented this procedure claimed it had been run verbatim. It
+# had not: the run used a marker nested three levels deep in a scratch
+# directory, while the doc told the reader to put it at /tmp/pending.json —
+# where PROJECT_DIR resolves to `/` and the run dies on
+# `mkdir: //specs: Read-only file system` AFTER consuming the marker. What
+# follows executes the commands docs/peer-review.md now prints.
+
+DOC_REPO="$TMP/doc-repo"
+PWD_LOG="$TMP/provider-cwd.txt"
+
+cat > "$TMP/doc-stub.sh" <<STUB
+#!/usr/bin/env bash
+# Records the directory the provider was executed in. That directory is the
+# only evidence of WHICH checkout a real reviewer would have read.
+pwd > "$PWD_LOG"
+cat <<'BODY'
+## Summary
+A stub reviewer. No findings.
+
+### Verdict
+PASS
+BODY
+STUB
+chmod +x "$TMP/doc-stub.sh"
+
+# The provider is named `deepseek` because THE DOC'S MARKER NAMES IT. Pointing
+# that entry at the stub is what lets the doc's own JSON run unedited.
+DOC_PROFILE="$TMP/doc-procedure.toml"
+write_profile "$DOC_PROFILE" <<PROFILE
+[defaults]
+peer_for.claude = "deepseek"
+[providers.deepseek]
+type = "cli"
+command = "$TMP/doc-stub.sh {review_request}"
+timeout_sec = 60
+healthcheck = "true"
+PROFILE
+
+# THE COMMANDS COME OUT OF THE DOC, not out of this test. A hand-typed copy
+# would keep passing after the doc drifted back to a path that cannot work —
+# which is precisely what happened. The block is lifted from
+# docs/peer-review.md, un-blockquoted, and executed.
+DOC_BLOCK=$(awk '
+    /^   > cd \/path\/to\/your\/repo$/ { inb = 1 }
+    inb && /^   > ```$/ { exit }
+    inb { line = $0; sub(/^   > /, "", line); print line }
+' "$SCRIPT_DIR/../docs/peer-review.md")
+assert_contains "the doc block was extracted" "$DOC_BLOCK" 'mkdir -p .cct/review'
+assert_contains "…and it writes the marker where the runner requires it" \
+    "$DOC_BLOCK" '.cct/review/pending.json'
+
+# TWO substitutions, both unavoidable: where the repository is, and where the
+# runner lives. Everything else — the mkdir, the marker's path, its fields —
+# runs as printed, and the two assertions below prove nothing else was left
+# pointing at the reader's machine.
+DOC_SCRIPT="$TMP/doc-procedure.sh"
+printf '%s\n' "$DOC_BLOCK" \
+    | sed -e "s#^cd /path/to/your/repo\$#cd '$DOC_REPO'#" \
+          -e "s#^~/\.local/bin/peer-review-runner\.sh#'$RUNNER'#" > "$DOC_SCRIPT"
+assert_not_contains "the placeholder repo path was substituted" \
+    "$(cat "$DOC_SCRIPT")" '/path/to/your/repo'
+assert_not_contains "…and the installed-runner path was substituted" \
+    "$(cat "$DOC_SCRIPT")" '~/.local/bin'
+
+# The repository exists; the .cct/review directory does NOT — the doc's own
+# mkdir has to create it, which is the half that was missing.
+mkdir -p "$DOC_REPO"
+_doc_rc=0
+_doc_out=$(CCT_PROVIDER_PROFILE="$DOC_PROFILE" bash "$DOC_SCRIPT" 2>&1) || _doc_rc=$?
+assert_exit "the documented procedure succeeds" 0 "$_doc_rc"
+assert_exit "…and writes the artifact under the marker's repo" 0 \
+    "$([[ -f "$DOC_REPO/specs/my-feature/collaboration/build-review.md" ]] && echo 0 || echo 1)"
+assert_exit "…and consumes the marker" 0 \
+    "$([[ -f "$DOC_REPO/.cct/review/pending.json" ]] && echo 1 || echo 0)"
+
+# THE REVIEW IS BOUND TO THE MARKER'S REPO, not to the directory the runner
+# was called from. Before this, the provider ran via `bash -c` in the CALLER's
+# cwd: measured as `provider ran in: …/elsewhere` while the artifact landed in
+# `…/proj/specs/demo/collaboration` — a review of one checkout filed against
+# another. The doc's procedure cds into the repo itself, so it cannot show
+# this; the caller's directory has to differ, and an absolute marker path is
+# the only way it can.
+CWD_REPO="$TMP/cwd-repo"
+CWD_ELSEWHERE="$TMP/cwd-elsewhere"
+mkdir -p "$CWD_REPO/.cct/review" "$CWD_ELSEWHERE"
+cat > "$CWD_REPO/.cct/review/pending.json" <<'JSON'
+{
+  "feature_id": "my-feature",
+  "phase": "build",
+  "target_ref": "HEAD",
+  "subject_provider": "claude",
+  "peer_provider": "deepseek",
+  "review_scope": "both"
+}
+JSON
+rm -f "$PWD_LOG"
+(cd "$CWD_ELSEWHERE" && CCT_PROVIDER_PROFILE="$DOC_PROFILE" \
+    bash "$RUNNER" "$CWD_REPO/.cct/review/pending.json" >/dev/null 2>&1) || true
+assert_exit "the provider ran in the marker's repo, not the caller's cwd" 0 \
+    "$([[ "$(cat "$PWD_LOG" 2>/dev/null)" == "$CWD_REPO" ]] && echo 0 || echo 1)"
+
+# A marker anywhere else is refused BEFORE it is consumed, so moving it is all
+# the caller has to do.
+BAD_MARKER="$TMP/not-a-review-dir/pending.json"
+mkdir -p "$(dirname "$BAD_MARKER")"
+cat > "$BAD_MARKER" <<'JSON'
+{
+  "feature_id": "my-feature",
+  "phase": "build",
+  "target_ref": "HEAD",
+  "subject_provider": "claude",
+  "peer_provider": "deepseek",
+  "review_scope": "both"
+}
+JSON
+_bad_rc=0
+_bad_out=$(CCT_PROVIDER_PROFILE="$DOC_PROFILE" bash "$RUNNER" "$BAD_MARKER" 2>&1) || _bad_rc=$?
+assert_exit "a marker outside .cct/review is refused" 1 "$_bad_rc"
+assert_contains "…and the message gives the location it requires" \
+    "$_bad_out" "cct/review"
+assert_exit "…and the marker is left in place" 0 \
+    "$([[ -f "$BAD_MARKER" ]] && echo 0 || echo 1)"
+
+echo ""
 
 # Summary
 # ══════════════════════════════════════════════════════════════

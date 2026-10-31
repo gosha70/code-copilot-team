@@ -47,8 +47,17 @@ Code Copilot Team supports **dual-copilot peer review** — a second AI provider
    > required; `peer_provider` falls back to the profile default and
    > `review_scope` to `both`:
    >
+   > **The marker's location is part of the contract**: it must be at
+   > `<repo>/.cct/review/<name>.json`, because the runner derives the project
+   > directory from that path by going three levels up — that is the
+   > repository it reviews and under which it writes the artifact. A marker
+   > anywhere else is refused before anything runs. Create the directory
+   > first; nothing creates it for you:
+   >
    > ```bash
-   > cat > /tmp/pending.json <<'JSON'
+   > cd /path/to/your/repo
+   > mkdir -p .cct/review
+   > cat > .cct/review/pending.json <<'JSON'
    > {
    >   "feature_id": "my-feature",
    >   "phase": "build",
@@ -58,14 +67,18 @@ Code Copilot Team supports **dual-copilot peer review** — a second AI provider
    >   "review_scope": "both"
    > }
    > JSON
-   > ~/.local/bin/peer-review-runner.sh /tmp/pending.json
+   > ~/.local/bin/peer-review-runner.sh .cct/review/pending.json
    > ```
    >
    > `target_ref` is the ref the review diffs against, so point it at a
-   > commit with real changes — `HEAD~1`, a branch point, a tag. It writes
-   > the artifact under `specs/<feature_id>/collaboration/`, relative to the
-   > repository the marker sits in, prints the verdict, and DELETES the
-   > marker when it finishes or refuses.
+   > commit with real changes — `HEAD~1`, a branch point, a tag. The provider
+   > is executed with that repository as its working directory, so a provider
+   > command that reads the checkout reads *that* one no matter where you ran
+   > the runner from. It writes the artifact under
+   > `<repo>/specs/<feature_id>/collaboration/`, prints the verdict, and
+   > DELETES the marker once it has accepted it — on success and on a failure
+   > it reports. The one exception is a marker in the wrong place: that is
+   > refused before the marker is consumed, so you only have to move it.
    >
    > Expect `PASS` or `FAIL`. **`INCONCLUSIVE` with zero blocking findings**
    > has three common causes, and only the first two are the reviewer
