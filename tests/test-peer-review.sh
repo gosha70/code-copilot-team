@@ -884,7 +884,12 @@ assert_exit "…and installs no parser over the top" 0 \
 # real checkout cannot stage.
 SUMMARY_BLOCK=$(sed -n '/^echo "Peer review scripts installed:"$/,/providers-health.sh    —/p' \
     "$SCRIPT_DIR/../adapters/claude-code/setup.sh")
+# Both ends AND the guard: the range is anchored on two formatted echo lines,
+# so a spacing change there could silently truncate it, and a truncated block
+# that still mentioned providers-health.sh would pass a laxer check.
 assert_contains "the summary block was extracted" "$SUMMARY_BLOCK" "providers-health.sh"
+assert_contains "…with the gate that decides the runner line inside it" \
+    "$SUMMARY_BLOCK" 'PEER_RUNNER_INSTALLED'
 assert_not_contains "the summary is silent about a runner it did not install" \
     "$(PEER_RUNNER_INSTALLED=false bash -c "$SUMMARY_BLOCK")" "peer-review-runner.sh"
 assert_contains "…and names it when it did install one" \
@@ -946,6 +951,10 @@ DOC_BLOCK=$(awk '
 assert_contains "the doc block was extracted" "$DOC_BLOCK" 'mkdir -p .cct/review'
 assert_contains "…and it writes the marker where the runner requires it" \
     "$DOC_BLOCK" '.cct/review/pending.json'
+# The `cd` is the awk range's start anchor, so a doc that dropped it would
+# yield nothing — but say so as an assertion rather than leave it implied: the
+# relative marker path below only resolves because the doc cds into the repo.
+assert_contains "…and it cds into the repository first" "$DOC_BLOCK" 'cd /path/to/your/repo'
 
 # TWO substitutions, both unavoidable: where the repository is, and where the
 # runner lives. Everything else — the mkdir, the marker's path, its fields —

@@ -1606,9 +1606,10 @@ mkdir -p "$BIN_TARGET"
 # advertised the runner — measured before this change: setup exit=0, runner
 # present, lib absent. An inconsistent checkout therefore FAILS the install.
 #
-# The parser is copied BEFORE the runner, so an install interrupted between
-# the two copies leaves a parser with no runner — a missing command — rather
-# than the runner-without-parser state that started this.
+# The parser is copied BEFORE the runner, so no interruption between the two
+# can reproduce the runner-without-parser state that started this. It is not
+# a claim that only two states exist: `set -e` aborts on a failing chmod, and
+# that leaves the pair installed but the runner not executable.
 PEER_RUNNER_INSTALLED=false
 if [[ -f "$REPO_SCRIPTS/peer-review-runner.sh" ]]; then
     if [[ ! -f "$REPO_SCRIPTS/lib/review-verdict.sh" ]]; then
@@ -1621,6 +1622,8 @@ if [[ -f "$REPO_SCRIPTS/peer-review-runner.sh" ]]; then
             echo "        the parser. Restore the parser and re-run setup, or delete" >&2
             echo "        that copy." >&2
         fi
+        echo "        Setup stops here: what ran before this point is installed," >&2
+        echo "        the rest is not, and no summary is printed." >&2
         exit 1
     fi
     mkdir -p "$BIN_TARGET/lib"
