@@ -17,8 +17,21 @@ Code Copilot Team supports **dual-copilot peer review** — a second AI provider
    > **Upgrading?** `./scripts/setup.sh --sync --claude-code` refreshes
    > templates and the launcher but does **not** reinstall `~/.local/bin`.
    > If you installed before `lib/review-verdict.sh` shipped, the runner
-   > there will still refuse to start; a full
-   > `./scripts/setup.sh --claude-code` run installs the pair.
+   > there will still refuse to start.
+   >
+   > A full `./scripts/setup.sh --claude-code` run installs the pair, and is
+   > safe to re-run over an existing install: your provider profile,
+   > `~/.claude/CLAUDE.md` and `~/.claude/settings.json` are preserved — the
+   > installer skips files it has already placed. The exception is the
+   > **hooks**, which are managed files and get replaced; if you have edited
+   > one, save it first.
+   >
+   > If you would rather change nothing else, copy the one missing file:
+   >
+   > ```bash
+   > mkdir -p ~/.local/bin/lib
+   > cp scripts/lib/review-verdict.sh ~/.local/bin/lib/
+   > ```
 
    Installed for use by hand, not called by the flow:
    - `providers-health.sh` to `~/.local/bin/`
