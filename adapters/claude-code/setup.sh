@@ -1594,10 +1594,44 @@ BIN_TARGET="$HOME/.local/bin"
 
 mkdir -p "$BIN_TARGET"
 
+# lib/review-verdict.sh IS A HARD DEPENDENCY of the runner, not an extra:
+# the runner sources it at startup and exits with "missing … (verdict
+# parser)" without it. Installing the runner alone shipped a copy that failed
+# on first use, which is the bug this block fixes.
+#
+# PREFLIGHT, NOT "BOTH OR NEITHER". Skipping the pair governs only a FRESH
+# install. With the parser missing from the checkout and a runner already in
+# ~/.local/bin from an earlier setup, skipping printed its notice, exited 0,
+# left the unusable copy exactly where it was, and the closing summary still
+# advertised the runner — measured before this change: setup exit=0, runner
+# present, lib absent. An inconsistent checkout therefore FAILS the install.
+#
+# The parser is copied BEFORE the runner, so no interruption between the two
+# can reproduce the runner-without-parser state that started this. It is not
+# a claim that only two states exist: `set -e` aborts on a failing chmod, and
+# that leaves the pair installed but the runner not executable.
+PEER_RUNNER_INSTALLED=false
 if [[ -f "$REPO_SCRIPTS/peer-review-runner.sh" ]]; then
+    if [[ ! -f "$REPO_SCRIPTS/lib/review-verdict.sh" ]]; then
+        echo "[ERROR] peer-review-runner.sh cannot be installed: its verdict parser" >&2
+        echo "        is missing from this checkout" >&2
+        echo "        ($REPO_SCRIPTS/lib/review-verdict.sh)." >&2
+        if [[ -e "$BIN_TARGET/peer-review-runner.sh" ]]; then
+            echo "        A runner from an earlier install is still at" >&2
+            echo "        $BIN_TARGET/peer-review-runner.sh and cannot start without" >&2
+            echo "        the parser. Restore the parser and re-run setup, or delete" >&2
+            echo "        that copy." >&2
+        fi
+        echo "        Setup stops here: what ran before this point is installed," >&2
+        echo "        the rest is not, and no summary is printed." >&2
+        exit 1
+    fi
+    mkdir -p "$BIN_TARGET/lib"
+    cp "$REPO_SCRIPTS/lib/review-verdict.sh" "$BIN_TARGET/lib/review-verdict.sh"
     cp "$REPO_SCRIPTS/peer-review-runner.sh" "$BIN_TARGET/peer-review-runner.sh"
     chmod +x "$BIN_TARGET/peer-review-runner.sh"
-    echo "[done] Installed peer-review-runner.sh to $BIN_TARGET"
+    PEER_RUNNER_INSTALLED=true
+    echo "[done] Installed lib/review-verdict.sh + peer-review-runner.sh to $BIN_TARGET"
 else
     echo "[skip] peer-review-runner.sh not found at $REPO_SCRIPTS"
 fi
@@ -1683,7 +1717,12 @@ echo "  - build                — team lead, delegates + integrates (sonnet)"
 echo "  - review               — holistic review, tests, integration (opus)"
 echo ""
 echo "Peer review scripts installed:"
-echo "  - peer-review-runner.sh  — executes peer provider and writes artifacts"
+# Named only when it was actually copied. The summary used to list the runner
+# unconditionally, so a run that skipped it still told the reader it was there.
+if [[ "$PEER_RUNNER_INSTALLED" == "true" ]]; then
+    echo "  - peer-review-runner.sh  — standalone: reviews one marker you write"
+    echo "                             (the automatic flow uses /review-submit)"
+fi
 echo "  - providers-health.sh    — checks availability of configured providers"
 echo ""
 echo "Rules installed:"

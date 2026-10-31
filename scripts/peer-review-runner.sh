@@ -234,6 +234,23 @@ fi
 # Marker lives at <project>/.cct/review/pending.json — go up 3 levels
 MARKER_ABS=$(cd "$(dirname "$MARKER_PATH")" && pwd)/$(basename "$MARKER_PATH")
 PROJECT_DIR=$(dirname "$(dirname "$(dirname "$MARKER_ABS")")")
+
+# The three levels are a CONTRACT, so the runner checks them instead of
+# trusting them. A marker at /tmp/pending.json derives PROJECT_DIR=/ and the
+# run then dies on `mkdir: //specs: Read-only file system` — after the marker
+# has been consumed and with no artifact written. Measured, before this
+# guard existed. Refuse up front and leave the marker alone, so moving it is
+# all the caller has to do.
+if [[ "$(basename "$(dirname "$MARKER_ABS")")" != "review" ||
+      "$(basename "$(dirname "$(dirname "$MARKER_ABS")")")" != ".cct" ]]; then
+    echo "Error: marker must live at <project>/.cct/review/<name>.json;" >&2
+    echo "       got $MARKER_ABS" >&2
+    echo "       The project directory is derived from that path (three levels" >&2
+    echo "       up), and specs/ and the review artifact are written under it." >&2
+    echo "       The marker was left in place — move it and re-run." >&2
+    exit 1
+fi
+
 REVIEW_REQUEST=$(mktemp)
 trap 'rm -f "$REVIEW_REQUEST"; rm -f "$MARKER_PATH"' EXIT
 
@@ -349,10 +366,16 @@ fi
 
 echo "Running peer review via '$PEER_PROVIDER' (type: $PROVIDER_TYPE)..." >&2
 
+# THE PROVIDER RUNS IN THE MARKER'S PROJECT, not in whatever directory the
+# caller happened to be in. Without the cd, a runner invoked from elsewhere
+# reviewed that other checkout while writing its artifact into the marker's
+# project — measured: `provider ran in: …/elsewhere`, `artifact landed:
+# …/proj/specs/demo/collaboration`. Every provider command is built from
+# absolute paths, so the cd changes nothing else.
 if [[ -n "$TIMEOUT_CMD" ]]; then
-    REVIEW_OUTPUT=$($TIMEOUT_CMD "$TIMEOUT_SEC" bash -c "$RESOLVED_CMD" 2>&1) && REVIEW_EXIT=0 || REVIEW_EXIT=$?
+    REVIEW_OUTPUT=$(cd "$PROJECT_DIR" && $TIMEOUT_CMD "$TIMEOUT_SEC" bash -c "$RESOLVED_CMD" 2>&1) && REVIEW_EXIT=0 || REVIEW_EXIT=$?
 else
-    REVIEW_OUTPUT=$(bash -c "$RESOLVED_CMD" 2>&1) && REVIEW_EXIT=0 || REVIEW_EXIT=$?
+    REVIEW_OUTPUT=$(cd "$PROJECT_DIR" && bash -c "$RESOLVED_CMD" 2>&1) && REVIEW_EXIT=0 || REVIEW_EXIT=$?
 fi
 
 # Check for timeout
