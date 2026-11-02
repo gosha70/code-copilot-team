@@ -14,7 +14,7 @@ Every task is classified into one of three **spec modes** based on risk:
 | **lightweight** | Features touching 1–2 files, non-critical changes | `plan.md` + `spec.md` |
 | **none** | Bug fixes (non-security), docs, trivial changes | `plan.md` only |
 
-The Plan agent writes `plan.md` with a YAML frontmatter block that declares `spec_mode`, `feature_id`, `risk_category`, and `justification`. The Build agent reads this frontmatter and gates itself accordingly — it won't proceed on a `full` task without a complete `spec.md`, and it won't proceed on any task that has unresolved `[NEEDS CLARIFICATION]` markers.
+The Plan agent writes `plan.md` with a YAML frontmatter block that declares `spec_mode`, `feature_id`, `risk_category`, `justification`, `status`, and `origin`. The last two are **required** — `validate-spec.sh` fails a plan with no `origin:` block, and the approval gate reads `status: approved` — so a frontmatter copied from the four fields above will be refused. See [the origin-confirmation skill](../shared/skills/origin-confirmation/SKILL.md) for what `origin` must carry. The Build agent reads this frontmatter and gates itself accordingly — it won't proceed on a `full` task without a complete `spec.md`, and it won't proceed on any task that has unresolved `[NEEDS CLARIFICATION]` markers.
 
 ### The Four Artifacts
 
@@ -55,7 +55,7 @@ specs/
 
 ### Risk Classification
 
-The `spec-workflow.md` rule defines risk categories that map directly to spec_mode:
+The [spec-workflow skill](../shared/skills/spec-workflow/SKILL.md) defines risk categories that map to spec_mode. They are an annotation for the reader and the agent: nothing validates `risk_category` against the table, so a mismatched value passes `validate-spec.sh`.
 
 | Risk Category | spec_mode | Examples |
 |---|---|---|
@@ -76,6 +76,8 @@ SDD rules propagate through the same `shared/ → generate.sh → adapters/` pip
 | GitHub Copilot | Full instructions (advisory) |
 | Cursor, Windsurf | Always-on rules only (advisory) |
 | Aider | Conventions only (advisory) |
+| Pi | **Enforced** under the `disciplined` profile |
+| Codex | Full instructions (advisory) |
 
 ### Getting Started with SDD
 

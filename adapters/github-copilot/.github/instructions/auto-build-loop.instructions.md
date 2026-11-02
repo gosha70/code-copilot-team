@@ -20,7 +20,7 @@ breakers. Design: `specs/auto-build-loop/design.md`.
 | Commit gate (8) | auto-commit, local only, isolated branch | auto-commit | auto-commit |
 | Wait-for-approval (9) | auto-advance; hard pause at milestones | same | same |
 | Origin gate exit >= 2 (10) | **always escalate to human** | **always escalate** | **always escalate** |
-| Peer review (11) | driver-run, gating, driver verifies PASS | same | same + green CI |
+| Peer review (11) | driver-run, gating, driver verifies PASS | same | same; CI is GitHub's gate, not the driver's |
 | Push / PR / merge | never / never / never | auto / auto / never | auto / auto / gated auto |
 
 All three attended profiles — `advisory`, `pr`, and `merge` — are
@@ -55,8 +55,10 @@ auto-merge at finalize (the driver never merges locally):
   (`merge_blocked`) if it is not.
 - It then runs `gh pr merge <n> --auto --<merge.method>` (default `squash`);
   GitHub performs the merge only once the branch-protection required checks
-  pass — so `merge.require_green_ci` is delegated to GitHub's own rules. The
-  driver never polls CI and never force-merges.
+  pass — CI is enforced by branch protection, not by this driver, which
+  never polls CI and never force-merges. (`merge.require_green_ci` used to
+  appear in the template; it was never read by anything and was removed in
+  the merge-profile cleanup, 2026-10-29. A legacy config still carrying it validates unchanged.)
 - The arm is idempotent (ledger `pr.auto_merge_armed`, else `gh pr view
   --json autoMergeRequest`); resume never re-arms. A `merge_blocked` park
   resolves once branch protection exists (or `merge.enabled` is flipped).
@@ -188,7 +190,7 @@ Every run now records an explicit ledger `outcome`:
 |---|---|---|---|
 | `landed` | 0 | all phases done, review-verified | n/a |
 | *(parked)* | 4 | attended breaker — human resolves, `--resume` | yes (playbook above) |
-| `terminated_policy` | 6 | **unattended** breaker — the system deliberately stopped at a defined safety/quality/budget boundary | **no** — terminal in increment A; recovery arrives with #190 increment D (`--resume` is an explicit refusal) |
+| `terminated_policy` | 6 | **unattended** breaker — the system deliberately stopped at a defined safety/quality/budget boundary | **conditionally** — `--resume` continues at the review step for `provider_unavailable`, `review_breaker` and `review_inconclusive`, provided the phase's build commit is still the branch head (#190 D2). Every other reason, and a moved head, still needs a fresh run. See `docs/auto-build.md` in the repository. |
 | `failed` | 1/5 | the control system itself broke (usage/preflight/supervisor caps) | fix the environment |
 
 Under `unattended`, every breaker that would park instead becomes a

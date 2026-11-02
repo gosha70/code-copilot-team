@@ -6,7 +6,7 @@
 
 | # | [P] | Task | File(s) | Owner | Done |
 |---|-----|------|---------|-------|------|
-| 1 | | Unlock `merge` in the ladder (can_push/can_open_pr/can_merge=true); read merge.enabled / require_branch_protection / method / require_green_ci (FR-1) | `scripts/auto-build-loop.sh` | build | [ ] |
+| 1 | | Unlock `merge` in the ladder (can_push/can_open_pr/can_merge=true); read merge.enabled / require_branch_protection / method / require_green_ci (FR-1) | `scripts/auto-build-loop.sh` | build | [ ]  *(historical: `merge.require_green_ci` was never read — see the correction in specs/auto-build-loop-merge-profile/spec.md)* |
 | 2 | | `arm_auto_merge`: branch-protection probe (`gh api`) → park `merge_blocked` if required+absent; `gh pr merge <n> --auto --<method>`; record `auto_merge_armed`/`merge_method`; failure parks (FR-3, FR-4) | `scripts/auto-build-loop.sh` | build | [ ] |
 | 3 | | Finalize wiring: after open_or_update_pr call arm_auto_merge for merge; enabled:false behaves as pr; profile-aware summary/notify (FR-2) | `scripts/auto-build-loop.sh` | build | [ ] |
 

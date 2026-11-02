@@ -1,9 +1,10 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState } from "react";
+import React, { Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import ReactMarkdown, { type Components } from "react-markdown";
+import { CodeBlock } from "@/components/MarkdownDoc";
 import remarkGfm from "remark-gfm";
 import { api, AskInfo, AskTurn } from "@/lib/api";
 import {
@@ -374,11 +375,19 @@ const ANSWER_COMPONENTS: Components = {
   code: ({ children }) => (
     <code className="bg-slate-100 text-slate-700 rounded px-1 py-0.5 text-[0.9em]">{children}</code>
   ),
-  pre: ({ children }) => (
-    <pre className="bg-slate-900 text-slate-100 rounded p-3 my-2 overflow-x-auto text-xs">
-      {children}
-    </pre>
-  ),
+  // react-markdown routes a fence's inner <code> through the `code`
+  // override above, so a `pre` that passes its children straight through
+  // wraps an inline chip in the dark block. Render the fence from the
+  // child's own props instead, exactly as MarkdownDoc does, so the
+  // inline override never sees it.
+  pre: ({ children }) => {
+    const child = React.Children.only(children) as React.ReactElement<{
+      className?: string;
+      children?: React.ReactNode;
+    }>;
+    const props = React.isValidElement(child) ? child.props : { children };
+    return <CodeBlock className={props.className}>{props.children}</CodeBlock>;
+  },
   table: ({ children }) => (
     <div className="overflow-x-auto my-3">
       <table className="w-full text-sm border-collapse">{children}</table>

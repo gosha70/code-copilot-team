@@ -219,7 +219,11 @@ export default function MarkdownDoc({
   );
 }
 
-function CodeBlock({
+/** A fenced block: dark, scrollable, with a Copy button. Exported so Ask
+ *  renders fences the same way — the two component maps had already
+ *  drifted once, which is how fenced code in an Ask answer came to be
+ *  rendered as an inline chip inside the dark block. */
+export function CodeBlock({
   children,
   className,
 }: {

@@ -30,7 +30,6 @@
       }
     ],
     "max_rounds": 5,
-    "round_timeout_sec": 1800,
     "loop_timeout_sec": 900
   },
   "caps": {
@@ -56,7 +55,6 @@
   },
   "merge": {
     "enabled": false,
-    "require_green_ci": true,
     "require_branch_protection": true,
     "method": "squash"
   }
