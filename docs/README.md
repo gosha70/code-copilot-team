@@ -1,7 +1,7 @@
 # Documentation
 
 Everything written down about Code Copilot Team, grouped the way the Studio's
-**Learn** tab groups it — this page and that tab read the same registry, so
+**Guides** tab groups it — this page and that tab read the same registry, so
 they cannot disagree about what exists.
 
 These pages are also published as a searchable site at
@@ -29,7 +29,7 @@ editing its source, never the page.
 <!-- generated:begin docs-index -->
 ### Start here
 
-- [Documentation — all of it, grouped](README.md) — Everything written down about Code Copilot Team, grouped the way the Studio's **Learn** tab groups it — this page and that tab read the same registry, so they cannot disagree about what exists
+- [Documentation — all of it, grouped](README.md) — Everything written down about Code Copilot Team, grouped the way the Studio's **Guides** tab groups it — this page and that tab read the same registry, so they cannot disagree about what exists
 - [Code Copilot Team — README](../README.md) — An enforceable harness for AI-assisted coding: your rules, your workflow and your safety rails, applied the same way by every coding agent you use
 - [Codespace tour — the harness in a browser, nothing to install](codespace-tour.md) — A ten-minute guided tour of Code Copilot Team in a GitHub Codespace: the harness is already installed when the terminal opens, and every step is a command you run and an output you can check
 - [Developer Cookbook — the SDLC of this project](developer-cookbook.md) — How a change moves from idea to merged PR in **code-copilot-team**, in two modes:
@@ -80,6 +80,6 @@ editing its source, never the page.
 ## What is not listed here
 
 Skills (`shared/skills/`), agents (`adapters/claude-code/.claude/agents/`) and
-the adapter guides under `adapters/*/docs/` are served in Learn by directory,
+the adapter guides under `adapters/*/docs/` are served in Guides by directory,
 so they have no fixed list. Browse them there, or run `scripts/cct list` for
 every command, skill and capability the harness offers.
