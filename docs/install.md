@@ -31,7 +31,7 @@ git pull && ./scripts/setup.sh --sync --claude-code
 The same documentation is published as a searchable site at
 <https://gosha70.github.io/code-copilot-team/>, built from `master` on every
 change to the docs. The guides are equally readable here in the repository and
-in the Studio's Learn tab — all three serve the same files.
+in the Studio's Guides tab — all three serve the same files.
 
 ## What each adapter writes
 

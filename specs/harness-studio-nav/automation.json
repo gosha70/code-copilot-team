@@ -1,0 +1,63 @@
+{
+  "schema_version": 2,
+  "profile": "unattended",
+  "branch": {
+    "name": "feature/harness-studio-nav-run1",
+    "base": "master",
+    "remote": "origin"
+  },
+  "phases": {
+    "source": "tasks.md",
+    "milestone_every": 8,
+    "max_phases": 3
+  },
+  "build": {
+    "max_turns": 80,
+    "permission_mode": "acceptEdits",
+    "max_fix_sessions_per_phase": 2
+  },
+  "test": {
+    "command": "node studio/scripts/states-check.mjs",
+    "timeout_sec": 600
+  },
+  "review": {
+    "reviewers": [
+      {
+        "provider": "deepseek",
+        "specialization": "correctness",
+        "scope": "both",
+        "gating": true
+      }
+    ],
+    "max_rounds": 3,
+    "round_timeout_sec": 900,
+    "loop_timeout_sec": 600
+  },
+  "caps": {
+    "wall_clock_sec": 7200,
+    "cost_usd": 12
+  },
+  "unattended": {
+    "on_review_breaker": "terminate",
+    "on_stale_finding": "terminate",
+    "on_origin_gate": "terminate",
+    "budget": {
+      "meter_all_invocations": true,
+      "estimate_unmetered": true,
+      "estimate_usd_per_invocation": 2.0
+    }
+  },
+  "notify": {
+    "command": ""
+  },
+  "pr": {
+    "closes": [],
+    "title": "feat(studio): rename to Harness Studio and group the navigation by the AI SDLC [auto-build]"
+  },
+  "merge": {
+    "enabled": false,
+    "require_green_ci": true,
+    "require_branch_protection": true,
+    "method": "squash"
+  }
+}
