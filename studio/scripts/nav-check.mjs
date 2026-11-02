@@ -24,6 +24,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
@@ -72,12 +73,50 @@ function read(rel) {
   }
 }
 
+// Every text document under a guarded root, recursively.
+function docFiles(rel) {
+  const abs = join(REPO, rel);
+  let st;
+  try {
+    st = statSync(abs);
+  } catch {
+    return [];
+  }
+  if (st.isFile()) return /\.(md|txt)$/.test(rel) ? [rel] : [];
+  const files = [];
+  for (const name of readdirSync(abs)) files.push(...docFiles(join(rel, name)));
+  return files;
+}
+
 // ── the contract, stated once ─────────────────────────────────────────
 // Changing these means changing specs/harness-studio-nav/spec.md first:
 // the FR text is authoritative and admission binds it by statement_sha.
 const PRODUCT = "Harness Studio";
 // Assembled, not spelled out, so this file does not match its own FR-6 grep.
 const OLD_PRODUCT = ["Session", "Analytics", "Studio"].join(" ");
+
+// FR-6's documentation half. Declared ROOTS, not a file list: a new
+// document under docs/ is guarded by construction. llms.txt is generated
+// from docs/README.md but published, so it is guarded too.
+const DOC_ROOTS = ["docs", "README.md", "studio/README.md", "llms.txt"];
+const RETIRED_DOC_FORMS = [
+  ["**Dashboard**", /\*\*Dashboard\*\*/],
+  ["**Analysis**", /\*\*Analysis\*\*/],
+  ["**Learn**", /\*\*Learn\*\*/],
+  ["Dashboard tab/page", /Dashboard[ \t]+(?:tab|page)/],
+  ["Analysis tab/page", /Analysis[ \t]+(?:tab|page)/],
+  ["Learn tab", /Learn[ \t]+tab/],
+  ["in Learn", /\bin Learn\b/],
+];
+// Absence alone would pass if a document dropped the reference entirely;
+// pin the replacements the affected documents are expected to carry.
+const DOC_PINS = [
+  ["studio/README.md", "| **Overview** |"],
+  ["studio/README.md", "| **Analysis pipeline** |"],
+  ["docs/README.md", "**Guides** tab"],
+  ["docs/session-analytics-cookbook.md", "| **Guides** |"],
+  ["llms.txt", "**Guides** tab"],
+];
 const GROUPS = [
   {
     id: "mission-control",
@@ -360,9 +399,9 @@ try {
     }
   }
 
-  // ── FR-6: nothing tracked still calls it the old name ──────────────
+  // ── FR-6: no retired name survives in code or documentation ─────────
   if (FR === "FR-6") {
-    console.log("FR-6 — no tracked file outside specs/ still uses the old names");
+    console.log("FR-6 — no retired product or navigation name remains");
     // `git grep -l` exits 1 when it matches nothing — which is the
     // passing case here, so the exit status is read, never trusted as
     // an error. Any other status is a real tool failure and rethrows.
@@ -380,6 +419,31 @@ try {
     }
     check(`no tracked file outside specs/ carries "${OLD_PRODUCT}"`,
       tracked.length === 0, `still in: ${tracked.join(", ")}`);
+
+    // The documentation half. Every renamed navigation label — Overview,
+    // Analysis pipeline, Guides — is referred to by its new name in the
+    // product docs. Declared roots, so a new document is covered without
+    // touching this file.
+    const offenders = [];
+    for (const root of DOC_ROOTS) {
+      for (const rel of docFiles(root)) {
+        const text = readFileSync(join(REPO, rel), "utf8");
+        text.split("\n").forEach((line, i) => {
+          for (const [form, re] of RETIRED_DOC_FORMS) {
+            if (re.test(line)) offenders.push(`${rel}:${i + 1} ${form}`);
+          }
+        });
+      }
+    }
+    check("no guarded document names a retired navigation label",
+      offenders.length === 0, offenders.slice(0, 8).join("; "));
+
+    // Absence alone is not enough: a document could drop the reference
+    // instead of renaming it. Pin the replacements.
+    for (const [rel, pin] of DOC_PINS) {
+      const text = read(rel);
+      check(`${rel} names "${pin}"`, text !== null && text.includes(pin));
+    }
   }
 } catch (e) {
   // A thrown error is a failure, never a silent pass.

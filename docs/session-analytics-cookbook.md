@@ -8,7 +8,7 @@ leaves your machine unless you point the judge at a cloud model on purpose.
 
 This page is the "how do I" guide. The reference for every command and
 design decision is `scripts/session_analytics/README.md`; the Studio's
-**Learn** tab serves both in-app.
+**Guides** tab serves both in-app.
 
 ---
 
@@ -25,7 +25,7 @@ design decision is `scripts/session_analytics/README.md`; the Studio's
 | **Graph** | One session or project and everything it is connected to, every relationship named; a catalogue of questions answered as tables, charts or drawn on the canvas. |
 | **Analysis pipeline** | The pipeline as steps — load sessions, build the graph, run the judge, compute KPIs — with a funnel of counts and a **Judge quality** card. |
 | **Benchmark** | What this repository's benchmark harness found: attempts by result with the cost and duration of the sessions they produced, and the predicted pass rate per project. Empty until you run the harness and link its runs (Settings → Benchmarks, then **Link benchmark runs**). |
-| **Learn** | The project's own docs, skills, agents and wiki, read in-app; each Agent Tuning finding links to the guide that explains the fix. |
+| **Guides** | The project's own docs, skills, agents and wiki, read in-app; each Agent Tuning finding links to the guide that explains the fix. |
 | **Settings** | The `.env` this tool reads, edited with help text and a path picker. |
 
 ---
@@ -270,7 +270,7 @@ over the whole transcript, then stored:
    Timeline. A config change comes with a diff and a Copy button; an
    efficiency finding comes with a starter file for the script, hook,
    skill or rule that would remove it. The category badge links into
-   **Learn** at the guide that explains the fix.
+   **Guides** at the guide that explains the fix.
 4. The footer says which judge and model produced it, whether it saw the
    full archive or previews only, how many characters, and whether the
    transcript was truncated to fit the model. Weigh the findings
@@ -347,7 +347,7 @@ text goes to that machine under the configured redaction level (§3.2);
 nothing else leaves.
 
 How to stand the Spark up in the first place — Ollama, vLLM in a
-container, Qwen3.8-27B, the exact run sequence — is in Learn under
+container, Qwen3.8-27B, the exact run sequence — is in Guides under
 **Judge on a DGX Spark** (three pages: setup & cookbook, the vLLM
 operator manual, the runbook).
 
