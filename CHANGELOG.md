@@ -14,8 +14,8 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
  The harness learned to run unattended, to route work across models, and to
 show its own work. Six real unattended builds shaped the autonomy engine — and
 two features in this release, developer aliases and cap alerts, were built by
-it. Policy-driven routing met all 33 of its acceptance criteria. The Session
-Analytics Studio grew from six pages to twelve. The documentation became a
+it. Policy-driven routing met all 33 of its acceptance criteria. The Harness
+Studio grew from six pages to twelve. The documentation became a
 generated, gated site with a `cct` command in front of it.
 
 ### Highlights
@@ -30,8 +30,8 @@ generated, gated site with a `cct` command in front of it.
   Tier-2 delegation with Tier-1 reconciliation, probe-verified recovery and
   failback, calibration gates with a shadow recommender, and Codex as an
   execution backend.
-- **Session Analytics Studio.** A session page with real transcript text, a
-  trace tree, feedback and lineage; Ask, Graph, Similar, Team, Runs and Learn;
+- **Harness Studio.** A session page with real transcript text, a
+  trace tree, feedback and lineage; Ask, Graph, Similar, Team, Runs and Guides;
   comparison by harness version; expectations and how they came out.
 - **A team store.** One shared Postgres store, a live registry, cross-developer
   rollups, budgets and runaway detection.
