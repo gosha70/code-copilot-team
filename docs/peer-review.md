@@ -8,11 +8,89 @@ Code Copilot Team supports **dual-copilot peer review** — a second AI provider
 
 ### Prerequisites
 
-1. **Install Code Copilot Team** — run `setup.sh --claude-code` (see [Quick Start](../README.md#quick-start)). This installs all peer review components:
-   - `peer-review-runner.sh` and `providers-health.sh` to `~/.local/bin/`
+1. **Install Code Copilot Team** — run `./scripts/setup.sh --claude-code` (see [Quick Start](../README.md#quick-start)). This installs the peer review components, in two groups:
+   What the automatic flow uses:
    - `peer-review-on-stop.sh` hook to `~/.claude/hooks/`
    - `/phase-complete` command to `~/.claude/commands/`
    - Provider profile seed to `~/.code-copilot-team/providers.toml`
+
+   > **Upgrading?** `./scripts/setup.sh --sync --claude-code` refreshes
+   > templates and the launcher but does **not** reinstall `~/.local/bin`.
+   > If you installed before `lib/review-verdict.sh` shipped, the runner
+   > there will still refuse to start.
+   >
+   > A full `./scripts/setup.sh --claude-code` run installs the pair, and is
+   > safe to re-run over an existing install: your provider profile,
+   > `~/.claude/CLAUDE.md` and `~/.claude/settings.json` are preserved — the
+   > installer skips files it has already placed. The exception is the
+   > **hooks**, which are managed files and get replaced; if you have edited
+   > one, save it first.
+   >
+   > If you would rather change nothing else, copy the one missing file:
+   >
+   > ```bash
+   > mkdir -p ~/.local/bin/lib
+   > cp scripts/lib/review-verdict.sh ~/.local/bin/lib/
+   > ```
+
+   Installed for use by hand, not called by the flow:
+   - `providers-health.sh` to `~/.local/bin/`
+   - `peer-review-runner.sh` to `~/.local/bin/`, with its verdict parser at
+     `~/.local/bin/lib/review-verdict.sh` — the runner sources that file at
+     startup and refuses to run without it.
+
+   > **`peer-review-runner.sh` reviews one marker you write yourself.**
+   > Nothing in the product calls it: the review a session runs is driven by
+   > `/review-submit`, which uses `scripts/review-round-runner.sh` from a
+   > checkout. The runner takes the path to a JSON marker and reads six
+   > fields — `feature_id`, `phase`, `target_ref` and `subject_provider` are
+   > required; `peer_provider` falls back to the profile default and
+   > `review_scope` to `both`:
+   >
+   > **The marker's location is part of the contract**: it must be at
+   > `<repo>/.cct/review/<name>.json`, because the runner derives the project
+   > directory from that path by going three levels up — that is the
+   > repository it reviews and under which it writes the artifact. A marker
+   > anywhere else is refused before anything runs. Create the directory
+   > first; nothing creates it for you:
+   >
+   > ```bash
+   > cd /path/to/your/repo
+   > mkdir -p .cct/review
+   > cat > .cct/review/pending.json <<'JSON'
+   > {
+   >   "feature_id": "my-feature",
+   >   "phase": "build",
+   >   "target_ref": "HEAD",
+   >   "subject_provider": "claude",
+   >   "peer_provider": "deepseek",
+   >   "review_scope": "both"
+   > }
+   > JSON
+   > ~/.local/bin/peer-review-runner.sh .cct/review/pending.json
+   > ```
+   >
+   > `target_ref` is the ref the review diffs against, so point it at a
+   > commit with real changes — `HEAD~1`, a branch point, a tag. The provider
+   > is executed with that repository as its working directory, so a provider
+   > command that reads the checkout reads *that* one no matter where you ran
+   > the runner from. It writes the artifact under
+   > `<repo>/specs/<feature_id>/collaboration/`, prints the verdict, and
+   > DELETES the marker once it has accepted it — on success and on a failure
+   > it reports. The one exception is a marker in the wrong place: that is
+   > refused before the marker is consumed, so you only have to move it.
+   >
+   > Expect `PASS` or `FAIL`. **`INCONCLUSIVE` with zero blocking findings**
+   > has three common causes, and only the first two are the reviewer
+   > answering correctly:
+   >
+   > - a `feature_id` with no `specs/<id>/` artifacts;
+   > - a `target_ref` that produces an empty diff;
+   > - a provider whose output the verdict parser could not read — a CLI that
+   >   printed an error, or a model that answered without the verdict line.
+   >
+   > Read the artifact under `specs/<feature_id>/collaboration/` to tell them
+   > apart: the first two say so in the summary.
 
 2. **Install the peer provider CLI** — the peer provider must be available on your machine. For example, to use OpenAI Codex as a peer reviewer, install the Codex CLI first.
 
