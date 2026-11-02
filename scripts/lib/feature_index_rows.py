@@ -126,7 +126,11 @@ def read_capabilities(path: Path) -> list[dict]:
             current = {"id": scalar(line[len("  - id: "):].strip())}
             continue
         if current is None:
-            continue
+            # Indented content under ``capabilities:`` before the first
+            # ``- id:`` means the first entry is malformed. Skipping it used
+            # to render only the later, valid entries and exit 0 — the exact
+            # silent-loss failure this reader exists to prevent.
+            raise ValueError(f"{path}: expected '- id:' under capabilities:, got {line!r}")
         m = re.match(r"^    ([a-z_]+):\s*(.*)$", line)
         if m:
             flush()

@@ -125,6 +125,33 @@ assert "--write left the committed document untouched" "[[ '$BEFORE_SUM' == '$AF
 assert "nothing the generator can touch was modified" \
     "git -C '$REPO_DIR' diff --quiet -- shared/capabilities/catalog.yaml shared/features/catalog.yaml docs/features.md"
 
+# 5b. A MALFORMED FIRST CAPABILITY ENTRY IS A FAILURE, IN EVERY MODE.
+#     The skipped-first-entry bug: indented content before the first `- id:`
+#     was dropped, so a malformed first entry plus a valid second rendered only
+#     the valid one and exited 0. The reader must refuse instead.
+cat > "$TMPD/malformed-first-caps.yaml" <<'MALFORMED'
+schema_version: 1
+kind: catalog
+capabilities:
+  - description: orphan
+  - id: valid
+    description: >-
+      later entry
+MALFORMED
+BEFORE_SUM=$(shasum -a 256 "$COMMITTED" | awk '{print $1}')
+for _m in --stdout --check --write; do
+    _mrc=0
+    CCT_FEATURE_INDEX_CATALOG="$TMPD/malformed-first-caps.yaml" \
+        CCT_FEATURE_INDEX_OUT="$TMPD/malformed-out.md" \
+        bash "$GENERATE" "$_m" >/dev/null 2>"$TMPD/malformed-first.err" || _mrc=$?
+    assert "a malformed first capability entry fails $_m" "[[ '$_mrc' != '0' ]]"
+done
+assert "…and the error names the expected entry shape" \
+    "grep -Fq \"expected '- id:' under capabilities:\" '$TMPD/malformed-first.err'"
+AFTER_SUM=$(shasum -a 256 "$COMMITTED" | awk '{print $1}')
+assert "--write left the committed document untouched (malformed first entry)" \
+    "[[ '$BEFORE_SUM' == '$AFTER_SUM' ]]"
+
 # The hazard itself, pinned: a VALID fixture under --write must land in the
 # redirected output and leave the committed document alone.
 cat > "$TMPD/valid-caps.yaml" <<'VALIDCAPS'
