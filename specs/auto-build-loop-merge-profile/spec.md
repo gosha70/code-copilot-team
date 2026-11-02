@@ -1,10 +1,24 @@
 # Spec: auto-build-loop `merge` profile — gated auto-merge (increment F)
 
+> **Correction, 2026-10-29.** `merge.require_green_ci` was never read. The
+> driver assigned it to `MERGE_REQUIRE_GREEN_CI` and nothing consumed that
+> variable, so the key influenced no behaviour at any point: CI enforcement
+> has always come from GitHub branch protection via `gh pr merge --auto`. The
+> key was removed from the shipped template on that date. Requirements below
+> that describe it as "delegated" are retained as the record of what was
+> specified; they overstate what shipped, and the affected lines are marked
+> inline. A legacy config still carrying the key validates unchanged,
+> because the `merge` block is not checked for unknown keys — one of six
+> bare object blocks in a schema whose root is open too. That is an
+> accident of how the schema grew, not a guarantee it offers; the
+> guarantee is the assertion added with this change.
+
+
 Issue #80. Base: `pr` profile + reviewer panel merged in #75/#79. Design:
 `specs/auto-build-loop/design.md` §F, decision 3, Finalize + Safety rails.
 The profile ladder and the `merge{enabled, require_green_ci,
 require_branch_protection}` config slots are reserved; this increment unlocks
-`merge` as an autonomous, fail-closed, GitHub-native auto-merge.
+`merge` as an autonomous, fail-closed, GitHub-native auto-merge.  *(historical: the key was never read — see the correction at the top of this file)*
 
 ## User Scenarios
 
@@ -39,7 +53,7 @@ Gated auto-merge (US1):
   checks pass — delegating `merge.require_green_ci` to GitHub's own rules. A
   `gh pr merge` failure parks (`merge_blocked`) with diagnostics. The driver
   NEVER force-merges, NEVER merges locally, and NEVER commits/pushes to the
-  base branch (the existing master/base refusals hold).
+  base branch (the existing master/base refusals hold).  *(historical: the key was never read — see the correction at the top of this file)*
 - FR-5: The ledger records `pr.auto_merge_armed` + `pr.merge_method`. Resume
   detects an already-armed PR (ledger, else `gh pr view <n> --json
   autoMergeRequest`) and does NOT re-arm — `pr merge` runs at most once across

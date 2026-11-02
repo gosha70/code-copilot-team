@@ -9,7 +9,7 @@ code-copilot-team/
 │   ├── docs/                            8 tool-agnostic reference docs
 │   ├── review/                          Independent-reviewer sources (CODE_REVIEW.md, loader, project-config template)
 │   ├── templates/                       11 stacks × PROJECT.md + commands/
-│   ├── templates/sdd/                   5 SDD templates (spec, plan, tasks, lessons-learned, collaboration)
+│   ├── templates/sdd/                   10 SDD templates (spec, plan, tasks, automation, collaboration, lessons-learned, pitch, hill-chart, cycle-retro, cooldown-report), plus validate-pitch.sh
 │   └── templates/provider-profile-template.toml  Peer provider profile seed
 ├── specs/                               ← SDD artifacts per feature (versioned)
 │   └── <feature-id>/                    plan.md, spec.md, tasks.md, lessons-learned.md
@@ -49,10 +49,10 @@ code-copilot-team/
 │   ├── test-litellm-proxy-deps.sh       13 benchmark proxy pin tests (+11 with --online)
 │   ├── test-coverage-parse.sh           46 coverage parser + safety tests
 │   ├── test-verification-preset.sh      43 preset resolution tests
-│   ├── test-peer-review.sh             58 peer-review runner tests
+│   ├── test-peer-review.sh             94 peer-review runner tests
 │   ├── test-review-loop.sh           213 review loop integration tests
 │   ├── test-setup-reviewer.sh           42 copilot reviewer installer tests
-│   ├── test-auto-build-loop.sh        1206 auto-build driver tests
+│   ├── test-auto-build-loop.sh        1250 auto-build driver tests
 │   ├── test-ui-harness.sh              87 visual-harness contract tests
 │   ├── test-routing-config.sh         365 execution-profile registry + result + cli tests
 │   ├── test-routing-failover.sh       227 circuit + action + selection + supervisor + identity tests (#251 B)

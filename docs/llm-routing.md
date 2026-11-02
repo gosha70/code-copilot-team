@@ -46,14 +46,19 @@ unchanged.
   ordinary build/test failures are `execution`, not provider events;
   anything unmatched is `unknown` and FAILS CLOSED. Increment B owns
   what each cause does; an HTTP status alone never determines cause.
+> Commands on this page are written `./scripts/cct …`, to be run from the
+> repository root. `setup.sh` does not put a `cct` shim on `PATH`, so the bare
+> `cct …` spelling used by the tool's own `--help` only works if you have put
+> `scripts/` on `PATH` yourself.
+
 - **Inspection commands** (read-only; no probe, no network, no state
-  writes): `cct routing validate` (registry + repo restrictions +
-  merge), `cct routing status` (per-profile rows; every profile is
+  writes): `./scripts/cct routing validate` (registry + repo restrictions +
+  merge), `./scripts/cct routing status` (per-profile rows; every profile is
   `unknown` until runtime records state — unknown is never treated as
   healthy; D also renders each next-probe instant and refuses a corrupt
   existing state store instead of displaying it as empty. Credential columns report presence only, where
   `set` means a NON-EMPTY value is present behind the referenced
-  variable — never the value itself), and `cct routing explain
+  variable — never the value itself), and `./scripts/cct routing explain
   --route-class <class>` (a pure configuration-resolution dry run
   that states it is not an availability decision).
 
@@ -172,7 +177,7 @@ scripts/cooldown-supervisor.sh <feature> --routing --reconcile <task-id>
   (`routing.tier2.delegation_enabled = false` in `automation.json` —
   restriction-only, promoted through the refused→implemented→tested
   path), and
-  `cct routing explain --feature <id> --task <task-id>` renders the
+  `./scripts/cct routing explain --feature <id> --task <task-id>` renders the
   task's route class, safety-floor evaluation, and the EFFECTIVE
   candidate legality — the same legality `--delegate` and the
   selector enforce, still pure configuration resolution.
@@ -186,11 +191,11 @@ threshold used by wake and failback.
 
 ```bash
 # optional scheduler integration: one globally locked due pass
-cct routing tick --due --once
+./scripts/cct routing tick --due --once
 # same pass, also relaunch eligible unattended no-profile parks
-cct routing tick --due --once --wake
+./scripts/cct routing tick --due --once --wake
 # explicit sole exit from auth-disabled; still requires a canary
-cct routing enable <profile-id>
+./scripts/cct routing enable <profile-id>
 ```
 
 - **Real probes** run a small inference through the profile's own

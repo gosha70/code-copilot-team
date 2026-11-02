@@ -28,8 +28,22 @@ origin:
     records auto_merge_armed/merge_method and resume never re-arms; the driver
     never merges locally, never forces, never commits/pushes to the base;
     advisory/pr never invoke pr merge. Tests via gh argv + api stub. Completes
-    the series A–F.
+    the series A–F.  *(historical: the key was never read — see the correction at the top of this file)*
 ---
+
+> **Correction, 2026-10-29.** `merge.require_green_ci` was never read. The
+> driver assigned it to `MERGE_REQUIRE_GREEN_CI` and nothing consumed that
+> variable, so the key influenced no behaviour at any point: CI enforcement
+> has always come from GitHub branch protection via `gh pr merge --auto`. The
+> key was removed from the shipped template on that date. Requirements below
+> that describe it as "delegated" are retained as the record of what was
+> specified; they overstate what shipped, and the affected lines are marked
+> inline. A legacy config still carrying the key validates unchanged,
+> because the `merge` block is not checked for unknown keys — one of six
+> bare object blocks in a schema whose root is open too. That is an
+> accident of how the schema grew, not a guarantee it offers; the
+> guarantee is the assertion added with this change.
+
 
 # Plan: auto-build-loop `merge` profile (increment F)
 
@@ -44,7 +58,7 @@ preflight from #75; `GH_BIN`/`BRANCH_BASE`/`BRANCH_REMOTE` globals in place.
 1. **Ladder** (`load_config`): replace the `merge` refusal with
    `CAN_PUSH=true; CAN_OPEN_PR=true; CAN_MERGE=true`; read `merge.enabled`,
    `merge.require_branch_protection`, `merge.method` (default squash),
-   `merge.require_green_ci` into globals.
+   `merge.require_green_ci` into globals.  *(historical: the key was never read — see the correction at the top of this file)*
 2. **`arm_auto_merge`** helper (finalize, `CAN_MERGE` + `merge.enabled`):
    verify branch protection (`gh api`) when required → park `merge_blocked` if
    absent; run `gh pr merge <n> --auto --<method>` (idempotent — skip if the

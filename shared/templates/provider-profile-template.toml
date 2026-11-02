@@ -164,10 +164,12 @@ version = "cli"
 # api_key_env = "DEEPSEEK_API_KEY"
 # model = "deepseek-flash"
 # timeout_sec = 300
-# disable_thinking = true       # thinking is on by default and can consume any budget on a review-sized request
+# thinking is on by default and can consume any budget on a review-sized request
+# disable_thinking = true
 # max_tokens = 16384
 # temperature = 0.1
-# price_usd_per_mtok_input = 0.30   # peak, cache-miss (api-docs.deepseek.com/quick_start/pricing)
+# peak, cache-miss (api-docs.deepseek.com/quick_start/pricing)
+# price_usd_per_mtok_input = 0.30
 # price_usd_per_mtok_output = 1.20
 # healthcheck = "curl -sf --oauth2-bearer $DEEPSEEK_API_KEY https://api.deepseek.com/v1/models"
 

@@ -38,7 +38,7 @@ the primary guide. Maturity and release state are defined in
 | [Studio web UI](../docs/session-analytics-cookbook.md) | The analytics, benchmarks, auto-build runs, team alerts and the project's own documentation are browsed in one local web app with a settings page for the judge and embedding providers. | beta | unreleased |
 | [LLM routing profiles](../docs/llm-routing.md) | Auto-build tasks are routed to a backend by route class and role under an execution profile, with validate, status and explain commands and a scheduled tick. | experimental | unreleased |
 | [MemKernel persistent memory](../shared/skills/memkernel-memory/SKILL.md) | Session context is recalled at start, checkpointed before compaction and recovered after it by hooks that activate only when MemKernel is installed. | experimental | v1.1.0 |
-| [cct command-line front door](../docs/features.md) | One provider-neutral command lists every slash command, skill and capability and drives routing; doctor and config are planned. | experimental | unreleased |
+| [cct command-line front door](../docs/features.md) | One provider-neutral command lists every slash command, skill and capability, drives routing, reports environment health with doctor, and explains or validates configuration with config. | experimental | unreleased |
 
 ### Adapter support
 

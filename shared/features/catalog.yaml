@@ -389,7 +389,8 @@ features:
     title: cct command-line front door
     problem: >-
       One provider-neutral command lists every slash command, skill and
-      capability and drives routing; doctor and config are planned.
+      capability, drives routing, reports environment health with doctor,
+      and explains or validates configuration with config.
     maturity: experimental
     since: unreleased
     adapters:
