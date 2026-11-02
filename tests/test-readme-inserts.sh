@@ -161,7 +161,7 @@ assert "no lead is a frontmatter key" "! grep -qE '— [a-z_]+: ' <<<\"\$INDEX\"
 assert "a frontmatter page gets its prose" \
   "grep -q 'Short canonical definitions of terms' <<<\"\$INDEX\""
 assert "bold at the start of a line is prose, not a list marker" \
-  "grep -q 'the way the Studio.s \*\*Learn\*\* tab' <<<\"\$INDEX\""
+  "grep -q 'the way the Studio.s \*\*Guides\*\* tab' <<<\"\$INDEX\""
 
 # A registry entry pointing at a file that does not exist must fail the
 # render rather than emit a dead link onto the landing page.
