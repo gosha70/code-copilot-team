@@ -14,18 +14,12 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
  The harness learned to run unattended, to route work across models, and to
 show its own work. Six real unattended builds shaped the autonomy engine — and
 two features in this release, developer aliases and cap alerts, were built by
-it. Policy-driven routing met all 33 of its acceptance criteria. The Harness
-Studio grew from six pages to twelve. The documentation became a
+it. Policy-driven routing met all 33 of its amended acceptance criteria.
+The Harness Studio grew from six pages to twelve. The documentation became a
 generated, gated site with a `cct` command in front of it.
 
 ### Highlights
 
-- **Unattended auto-build, run-tested.** A frozen verification contract
-  (coverage, runtime conformance, visual), a cost cap that is discoverable,
-  live and raisable mid-run, a reviewer probed at admission through the
-  real review path, resume at the review step, and one fallback to the next
-  healthy reviewer. Outcomes are recorded in the driver's own words, with the
-  human verdict on the resulting PR kept beside them.
 - **Policy-driven LLM routing.** Execution profiles, Tier-1 failover, bounded
   Tier-2 delegation with Tier-1 reconciliation, probe-verified recovery and
   failback, calibration gates with a shadow recommender, and Codex as an
@@ -33,39 +27,46 @@ generated, gated site with a `cct` command in front of it.
 - **Harness Studio.** A session page with real transcript text, a
   trace tree, feedback and lineage; Ask, Graph, Similar, Team, Runs and Guides;
   comparison by harness version; expectations and how they came out.
-- **A team store.** One shared Postgres store, a live registry, cross-developer
-  rollups, budgets and runaway detection.
+- **Unattended auto-build, run-tested.** A frozen verification contract
+  (coverage, runtime conformance, visual), a cost cap that is discoverable,
+  live and raisable mid-run, a reviewer probed at admission through the
+  real review path, resume at the review step, and one fallback to the next
+  healthy reviewer. Outcomes are recorded in the driver's own words, with the
+  human verdict on the resulting PR kept beside them.
 - **Documentation and a CLI front door.** A feature catalog with maturity and
   per-adapter support, a published docs site, `cct features`, `cct doctor` and
   `cct config`, a Codespace guided tour, and an experimental `llms.txt`.
-- **A Claude Code plugin that loads**, with its skills, agents and commands
-  generated from their sources.
+- **A team store.** One shared Postgres store, a live registry, cross-developer
+  rollups, budgets and runaway detection.
 
 ### Breaking changes and upgrade notes
 
 - **The Session Analytics store must be recreated.** The store schema moved
   from version 2 to version 12, and two of those steps (8 and 10) add columns
-  to existing tables, which create-if-absent DDL cannot do in place. A store
-  created by v1.1.0 is refused at start-up with the remedy printed: delete the
-  SQLite file (or drop the Postgres schema) and run `session-analytics ingest
-  --full`. **A session whose transcript has since been pruned cannot be re-
-  ingested** — export anything you need with your v1.1.0 checkout before
-  upgrading. From schema 11 onward the additions are new tables only and land
-  in place.
+  to existing tables, which create-if-absent DDL cannot add in place. A store
+  created by v1.1.0 is refused at startup with the remedy printed. Before
+  upgrading, export anything you need with your v1.1.0 checkout: a session
+  whose transcript has since been pruned cannot be re-ingested. Then delete
+  the SQLite file, or point `CCT_SA_DB` at a new empty dedicated PostgreSQL
+  database. Recreate an existing PostgreSQL database or schema only after
+  confirming it contains no unrelated data. Finally run
+  `session-analytics ingest --full`. From schema 11 onward, additions are
+  additive tables and indexes and land in place.
 - **`CCT_SA_DSN` is now `CCT_SA_DB`, and `--dsn` is now `--db`** (#315). The
   old names are still read, so nothing breaks today; new configuration should
   use the new ones.
-- **Studio navigation changed.** The Agents page was removed (#307). Search was
-  replaced by Ask (#320) and then returned as its own page with every filter
-  the store can answer and full-text search (#371 A2).
+- **Studio navigation changed.** Dashboard is now **Overview**, Analysis is
+  **Analysis pipeline**, and Learn is **Guides**. The Agents page was removed
+  (#307). Search was replaced by Ask (#320), then returned as its own page with
+  every filter the store can answer and full-text search (#371 A2).
 - **`phase_violation` is no longer collected or published** (#300). The label
   was ungrounded; anything reading it will find it absent.
 - **The Claude Code plugin's `hooks.json` layout changed** (#363). Hook events
   are nested under `"hooks"`. The previously shipped plugin did not load, so
   there is no working installation to migrate — reinstall it.
-- **The README was restructured** (#214): 1,417 lines to 254, with the deep
-  reference relocated into six guides under `docs/`. Deep links into the old
-  README sections no longer resolve.
+- **The README was restructured** (#214): v1.1.0 had 725 lines; v2.0.0 has
+  299, with the deep reference moved into guides under `docs/`. Deep links
+  into the old README sections no longer resolve.
 - **An INCONCLUSIVE review with no blocking finding now stops an unattended
   run for recovery** rather than starting a fix session (#342).
 - **The Studio needs Node 20.9 or later** (#382). The patched Next.js
@@ -80,12 +81,12 @@ generated, gated site with a `cct` command in front of it.
   read its transcript text, per-turn latency, and three judge-generated
   analyses (Agent Tuning, Prompt Coaching, Efficiency) with turn references
   and configuration diffs. No terminal, no canned strings.
-- **Trust every number (#307, Studio Phase 2)** — a noise filter applied at
-  query time to every list and aggregate (probe runs, temp directories,
+- **Noise-aware metrics (#307, Studio Phase 2)** — a query-time noise filter applied to
+  every list and aggregate (probe runs, temp directories,
   too-short sessions) with the exclusion count shown; agent response time as a
   dashboard KPI with its measured n; ten endpoints that had no UI surfaced
   where they answer a question.
-- **Learn (#309, Studio Phase 3)** — the project's own documentation in the
+- **Guides (#309, Studio Phase 3)** — the project's own documentation in the
   Studio, from a closed docs registry, and every Agent Tuning or Efficiency
   finding links to the page that explains how to fix it.
 - **Ask (#320)** — a question about your own sessions, in words, answered by
@@ -93,9 +94,10 @@ generated, gated site with a `cct` command in front of it.
   lookup is shown so the answer can be checked.
 - **Graph (#319, #311)** — pick a session or a project and see what it is
   connected to, with the relationship written on every edge, drill-downs and
-  a catalogue of questions. `graph --rebuild` went from 67 minutes on a
-  90k-turn store to 2.7 seconds on a 96k-turn one, and from 9.2 GB to 568 MB
-  peak memory, by replacing ~271k `MERGE` statements with 18 `COPY FROM`.
+  a catalogue of questions. In recorded local runs, `graph --rebuild` took
+  67 minutes and 9.2 GB peak memory on a 90k-turn store before the rewrite,
+  versus 2.7 seconds and 568 MB on a 96k-turn store afterward. The rewrite
+  replaced approximately 271k `MERGE` statements with 18 `COPY FROM` loads.
 - **Similar sessions (#285, #287, #293, #318)** — a session embedding
   pipeline, similarity over it, and a Similar tab that runs itself; embedding
   and similarity are pipeline steps with Settings → Embeddings.
@@ -169,7 +171,7 @@ generated, gated site with a `cct` command in front of it.
   so a claim that stops being true fails a pull request.
 - **Developer cookbook (#265)** — the project's own lifecycle, in self-driven
   and harness-driven modes. **Auto code review cookbook (#347)**, served in
-  Learn.
+  Guides.
 
 #### Claude Code plugin
 
