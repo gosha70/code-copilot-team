@@ -1,9 +1,10 @@
 # session_analytics.judge.runner — label un-labeled turns (additive).
 #
-# Selects turns that have no heuristic_label for the rubric, runs the judge
-# (optionally across worker threads — the judges are I/O-bound on HTTP /
-# subprocess), and writes one heuristic_label row per turn. Turn rows are
-# never mutated. Idempotent: ON CONFLICT(turn_id, rubric_name) DO UPDATE.
+# Selects turns that have no successful heuristic_label for the rubric,
+# runs the judge (optionally across worker threads — the judges are
+# I/O-bound on HTTP / subprocess), and writes one heuristic_label row per
+# turn. Turn rows are never mutated. Idempotent:
+# ON CONFLICT(turn_id, rubric_name) DO UPDATE.
 
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional, Sequence
 
 from ..relational.db import Database
-from .contracts import Rubric, TurnContext, TurnJudge, TurnLabels
+from .contracts import PARSE_OK, Rubric, TurnContext, TurnJudge, TurnLabels
 from .label_sources import label_source_join
 
 _log = logging.getLogger(__name__)
@@ -135,7 +136,16 @@ def _select_turns(
         where.append("s.copilot = ?")
         params.append(copilot)
     if not overwrite:
-        where.append("h.id IS NULL")
+        # A FAILED attempt is not a label: a turn whose only row is a
+        # failure must be retried, or one judge outage leaves it
+        # permanently unlabelled and the funnel's failure count can
+        # never clear. Matched through NOT EXISTS so it tests for a
+        # successful row rather than the mere presence of one.
+        where.append(
+            "NOT EXISTS (SELECT 1 FROM heuristic_label hx "
+            "WHERE hx.turn_id = t.id AND hx.rubric_name = ? AND hx.parse_status = ?)"
+        )
+        params += [rubric.name, PARSE_OK]
     # A turn with no text (a tool-result turn under redaction) gives the
     # judge nothing to judge: under the old prompt it answered "false"
     # for everything, which inflated agreement; under the new one it
@@ -254,7 +264,14 @@ def _unlabeled_copilots(db: Database, rubric_name: str, *, overwrite: bool, sess
     where = []
     params: list = [rubric_name]
     if not overwrite:
-        where.append("h.id IS NULL")
+        # Same rule as _select_turns: only a SUCCESSFUL label means the
+        # turn is done. A failed attempt must keep its copilot in the
+        # run, or the retry above would never be reached.
+        where.append(
+            "NOT EXISTS (SELECT 1 FROM heuristic_label hx "
+            "WHERE hx.turn_id = t.id AND hx.rubric_name = ? AND hx.parse_status = ?)"
+        )
+        params += [rubric_name, PARSE_OK]
     if session_id is not None:
         where.append("t.session_id = ?")
         params.append(session_id)
