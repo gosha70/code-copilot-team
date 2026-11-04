@@ -259,6 +259,16 @@ def start_all(
 
     def _sequence() -> str:
         done: list[str] = []
+        with _lock:
+            # A run starts from a clean slate: a step's "done" from an
+            # earlier run must not sit beside steps this run has not
+            # reached (Compute KPIs shown done while the LLM judge was
+            # still at step 3 was the visible symptom). Each step then
+            # turns running -> done/failed as the sequence reaches it,
+            # and a step the run stops before stays idle, not done.
+            for step in sequence:
+                if step in runners and not _running(step):
+                    _jobs[step] = {"state": _STATE_IDLE}
         for step in sequence:
             fn = runners.get(step)
             if fn is None:
