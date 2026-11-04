@@ -726,6 +726,9 @@ class TestApi(RegistryResetTestCase):
             body = listing.json()
             self.assertEqual(body["total"], 1)
             self.assertTrue(body["sessions"][0]["loaded"])  # setUp ingested it
+            # A loaded row carries the store id, so the load table can link
+            # to the session page instead of dead-ending at "loaded".
+            self.assertIsInstance(body["sessions"][0]["store_id"], int)
             self.assertGreater(body["total_bytes"], 0)
             sid = body["sessions"][0]["session_id"]
             self.assertEqual(

@@ -582,7 +582,7 @@ try {
   const disc = {
     sessions: [
       { copilot: "claude-code", session_id: "a", source: "-Users-x-proj", files: 1, bytes: 3 * MB, modified: "2026-09-07T10:00:00+00:00", modified_epoch: 3, loaded: false },
-      { copilot: "claude-code", session_id: "b", source: "-Users-x-other", files: 2, bytes: 250 * MB, modified: "2026-09-06T10:00:00+00:00", modified_epoch: 2, loaded: true },
+      { copilot: "claude-code", session_id: "b", source: "-Users-x-other", files: 2, bytes: 250 * MB, modified: "2026-09-06T10:00:00+00:00", modified_epoch: 2, loaded: true, store_id: 88 },
     ],
     total: 2, total_bytes: 253 * MB, new: 1, new_bytes: 3 * MB, cap: 500,
   };
@@ -614,6 +614,12 @@ try {
   else if (!/>new</.test(panel) || !/>loaded</.test(panel)) fail("rows lack the new/loaded state");
   else if (!/2 found · 1 new/.test(panel)) fail("listing summary missing");
   else console.log("  ok  panel: labelled button, size + large-load warning, new/loaded rows");
+  // A loaded row must lead somewhere: its session id links to the session
+  // page (the store id the listing now carries). A new row has no page
+  // yet, so exactly one of the two fixture rows carries a link.
+  const sessionPageLinks = (panel.match(/href="\/sessions\/\d+"/g) || []).length;
+  if (sessionPageLinks !== 1) fail(`loaded rows must link to their session page (got ${sessionPageLinks} links)`);
+  else console.log("  ok  a loaded row links to its session page; a new row does not");
   const small = render(ls.default, { ...panelProps, picked: new Set() });
   if (/large load/.test(small) || !/3\.0 MB to read/.test(small)) fail("small load wrongly warned, or size missing");
   else console.log("  ok  a small load is not warned");

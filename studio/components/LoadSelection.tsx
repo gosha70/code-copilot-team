@@ -298,11 +298,18 @@ export default function LoadSelectionPanel({
                     />
                   </td>
                   <td className="px-2 py-1 text-slate-700">{s.copilot}</td>
-                  <td
-                    className="px-2 py-1 text-slate-600 font-mono truncate max-w-[9rem]"
-                    title={s.session_id}
-                  >
-                    {s.session_id.length > 8 ? `${s.session_id.slice(0, 8)}…` : s.session_id}
+                  <td className="px-2 py-1 text-slate-600 font-mono truncate max-w-[9rem]" title={s.session_id}>
+                    {s.loaded && s.store_id ? (
+                      <a
+                        href={`/sessions/${s.store_id}`}
+                        className="text-blue-700 hover:underline"
+                        title={`Open session ${s.store_id} details`}
+                      >
+                        {s.session_id.length > 8 ? `${s.session_id.slice(0, 8)}…` : s.session_id}
+                      </a>
+                    ) : (
+                      s.session_id.length > 8 ? `${s.session_id.slice(0, 8)}…` : s.session_id
+                    )}
                   </td>
                   <td
                     className="px-2 py-1 text-slate-700 font-mono truncate max-w-[22rem]"

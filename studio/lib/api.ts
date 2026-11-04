@@ -1341,6 +1341,8 @@ export interface DiscoveredSession {
   modified: string;
   modified_epoch: number;
   loaded: boolean;
+  /** The store's row id once loaded, for the link to its session page. */
+  store_id?: number | null;
 }
 
 export interface DiscoveredSessions {
