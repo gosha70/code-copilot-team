@@ -182,7 +182,10 @@ else
   echo "    (measuring a rendered document: $DOC_SLUG)"
 fi
 
-for path in "/" "/sessions" "/settings" "/learn" ${DOC_SLUG:+"$DOC_SLUG"}; do
+# The four original paths plus the three pages this release changed beyond
+# the P0 fixes: the Analysis flow (its warning text and funnel colours),
+# Routing (empty state until a registry is configured) and Benchmark.
+for path in "/" "/sessions" "/settings" "/learn" "/analysis" "/routing" "/benchmark" ${DOC_SLUG:+"$DOC_SLUG"}; do
   P goto "$URL$path" >/dev/null 2>&1; settle 3
   # The document is only worth measuring if it actually renders a fence.
   # The gate takes whichever document the Learn index lists first, so
