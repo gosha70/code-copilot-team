@@ -248,10 +248,13 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
     class PipelineRun(BaseModel):
         """Per-step options for run/<step> and run-all; both optional.
         ``steps`` on run-all runs that ordered subset (the Similar tab
-        runs embed + similar)."""
+        runs embed + similar). ``sessions`` scopes the judge and KPI steps
+        to the selected copilot session ids (the same refs the load
+        selection carries); empty means the whole store."""
         load: Optional[LoadSelection] = None
         judge: Optional[JudgeOptions] = None
         steps: Optional[list[str]] = None
+        sessions: Optional[list[str]] = None
 
     class ConfigUpdate(BaseModel):
         values: dict
@@ -584,6 +587,9 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         graph_path = kuzu_path or load_config().kuzu_path
         copilots, selection = _load_selection(opts.load if opts else None)
         judge_opts = (opts.judge if opts else None) or JudgeOptions()
+        # The ANALYSIS selection (judge + KPIs): the same copilot session
+        # ids the load selection carries. Empty means the whole store.
+        analysis_refs = tuple((opts.sessions or ()) if opts else ())
         # A judge that does not exist is a 400 NOW, not a failed job later.
         if judge_opts.judge:
             family, model = (judge_opts.judge.split(":", 1) + [""])[:2]
@@ -604,29 +610,76 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             def _progress(st: JudgeStats) -> None:
                 pj.set_progress(pj.STEP_JUDGE, st.as_dict())
 
+            from ..relational import store as session_store
+
+            scoped: list[int] = []
+            missing: list[str] = []
             conn = _DB.connect(store)
             try:
+                if analysis_refs:
+                    scoped, missing = session_store.resolve_selection(
+                        conn, analysis_refs
+                    )
+                    if not scoped:
+                        # REFUSE rather than widen: the user asked for
+                        # specific sessions, and none of them is loaded.
+                        raise RuntimeError(
+                            "none of the selected sessions are loaded: "
+                            + ", ".join(missing[:5])
+                            + (f" (+{len(missing) - 5} more)" if len(missing) > 5 else "")
+                            + " — load them first (Run all, or the Load button)"
+                        )
                 kw = dict(
-                    workers=judge_opts.workers or cfg.judge.workers, limit=judge_opts.limit,
-                    only_labelled_by=judge_opts.only_labelled_by, progress=_progress, stats=stats,
+                    workers=judge_opts.workers or cfg.judge.workers,
+                    only_labelled_by=judge_opts.only_labelled_by,
+                    progress=_progress, stats=stats,
                 )
+                judge_obj = None
                 if judge_opts.judge:
                     family, model = (judge_opts.judge.split(":", 1) + [""])[:2]
-                    run_judge(conn, get_judge(family, model), rubric, **kw)
+                    judge_obj = get_judge(family, model)
+                if scoped:
+                    # One runner call per selected session; the turn cap is
+                    # spent across them, not restarted for each session.
+                    remaining = judge_opts.limit
+                    for sid in scoped:
+                        if remaining is not None and remaining <= 0:
+                            break
+                        before = stats.total
+                        if judge_obj is not None:
+                            run_judge(
+                                conn, judge_obj, rubric, session_id=sid,
+                                limit=remaining, **kw,
+                            )
+                        else:
+                            run_default_by_copilot(
+                                conn, rubric, cfg, session_id=sid,
+                                limit=remaining, **kw,
+                            )
+                        if remaining is not None:
+                            remaining = max(0, remaining - (stats.total - before))
+                elif judge_obj is not None:
+                    run_judge(conn, judge_obj, rubric, limit=judge_opts.limit, **kw)
                 else:
-                    run_default_by_copilot(conn, rubric, cfg, **kw)
+                    run_default_by_copilot(conn, rubric, cfg, limit=judge_opts.limit, **kw)
             finally:
                 conn.close()
             # The message is the verdict a person reads after the run:
             # what was labelled, what failed, and the last reason why.
+            missing_note = ""
+            if missing:
+                missing_note = (
+                    f"; {len(missing)} selected session(s) not loaded: "
+                    + ", ".join(missing[:5])
+                )
             if stats.total == 0:
-                return "nothing to judge: every turn with text is already labelled"
+                return "nothing to judge: every turn with text is already labelled" + missing_note
             msg = f"labelled {stats.parse_ok} of {stats.total} turns with {stats.judge or 'the configured judge'}"
             if stats.parse_failed:
                 msg += f"; {stats.parse_failed} failed"
                 if stats.last_error:
                     msg += f" (last: {stats.last_error})"
-            return msg
+            return msg + missing_note
 
         def _ingest() -> str:
             from .._register import register_all
@@ -752,11 +805,37 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         def _kpis() -> str:
             from ..judge.kpis import compute_kpis
             from ..judge.rubric import load_rubric
+            from ..relational import store as session_store
             from ..relational.db import Database as _DB
 
+            rubric_name = load_rubric().name
             db_ = _DB.connect(store)
             try:
-                st = compute_kpis(db_, load_rubric().name)
+                if analysis_refs:
+                    scoped, missing = session_store.resolve_selection(
+                        db_, analysis_refs
+                    )
+                    if not scoped:
+                        raise RuntimeError(
+                            "none of the selected sessions are loaded: "
+                            + ", ".join(missing[:5])
+                            + " — load them first"
+                        )
+                    total = sum(
+                        compute_kpis(db_, rubric_name, session_id=sid).sessions
+                        for sid in scoped
+                    )
+                    msg = (
+                        f"kpis computed for {total} of {len(scoped)} selected "
+                        f"session{'s' if len(scoped) != 1 else ''}"
+                    )
+                    if missing:
+                        msg += (
+                            f"; {len(missing)} selected not loaded: "
+                            + ", ".join(missing[:5])
+                        )
+                    return msg
+                st = compute_kpis(db_, rubric_name)
             finally:
                 db_.close()
             return f"kpis computed ({st})"
@@ -798,16 +877,25 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         """
         from .. import pipeline_jobs as pj
 
+        only = opts.steps if opts else None
+        if only is None and opts and opts.sessions:
+            # A selection means "analyse THESE sessions". The optional
+            # steps are store-wide (benchmark linking, embeddings,
+            # similarity), so running them here would reprocess the whole
+            # store against the user's explicit scope; they stay runnable
+            # individually.
+            only = [pj.STEP_INGEST, pj.STEP_GRAPH]
+            if include_judge:
+                only += [pj.STEP_JUDGE, pj.STEP_KPIS]
         try:
             pj.start_all(
-                _pipeline_runners(opts), include_judge=include_judge,
-                only=(opts.steps if opts else None),
+                _pipeline_runners(opts), include_judge=include_judge, only=only,
             )
         except pj.StepBusyError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from None
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
-        return {"started": True, "include_judge": include_judge, "steps": opts.steps if opts else None}
+        return {"started": True, "include_judge": include_judge, "steps": only}
 
     # ── filesystem browse (settings path pickers) ──────────────────────
     # A browser CANNOT read a real path: <input type="file"> deliberately
@@ -1617,15 +1705,35 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
                     conn, session_id, kind, judge=judge, force=req.force,
                 )
             except JudgeTransportError as exc:
+                # A timeout is NOT the same failure as an unreachable
+                # backend, and telling the reader to check that the model
+                # is pulled when it was pulled and running sends them
+                # looking in the wrong place. Say which one happened, and
+                # for a timeout say how long it waited: a local 27B model
+                # on a capped transcript can genuinely need longer than
+                # the limit, and the fix is a smaller model or a shorter
+                # session, not a reinstall.
+                timed_out = "timed out" in str(exc).lower()
+                if timed_out:
+                    guidance = (
+                        f"The backend answered but did not finish within "
+                        f"{sa.ANALYSIS_TIMEOUT_SECONDS}s. A large local model over a "
+                        f"long transcript can need longer — the work is "
+                        f"discarded when the limit is reached. Try a smaller "
+                        f"or faster model under Settings → LLM-as-Judge, or a "
+                        f"shorter session."
+                    )
+                else:
+                    guidance = (
+                        "Check the LLM-as-Judge settings — is the backend "
+                        "running and the model pulled? — then run it again."
+                    )
                 raise HTTPException(
                     status_code=503,
                     detail={
                         "error": f"the judge ({label}) did not answer: {exc}",
                         "prerequisite": "judge",
-                        "guidance": (
-                            "Check the LLM-as-Judge settings — is the backend "
-                            "running and the model pulled? — then run it again."
-                        ),
+                        "guidance": guidance,
                     },
                 )
             except (RuntimeError, ValueError) as exc:

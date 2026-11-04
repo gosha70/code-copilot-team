@@ -16,7 +16,11 @@ from session_analytics.config import ENV_NOISE_MIN_DURATION
 from session_analytics.ingest.pipeline import ingest
 from session_analytics.routing_calibration import GATE_IDS
 
-from session_analytics.tests.support import CLAUDE_CODE_ROOT, RegistryResetTestCase
+from session_analytics.tests.support import (
+    CLAUDE_CODE_ROOT,
+    FIXTURES,
+    RegistryResetTestCase,
+)
 
 _FASTAPI = (
     importlib.util.find_spec("fastapi") is not None
@@ -814,6 +818,102 @@ class TestApi(RegistryResetTestCase):
         conf = self.client.get("/api/judge/models").json()["configured"]
         self.assertIn(conf["source"], ("settings", "packaged default"))
         self.assertTrue(conf["spec"])
+
+    def test_a_selection_scopes_the_judge_and_never_widens(self) -> None:
+        # Two loaded sessions; a scoped judge run must see ONLY the
+        # selected one, and a selection that resolves to nothing must
+        # refuse — never fall back to the whole store.
+        from session_analytics.judge.contracts import TurnLabels
+        from session_analytics.judge.registry import register_judge
+        from session_analytics.relational.db import Database
+
+        ingest(
+            dsn=self.dsn,
+            copilots=[C.COPILOT_AIDER],
+            root=FIXTURES / "aider",
+            full=True,
+        )
+        db = Database.connect(self.dsn)
+        try:
+            rows = db.query(
+                "SELECT id, session_id FROM copilot_session ORDER BY id"
+            )
+            self.assertGreaterEqual(len(rows), 2)
+            target_id, target_ref = int(rows[0][0]), str(rows[0][1])
+            other_id = int(rows[1][0])
+            target_turns = {
+                int(r[0])
+                for r in db.query(
+                    "SELECT id FROM copilot_turn WHERE session_id = ?",
+                    (target_id,),
+                )
+            }
+            other_turns = {
+                int(r[0])
+                for r in db.query(
+                    "SELECT id FROM copilot_turn WHERE session_id = ?",
+                    (other_id,),
+                )
+            }
+        finally:
+            db.close()
+
+        seen: list[int] = []
+
+        class _Recorder:
+            judge_id = "rec"
+
+            def __init__(self, model: str = "") -> None:
+                self._model = model or "m"
+
+            def rate_turn(self, ctx, rubric):
+                seen.append(ctx.turn_id)
+                return TurnLabels(
+                    bool_labels={l: False for l in rubric.bool_labels},
+                    sentiment="NEUTRAL",
+                    interaction_quality=3,
+                    judge_id=self.judge_id,
+                    judge_model=self._model,
+                )
+
+            def complete(self, prompt, *, timeout=120):  # pragma: no cover
+                raise NotImplementedError
+
+        register_judge("rec", _Recorder)
+
+        def run(sessions: list[str]) -> dict:
+            r = self.client.post(
+                "/api/pipeline/run/judge",
+                json={"judge": {"judge": "rec:m"}, "sessions": sessions},
+            )
+            self.assertEqual(r.status_code, 200, r.text)
+            for _ in range(200):
+                job = next(
+                    x
+                    for x in self.client.get("/api/pipeline/status").json()["steps"]
+                    if x["id"] == "judge"
+                )["job"]
+                if job["state"] != "running":
+                    return job
+                _time.sleep(0.05)
+            return job
+
+        job = run([target_ref])
+        self.assertEqual(job["state"], "done", job)
+        self.assertTrue(seen, "the judge was never called")
+        self.assertTrue(
+            set(seen) <= target_turns,
+            f"judge saw turns outside the selection: {sorted(set(seen) - target_turns)}",
+        )
+        self.assertFalse(set(seen) & other_turns)
+
+        # No resolution → refusal, and the model is never called.
+        seen.clear()
+        job = run(["not-loaded-ref"])
+        self.assertEqual(job["state"], "failed", job)
+        self.assertIn("none of the selected sessions are loaded", job["message"])
+        self.assertIn("not-loaded-ref", job["message"])
+        self.assertEqual(seen, [])
 
     def test_benchmark_payload_names_the_runs_root_and_the_link_step_runs_it(self) -> None:
         # The Benchmark page: with no runs root the page says so; with one,

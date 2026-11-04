@@ -1276,6 +1276,8 @@ export interface PipelineRun {
   load?: LoadSelection;
   judge?: JudgeOptions;
   steps?: string[];
+  /** Copilot session ids to scope the judge and KPI steps to. */
+  sessions?: string[];
 }
 
 /** Running counts from the embed step. */

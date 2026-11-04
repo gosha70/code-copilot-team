@@ -105,6 +105,36 @@ class TestSingleFlight(unittest.TestCase):
         # embed and similar between graph and kpis
         self.assertEqual(pj.RUN_ALL_SEQUENCE, ("ingest", "correlate", "graph", "embed", "similar", "kpis"))
 
+    def test_run_all_skips_kpis_without_the_judge(self) -> None:
+        # KPIs roll up the judge's labels: the default Run all (no judge)
+        # must not compute a rollup from nothing. The KPI step stays
+        # individually runnable — an explicit `only` still runs it.
+        ran: list[str] = []
+        runners = {s: (lambda s=s: ran.append(s) or "ok") for s in pj.STEPS}
+
+        def wait() -> None:
+            for _ in range(100):
+                if pj.job_state(pj.STEP_ALL)["state"] != "running":
+                    break
+                time.sleep(0.02)
+
+        pj.start_all(runners, include_judge=False)
+        wait()
+        self.assertNotIn(pj.STEP_KPIS, ran)
+        self.assertIn(pj.STEP_INGEST, ran)
+
+        ran.clear()
+        pj.start_all(runners, include_judge=True)
+        wait()
+        self.assertIn(pj.STEP_JUDGE, ran)
+        self.assertIn(pj.STEP_KPIS, ran)
+        self.assertLess(ran.index(pj.STEP_JUDGE), ran.index(pj.STEP_KPIS))
+
+        ran.clear()
+        pj.start_all(runners, include_judge=False, only=[pj.STEP_KPIS])
+        wait()
+        self.assertEqual(ran, [pj.STEP_KPIS])
+
     def test_progress_rides_on_the_running_job_and_survives_completion(self) -> None:
         gate = threading.Event()
 

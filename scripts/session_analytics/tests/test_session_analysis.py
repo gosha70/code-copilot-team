@@ -334,3 +334,24 @@ class TestSessionAnalysis(RegistryResetTestCase):
         d = sa.all_analyses(self.db, self.session_id)
         self.assertEqual(set(d), set(C.ANALYSIS_KINDS))
         self.assertTrue(all(v is None for v in d.values()))
+
+    def test_selected_refs_resolve_to_store_ids(self) -> None:
+        # The selection names a session by its copilot id; the judge and
+        # KPI runners filter by the store id, so the page's scoped run
+        # needs the same mapping ingest wrote.
+        from session_analytics.relational import store as session_store
+
+        ref = self.db.query_one(
+            "SELECT session_id FROM copilot_session WHERE id = ?",
+            (self.session_id,),
+        )[0]
+        self.assertEqual(
+            session_store.resolve_selection(self.db, [ref, "missing"]),
+            ([self.session_id], ["missing"]),
+        )
+        self.assertEqual(session_store.resolve_selection(self.db, []), ([], []))
+        self.assertEqual(session_store.resolve_selection(self.db, [""]), ([], []))
+        self.assertEqual(
+            session_store.resolve_session_refs(self.db, [ref]),
+            [self.session_id],
+        )

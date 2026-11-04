@@ -295,7 +295,11 @@ export default function AnalysisPage() {
       // The same selection the Load step shows: "run all" must not
       // quietly read every transcript the user just narrowed away; and
       // the judge, when included, runs with the choices made below.
-      await api.runAll(includeJudge, { load: plan.body, judge: judgeOpts });
+      await api.runAll(includeJudge, {
+        load: plan.body,
+        judge: judgeOpts,
+        sessions: picked.size ? [...picked] : undefined,
+      });
       refresh();
     } catch (e) {
       setNote(String(e));
@@ -305,7 +309,11 @@ export default function AnalysisPage() {
   async function run(step: string, load?: LoadSelection) {
     setNote(null);
     try {
-      await api.runStep(step, { load, judge: judgeOpts });
+      await api.runStep(step, {
+        load,
+        judge: judgeOpts,
+        sessions: picked.size ? [...picked] : undefined,
+      });
       refresh();
     } catch (e) {
       setNote(String(e));
@@ -403,11 +411,13 @@ export default function AnalysisPage() {
         <div className="mt-3 pt-3 border-t border-slate-100">
           <Funnel counts={status.counts} />
           <p className="mt-1 text-xs text-slate-500">
-            Analysis runs over the whole loaded store
-            {status.store_reachable
-              ? ` (${status.counts.sessions.toLocaleString()} sessions)`
-              : ""}
-            .
+            {picked.size > 0
+              ? `Analysis will run on the ${picked.size} selected session${picked.size === 1 ? "" : "s"}; the graph step still rebuilds the whole store, and optional processing is skipped.`
+              : `Analysis runs over the whole loaded store${
+                  status.store_reachable
+                    ? ` (${status.counts.sessions.toLocaleString()} sessions)`
+                    : ""
+                }.`}
           </p>
         </div>
       </Card>
@@ -475,7 +485,9 @@ export default function AnalysisPage() {
             >
               {allRunning
                 ? "Running all…"
-                : `Run all steps · ${analysisCount.toLocaleString()} sessions`}
+                : picked.size > 0
+                  ? `Run all steps · ${picked.size} selected`
+                  : `Run all steps · ${analysisCount.toLocaleString()} sessions`}
             </button>
           </div>
         </div>
@@ -484,9 +496,10 @@ export default function AnalysisPage() {
           Run all runs the flow steps and the optional ones: Load sessions → Link
           benchmark runs → Build knowledge graph → Embed sessions → Find similar
           sessions → LLM judge → Compute KPIs. It loads the current selection
-          first, then analyses every loaded session. The LLM judge and
-          Compute KPIs run only when the judge is checked — 5 steps unchecked,
-          7 checked.
+          first, then analyses the selected sessions (or every loaded session
+          when nothing is selected); with a selection, optional processing is
+          skipped. The LLM judge and Compute KPIs run only when the judge is
+          checked — 5 steps unchecked, 7 checked.
         </p>
 
         <p className="text-sm text-slate-600 mt-2">{step.blurb}</p>
