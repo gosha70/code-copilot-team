@@ -1,6 +1,11 @@
 "use client";
 
-import { DiscoveredSessions, LoadSelection as Selection } from "@/lib/api";
+import { useMemo, useState, type ReactNode } from "react";
+import {
+  DiscoveredSession,
+  DiscoveredSessions,
+  LoadSelection as Selection,
+} from "@/lib/api";
 
 // WHICH SESSIONS TO LOAD — the owner's requirement from the Kiro
 // Analyzer reference: choose before reading. "Load sessions" used to
@@ -22,6 +27,43 @@ export function formatBytes(n: number): string {
   if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
   if (n >= 1024) return `${Math.round(n / 1024)} KB`;
   return `${n} B`;
+}
+
+export type LoadSortKey = "copilot" | "source" | "modified" | "bytes" | "state";
+
+function sortValue(s: DiscoveredSession, key: LoadSortKey): string | number {
+  switch (key) {
+    case "copilot":
+      return s.copilot.toLowerCase();
+    case "source":
+      return s.source.toLowerCase();
+    case "modified":
+      return s.modified_epoch;
+    case "bytes":
+      return s.bytes;
+    case "state":
+      return s.loaded ? 1 : 0;
+  }
+}
+
+/** Pure row ordering for the load table — the panel's headers use it,
+ *  and the states check asserts it. Equal keys keep the listing's
+ *  newest-first order, so a sort never scrambles ties. */
+export function sortSessions(
+  rows: readonly DiscoveredSession[],
+  key: LoadSortKey,
+  dir: "asc" | "desc",
+): DiscoveredSession[] {
+  const sign = dir === "asc" ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const x = sortValue(a, key);
+    const y = sortValue(b, key);
+    const base =
+      typeof x === "number" && typeof y === "number"
+        ? x - y
+        : String(x).localeCompare(String(y));
+    return base !== 0 ? sign * base : b.modified_epoch - a.modified_epoch;
+  });
 }
 
 /** What the Load button will send, and how to label it. Pure, so the
@@ -58,6 +100,7 @@ export function loadPlan(
 export default function LoadSelectionPanel({
   listing,
   error,
+  status,
   since,
   limit,
   picked,
@@ -71,6 +114,8 @@ export default function LoadSelectionPanel({
 }: {
   listing: DiscoveredSessions | null;
   error: string | null;
+  /** The ingest job's outcome, shown beside the listing it describes. */
+  status?: { text: string; failed: boolean } | null;
   since: string;
   limit: string;
   picked: ReadonlySet<string>;
@@ -84,6 +129,65 @@ export default function LoadSelectionPanel({
 }) {
   const plan = loadPlan(listing, picked, since, limit);
   const large = plan.bytes >= LARGE_LOAD_BYTES;
+  // Until the listing arrives the panel knows nothing — no count, no verdict.
+  const checking = listing === null && error === null;
+  // The listing arrives newest-first; the headers reorder it without
+  // changing what "new", the counts or the selections mean.
+  const [sort, setSort] = useState<{ key: LoadSortKey; dir: "asc" | "desc" }>({
+    key: "modified",
+    dir: "desc",
+  });
+  const rows = useMemo(
+    () => sortSessions(listing?.sessions ?? [], sort.key, sort.dir),
+    [listing, sort],
+  );
+  function sortBy(key: LoadSortKey) {
+    setSort((s) =>
+      s.key === key
+        ? { key, dir: s.dir === "asc" ? "desc" : "asc" }
+        : {
+            key,
+            dir:
+              key === "copilot" || key === "source" || key === "state"
+                ? "asc"
+                : "desc",
+          },
+    );
+  }
+  function SortTh({
+    k,
+    children,
+    right = false,
+  }: {
+    k: LoadSortKey;
+    children: ReactNode;
+    right?: boolean;
+  }) {
+    const active = sort.key === k;
+    return (
+      <th
+        className={"px-2 py-1 " + (right ? "text-right" : "")}
+        aria-sort={
+          active ? (sort.dir === "asc" ? "ascending" : "descending") : undefined
+        }
+      >
+        <button
+          type="button"
+          onClick={() => sortBy(k)}
+          title={`Sort by ${String(children)}`}
+          className={
+            "inline-flex items-center gap-1 hover:text-slate-800 " +
+            (active ? "font-semibold text-slate-800" : "")
+          }
+        >
+          {children}
+          <span className="text-[10px] w-2">
+            {active ? (sort.dir === "asc" ? "▲" : "▼") : ""}
+          </span>
+        </button>
+      </th>
+    );
+  }
 
   return (
     <div className="mt-3 border border-slate-200 rounded">
@@ -115,6 +219,15 @@ export default function LoadSelectionPanel({
             {formatBytes(listing.total_bytes)} on disk
           </span>
         )}
+        {status && (
+          <span
+            className={
+              "text-xs " + (status.failed ? "text-rose-700" : "text-slate-500")
+            }
+          >
+            {status.text}
+          </span>
+        )}
         <span className="ml-auto flex items-center gap-2">
           <button
             type="button"
@@ -135,6 +248,13 @@ export default function LoadSelectionPanel({
         </span>
       </div>
 
+      <p className="border-t border-slate-100 px-3 py-1.5 text-xs text-slate-500">
+        <span className="font-medium text-slate-600">Loaded</span> = already in
+        the Studio database.{" "}
+        <span className="font-medium text-slate-600">New</span> = discovered but
+        not read yet. Analysis only sees loaded sessions.
+      </p>
+
       {error && <p className="text-xs text-rose-700 px-3 py-2">{error}</p>}
       {!listing && !error && (
         <p className="text-xs text-slate-500 px-3 py-2">Listing sessions…</p>
@@ -151,15 +271,15 @@ export default function LoadSelectionPanel({
             <thead className="text-slate-500 text-left sticky top-0 bg-white">
               <tr>
                 <th className="px-3 py-1 w-6"></th>
-                <th className="px-2 py-1">copilot</th>
-                <th className="px-2 py-1">source</th>
-                <th className="px-2 py-1">modified</th>
-                <th className="px-2 py-1 text-right">size</th>
-                <th className="px-2 py-1">state</th>
+                <SortTh k="copilot">copilot</SortTh>
+                <SortTh k="source">source</SortTh>
+                <SortTh k="modified">modified</SortTh>
+                <SortTh k="bytes" right>size</SortTh>
+                <SortTh k="state">state</SortTh>
               </tr>
             </thead>
             <tbody>
-              {listing.sessions.map((s) => (
+              {rows.map((s) => (
                 <tr
                   key={`${s.copilot}:${s.session_id}`}
                   className="border-t border-slate-100"
@@ -214,20 +334,22 @@ export default function LoadSelectionPanel({
         <button
           type="button"
           onClick={() => onLoad(plan.body)}
-          disabled={running || plan.count === 0}
+          disabled={running || checking || plan.count === 0}
           className="bg-slate-800 text-white text-sm px-4 py-1.5 rounded hover:bg-slate-700 disabled:opacity-50"
         >
-          {running ? "Loading…" : plan.label}
+          {running ? "Loading…" : checking ? "Checking…" : plan.label}
         </button>
         <span
           className={"text-xs " + (large ? "text-amber-800" : "text-slate-500")}
         >
-          {plan.count > 0
-            ? `${formatBytes(plan.bytes)} to read` +
-              (large
-                ? " — a large load; narrow it if this machine is short on memory"
-                : "")
-            : "nothing to load — every session under these filters is already loaded"}
+          {checking
+            ? "listing the sessions this would read…"
+            : plan.count > 0
+              ? `${formatBytes(plan.bytes)} to read` +
+                (large
+                  ? " — a large load; narrow it if this machine is short on memory"
+                  : "")
+              : "nothing to load — every session under these filters is already loaded"}
         </span>
       </div>
     </div>

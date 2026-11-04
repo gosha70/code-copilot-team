@@ -598,6 +598,12 @@ try {
   const nothing = ls.loadPlan({ ...disc, new: 0, new_bytes: 0 }, new Set(), "", "");
   if (nothing.count !== 0) fail("all-loaded listing still offers a load");
   else console.log("  ok  all loaded → nothing to load");
+  const bySize = ls.sortSessions(disc.sessions, "bytes", "desc");
+  if (bySize.map((s) => s.session_id).join(",") !== "b,a") fail(`size sort wrong: ${bySize.map((s) => s.session_id)}`);
+  else if (ls.sortSessions(disc.sessions, "source", "asc").map((s) => s.session_id).join(",") !== "b,a") fail("source sort wrong");
+  else if (ls.sortSessions(disc.sessions, "state", "asc").map((s) => s.session_id).join(",") !== "a,b") fail("state sort wrong");
+  else if (ls.sortSessions(disc.sessions, "modified", "desc").map((s) => s.session_id).join(",") !== "a,b") fail("modified sort wrong");
+  else console.log("  ok  load rows sort by size, source, state and modified");
   const panelProps = {
     listing: disc, error: null, since: "", limit: "", picked: new Set(["b"]), running: false,
     onSince() {}, onLimit() {}, onTogglePick() {}, onPickNew() {}, onClearPicks() {}, onLoad() {},
