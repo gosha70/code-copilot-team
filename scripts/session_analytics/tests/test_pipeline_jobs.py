@@ -135,6 +135,34 @@ class TestSingleFlight(unittest.TestCase):
         wait()
         self.assertEqual(ran, [pj.STEP_KPIS])
 
+    def test_run_all_starts_from_a_clean_slate(self) -> None:
+        # Owner's report: a restarted run showed Compute KPIs done beside
+        # an LLM judge that had not run — a stale "done" from an earlier
+        # run sitting next to a step this run had not reached. The steps
+        # the run will touch start idle, and a step the run never reaches
+        # stays idle, not done.
+        pj._jobs[pj.STEP_JUDGE] = {"state": "done", "message": "old judge"}
+        pj._jobs[pj.STEP_KPIS] = {"state": "done", "message": "old kpis"}
+
+        def fail() -> str:
+            raise RuntimeError("5 judge attempts failed")
+
+        runners = {s: (lambda: "ok") for s in pj.STEPS}
+        runners[pj.STEP_JUDGE] = fail
+
+        def wait() -> None:
+            for _ in range(200):
+                if pj.job_state(pj.STEP_ALL)["state"] != "running":
+                    break
+                time.sleep(0.02)
+
+        pj.start_all(runners, include_judge=True)
+        wait()
+        self.assertEqual(pj.job_state(pj.STEP_JUDGE)["state"], "failed")
+        # Never reached — and, crucially, NOT the stale "done".
+        self.assertEqual(pj.job_state(pj.STEP_KPIS)["state"], "idle")
+        self.assertIn("stopped at 'judge'", pj.job_state(pj.STEP_ALL)["message"])
+
     def test_progress_rides_on_the_running_job_and_survives_completion(self) -> None:
         gate = threading.Event()
 
