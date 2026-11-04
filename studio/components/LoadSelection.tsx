@@ -272,6 +272,10 @@ export default function LoadSelectionPanel({
               <tr>
                 <th className="px-3 py-1 w-6"></th>
                 <SortTh k="copilot">copilot</SortTh>
+                {/* The source column is the transcript's FOLDER name
+                    (the project); several sessions share it. The native
+                    session id is what identifies a row. */}
+                <th className="px-2 py-1">session</th>
                 <SortTh k="source">source</SortTh>
                 <SortTh k="modified">modified</SortTh>
                 <SortTh k="bytes" right>size</SortTh>
@@ -294,6 +298,12 @@ export default function LoadSelectionPanel({
                     />
                   </td>
                   <td className="px-2 py-1 text-slate-700">{s.copilot}</td>
+                  <td
+                    className="px-2 py-1 text-slate-600 font-mono truncate max-w-[9rem]"
+                    title={s.session_id}
+                  >
+                    {s.session_id.length > 8 ? `${s.session_id.slice(0, 8)}…` : s.session_id}
+                  </td>
                   <td
                     className="px-2 py-1 text-slate-700 font-mono truncate max-w-[22rem]"
                     title={s.session_id}
