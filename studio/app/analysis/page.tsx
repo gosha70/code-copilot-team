@@ -462,34 +462,6 @@ export default function AnalysisPage() {
               Retry this step
             </button>
           )}
-          <div className="ml-auto flex items-center gap-3">
-            <label className="flex items-center gap-1.5 text-sm text-slate-600">
-              <input
-                type="checkbox"
-                checked={includeJudge}
-                onChange={(e) => setIncludeJudge(e.target.checked)}
-                className="accent-blue-600"
-              />
-              include LLM judge
-            </label>
-            <button
-              onClick={runAll}
-              disabled={allRunning}
-              title={
-                "Load sessions -> Link benchmark runs -> Build knowledge graph " +
-                "-> Embed sessions -> Find similar sessions -> LLM judge -> " +
-                "Compute KPIs. The judge and the KPI rollup run only when the " +
-                "judge is checked: 5 steps unchecked, 7 checked."
-              }
-              className="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700 disabled:opacity-50"
-            >
-              {allRunning
-                ? "Running all…"
-                : picked.size > 0
-                  ? `Run all steps · ${picked.size} selected`
-                  : `Run all steps · ${analysisCount.toLocaleString()} sessions`}
-            </button>
-          </div>
         </div>
 
         <p className="text-xs text-slate-500 mt-2">
@@ -659,6 +631,32 @@ export default function AnalysisPage() {
         )}
 
         <div className="flex items-center gap-2 mt-4 flex-wrap">
+          <button
+            onClick={runAll}
+            disabled={allRunning}
+            title={
+              "Load sessions -> Link benchmark runs -> Build knowledge graph " +
+              "-> Embed sessions -> Find similar sessions -> LLM judge -> " +
+              "Compute KPIs. The judge and the KPI rollup run only when the " +
+              "judge is checked: 5 steps unchecked, 7 checked."
+            }
+            className="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700 disabled:opacity-50"
+          >
+            {allRunning
+              ? "Running all…"
+              : picked.size > 0
+                ? `Run all steps · ${picked.size} selected`
+                : `Run all steps · ${analysisCount.toLocaleString()} sessions`}
+          </button>
+          <label className="flex items-center gap-1.5 text-sm text-slate-600 mr-2">
+            <input
+              type="checkbox"
+              checked={includeJudge}
+              onChange={(e) => setIncludeJudge(e.target.checked)}
+              className="accent-blue-600"
+            />
+            include LLM judge
+          </label>
           {step.id !== "ingest" && (
             <button
               onClick={() => run(step.id)}
