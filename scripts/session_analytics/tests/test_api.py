@@ -993,6 +993,54 @@ class TestApi(RegistryResetTestCase):
             self.assertGreater(n, 0, f"session {sid} got no labels: {per_session}")
             self.assertLessEqual(n, 5, f"session {sid} exceeded its cap: {per_session}")
 
+    def test_a_judge_that_labels_nothing_fails_the_step(self) -> None:
+        # A missing model made every judge call 404 and the step still
+        # reported "done, 0 labelled" — a success report for work that was
+        # not done. Zero labels out of a non-zero attempt count is a
+        # failure, with the last reason in the message.
+        from session_analytics.judge.contracts import PARSE_BACKEND_ERROR, TurnLabels
+        from session_analytics.judge.registry import register_judge
+
+        class _Dead:
+            judge_id = "dead"
+
+            def __init__(self, model: str = "") -> None:
+                self._model = model or "m"
+
+            def rate_turn(self, ctx, rubric):
+                return TurnLabels(
+                    bool_labels={l: None for l in rubric.bool_labels},
+                    sentiment=None,
+                    interaction_quality=None,
+                    parse_status=PARSE_BACKEND_ERROR,
+                    judge_id=self.judge_id,
+                    judge_model=self._model,
+                    metadata={"error": "HTTP 404: model 'm' not found"},
+                )
+
+            def complete(self, prompt, *, timeout=120):  # pragma: no cover
+                raise NotImplementedError
+
+        register_judge("dead", _Dead)
+        r = self.client.post(
+            "/api/pipeline/run/judge",
+            json={"judge": {"judge": "dead:m", "limit": 3}},
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        for _ in range(200):
+            job = next(
+                x
+                for x in self.client.get("/api/pipeline/status").json()["steps"]
+                if x["id"] == "judge"
+            )["job"]
+            if job["state"] != "running":
+                break
+            _time.sleep(0.05)
+        self.assertEqual(job["state"], "failed", job)
+        self.assertIn("no turn could be judged", job["message"])
+        self.assertIn("check the judge under Settings", job["message"])
+        self.assertIn("HTTP 404", job["message"])
+
     def test_benchmark_payload_names_the_runs_root_and_the_link_step_runs_it(self) -> None:
         # The Benchmark page: with no runs root the page says so; with one,
         # "Link benchmark runs" is the correlate step, run from the page.

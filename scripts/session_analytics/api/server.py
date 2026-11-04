@@ -671,11 +671,26 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
                 )
             if stats.total == 0:
                 return "nothing to judge: every turn with text is already labelled" + missing_note
-            msg = f"labelled {stats.parse_ok} of {stats.total} turns with {stats.judge or 'the configured judge'}"
+            failures = ""
             if stats.parse_failed:
-                msg += f"; {stats.parse_failed} failed"
+                failures = f"{stats.parse_failed} of {stats.total} judge attempts failed"
                 if stats.last_error:
-                    msg += f" (last: {stats.last_error})"
+                    failures += f" (last: {stats.last_error})"
+            if stats.parse_ok == 0:
+                # A judge that produced no label at all did not do the
+                # work: "done, 0 labelled" hides a broken judge (a
+                # missing model, an unreachable backend). Fail the step
+                # so the error is what the user sees.
+                raise RuntimeError(
+                    "no turn could be judged: "
+                    + failures
+                    + " — check the judge under Settings"
+                )
+            msg = f"labelled {stats.parse_ok} of {stats.total} turns with {stats.judge or 'the configured judge'}"
+            if failures:
+                # A mostly failed run must not read as a clean success:
+                # the failure count leads, the label count follows.
+                msg = failures + f"; {msg}"
             return msg + missing_note
 
         def _ingest() -> str:

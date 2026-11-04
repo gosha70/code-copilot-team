@@ -359,6 +359,12 @@ export default function AnalysisPage() {
       (models.backend === "openai" &&
         models.url.startsWith("http") &&
         !isPrivateUrl(models.url)));
+  // A "done" judge that failed most of its attempts is not a clean run:
+  // the message is rendered in the funnel's failure colour.
+  const judgeFailures =
+    step.id === "judge" && step.job.progress && "parse_failed" in step.job.progress
+      ? Number(step.job.progress.parse_failed) || 0
+      : 0;
   const coreSteps = status.steps.filter((s) => CORE_STEP_IDS.includes(s.id));
   const optionalSteps = status.steps.filter((s) =>
     OPTIONAL_STEP_IDS.includes(s.id),
@@ -609,7 +615,9 @@ export default function AnalysisPage() {
           <p
             className={
               "text-xs mt-2 " +
-              (step.job.state === "failed" ? "text-rose-700" : "text-slate-600")
+              (step.job.state === "failed" || judgeFailures > 0
+                ? "text-rose-700"
+                : "text-slate-600")
             }
           >
             {step.job.message}
