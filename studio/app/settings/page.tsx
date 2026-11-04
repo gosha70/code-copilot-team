@@ -310,7 +310,7 @@ function SettingsGroup({
             width="10"
             height="6"
             className={
-              "shrink-0 text-slate-500 transition-transform " +
+              "shrink-0 text-slate-600 transition-transform " +
               (open ? "rotate-180" : "")
             }
           >
@@ -327,7 +327,7 @@ function SettingsGroup({
       </h3>
       {open && (
         <div id={id} className="px-4 pb-4">
-          <p className="text-xs text-slate-500 mb-3">{blurb}</p>
+          <p className="text-xs text-slate-600 mb-3">{blurb}</p>
           {children}
         </div>
       )}
@@ -559,7 +559,7 @@ export default function SettingsPage() {
       </div>
 
       {cfg.legacy_db_key && (
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-slate-600">
           Your <code>.env</code> names the database with the old key{" "}
           <code>CCT_SA_DSN</code>; it still works, and Save writes it as{" "}
           <code>CCT_SA_DB</code>.
@@ -588,7 +588,7 @@ export default function SettingsPage() {
       <div className="flex items-start justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold text-slate-700">Configuration</h2>
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-slate-600">
             .env — shared with the CLI. One Save applies every group below;
             the tests read the saved file, so Save first.
           </p>
@@ -646,7 +646,7 @@ export default function SettingsPage() {
                         "flex items-center justify-center " +
                         (openHelp === f.key
                           ? "border-blue-500 bg-blue-500 text-white"
-                          : "border-slate-300 bg-white text-slate-500 hover:border-slate-400 hover:text-slate-700")
+                          : "border-slate-300 bg-white text-slate-600 hover:border-slate-400 hover:text-slate-700")
                       }
                     >
                       ?
@@ -688,7 +688,7 @@ export default function SettingsPage() {
                 ) : f.key === "CCT_SA_EMBED_MODEL" && !embedOther && embedListState === "loading" ? (
                   <select
                     disabled
-                    className="border border-slate-300 bg-slate-50 text-slate-500 rounded px-2 py-1 text-sm w-full font-mono"
+                    className="border border-slate-300 bg-slate-50 text-slate-600 rounded px-2 py-1 text-sm w-full font-mono"
                   >
                     <option>{values[f.key] ? `${values[f.key]} — listing the server's models…` : "listing the server's models…"}</option>
                   </select>
@@ -736,7 +736,7 @@ export default function SettingsPage() {
                       )}
                       <option value="__other__">Other…</option>
                     </select>
-                    <span className="shrink-0 text-xs text-slate-500">
+                    <span className="shrink-0 text-xs text-slate-600">
                       {embedModelList.length === 1 ? "1 embedding model" : `${embedModelList.length} embedding models`} on the server
                       {embedModels?.not_embedding?.length
                         ? ` · ${embedModels.not_embedding.length} chat model${embedModels.not_embedding.length === 1 ? "" : "s"} left out`
@@ -769,7 +769,7 @@ export default function SettingsPage() {
                       )}
                       <option value="__other__">Other…</option>
                     </select>
-                    <span className="shrink-0 text-xs text-slate-500">
+                    <span className="shrink-0 text-xs text-slate-600">
                       {modelList.length === 1 ? "1 model" : `${modelList.length} models`} on the server
                     </span>
                   </div>
@@ -787,7 +787,7 @@ export default function SettingsPage() {
                     onChange={(e) => set(f.key, e.target.value)}
                   />
                   {f.key === "CCT_SA_JUDGE_MODEL" && models && (
-                    <span className="shrink-0 self-center text-xs text-slate-500">
+                    <span className="shrink-0 self-center text-xs text-slate-600">
                       {modelOther
                         ? "typed name"
                         : effectiveBackend !== savedBackend
@@ -815,7 +815,7 @@ export default function SettingsPage() {
                     {m.help && <p>{m.help}</p>}
                     {m.example && (
                       <p className="mt-1">
-                        <span className="text-slate-500">e.g.</span>{" "}
+                        <span className="text-slate-600">e.g.</span>{" "}
                         <code className="bg-white border border-slate-200 px-1 rounded font-mono">
                           {m.example}
                         </code>
@@ -853,7 +853,7 @@ export default function SettingsPage() {
                       </button>
                       <ProbeBox result={judgeProbe} />
                     </div>
-                    <p className="mt-3 text-xs text-slate-500">
+                    <p className="mt-3 text-xs text-slate-600">
                       Judge in effect:{" "}
                       <code className="bg-slate-100 text-slate-700 px-1 rounded">{models?.configured.spec ?? cfg.judge_default}</code>
                       {models?.configured.source === "settings" ? " (from your saved settings)" : " (the packaged default)"}
@@ -878,7 +878,7 @@ export default function SettingsPage() {
                       </button>
                       <ProbeBox result={embedProbe} />
                     </div>
-                    <p className="mt-3 text-xs text-slate-500">
+                    <p className="mt-3 text-xs text-slate-600">
                       Embedding in effect:{" "}
                       <code className="bg-slate-100 text-slate-700 px-1 rounded">
                         {embedModels?.configured.model_set ? embedModels.configured.spec : "none — choose an embedding model above"}
@@ -893,7 +893,7 @@ export default function SettingsPage() {
         </div>
 
       <Card title="Effective per-project redaction">
-        <p className="text-xs text-slate-500 mb-3">
+        <p className="text-xs text-slate-600 mb-3">
           Read-only — the redaction mode each project’s already-ingested sessions were recorded
           with. To change redaction for future ingests, edit the per-project config file.
         </p>
@@ -902,11 +902,11 @@ export default function SettingsPage() {
         ) : projects === null ? (
           <Loading />
         ) : projects.length === 0 ? (
-          <p className="text-sm text-slate-500">No per-project data yet — ingest some sessions.</p>
+          <p className="text-sm text-slate-600">No per-project data yet — ingest some sessions.</p>
         ) : (
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-left text-slate-500 border-b border-slate-200">
+              <tr className="text-left text-slate-600 border-b border-slate-200">
                 <th className="py-1 font-medium">Project</th>
                 <th className="py-1 font-medium text-right">Sessions</th>
                 <th className="py-1 font-medium">Effective redaction</th>
@@ -923,7 +923,7 @@ export default function SettingsPage() {
                     {p.effective_redaction_mode === "mixed" ? (
                       <span>
                         mixed{" "}
-                        <span className="text-xs text-slate-500">
+                        <span className="text-xs text-slate-600">
                           (
                           {Object.entries(p.redaction_modes)
                             .map(([mode, count]) => `${mode}: ${count}`)
