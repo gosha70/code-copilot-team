@@ -700,7 +700,6 @@ try {
     "http://172.20.1.1:8000",
     "http://spark:8001/v1",
     "http://gpu-1.lan:8000",
-    "http://spark.tail1234.ts.net:8001",
     "http://169.254.10.20:8001", // IPv4 link-local
     "http://100.101.102.103:8001/v1", // CGNAT / Tailscale
     "http://[fd12:3456::1]:8001", // IPv6 unique-local
@@ -712,6 +711,7 @@ try {
     "http://172.32.0.1:8000", // just outside 172.16/12
     "http://100.128.0.1:8001", // just outside 100.64/10
     "http://[2001:db8::1]:8000", // public IPv6
+    "http://spark.tail1234.ts.net:8001", // Funnel shares the suffix: warns
     "http://8.8.8.8",
     "not a url",
   ];

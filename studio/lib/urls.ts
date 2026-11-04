@@ -2,11 +2,16 @@
 // on this machine or the LAN (a DGX Spark at 192.168.x, spark.local)
 // keeps transcript text on the network; anything else is off it.
 
-/** localhost, a .local / .lan / .ts.net / single-label hostname (resolved
- *  through the local search domain — a public name always carries a
- *  TLD), an RFC 1918 / link-local / CGNAT address, or an IPv6
- *  unique-local / link-local literal: text that goes there stays on this
- *  network. A dotted public name or a public address does not. */
+/** localhost, a .local / .lan / single-label hostname (resolved through
+ *  the local search domain — a public name always carries a TLD), an
+ *  RFC 1918 / link-local / CGNAT address, or an IPv6 unique-local /
+ *  link-local literal: text that goes there stays on this network. A
+ *  dotted public name or a public address does not.
+ *
+ *  NOT .ts.net: a Tailscale Funnel URL shares that suffix and is public,
+ *  so the name proves neither your tailnet nor a private path — it
+ *  warns. A Tailscale-reached host is local by its CGNAT address
+ *  (100.64.0.0/10) or a private name, which is the reliable signal. */
 export function isPrivateUrl(url: string): boolean {
   let host = "";
   try {
@@ -20,8 +25,7 @@ export function isPrivateUrl(url: string): boolean {
     host === "[::1]" ||
     host.endsWith(".local") ||
     host.endsWith(".localhost") ||
-    host.endsWith(".lan") ||
-    host.endsWith(".ts.net")
+    host.endsWith(".lan")
   )
     return true;
   // "spark", "nas", "gpu-1": no dot and no colon (IPv6 keeps its
