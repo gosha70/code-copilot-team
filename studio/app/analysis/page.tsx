@@ -342,6 +342,11 @@ export default function AnalysisPage() {
   // plus the sessions this run will read (the selection, else every new
   // session under the filters).
   const analysisCount = status.counts.sessions + (listing ? plan.count : 0);
+  // The page must not offer to start a run while the session listing is
+  // still resolving: the count and the load set are only known after it
+  // arrives, and a run started before that would load an unfiltered set
+  // under a stale label.
+  const listingPending = listing === null && listingError === null;
   // The judge turn cap is PER SELECTED SESSION (whole-store runs keep a
   // single total), so the most a run can judge is the product — the
   // number that decides cost on a hosted judge.
@@ -669,7 +674,7 @@ export default function AnalysisPage() {
         <div className="flex items-center gap-2 mt-4 flex-wrap">
           <button
             onClick={runAll}
-            disabled={allRunning}
+            disabled={allRunning || listing === null}
             title={
               "Load sessions -> Link benchmark runs -> Build knowledge graph " +
               "-> Embed sessions -> Find similar sessions -> LLM judge -> " +
@@ -681,13 +686,17 @@ export default function AnalysisPage() {
           >
             {allRunning
               ? "Running all…"
-              : includeJudge
-                ? picked.size > 0
-                  ? `Run all steps · ${picked.size} selected`
-                  : `Run all steps · ${analysisCount.toLocaleString()} sessions`
-                : picked.size > 0
-                  ? `Run without the judge · ${picked.size} selected`
-                  : `Run without the judge · ${analysisCount.toLocaleString()} sessions`}
+              : listing === null
+                ? listingPending
+                  ? "Checking sessions…"
+                  : "Run all steps"
+                : includeJudge
+                  ? picked.size > 0
+                    ? `Run all steps · ${picked.size} selected`
+                    : `Run all steps · ${analysisCount.toLocaleString()} sessions`
+                  : picked.size > 0
+                    ? `Run without the judge · ${picked.size} selected`
+                    : `Run without the judge · ${analysisCount.toLocaleString()} sessions`}
           </button>
           <label className="flex items-center gap-1.5 text-sm text-slate-600 mr-2">
             <input
