@@ -691,12 +691,12 @@ try {
   // ── which judge URLs count as local ───────────────────────────────
   console.log("\nlocal judge urls:");
   const { isPrivateUrl } = await import(pathToFileURL(join(out, "lib/urls.js")));
-  const local = ["http://localhost:1234/v1", "http://127.0.0.1:8001", "http://192.168.1.23:8001/v1", "http://spark-c2e5.local:8001", "http://10.0.0.5:8000", "http://172.20.1.1:8000"];
+  const local = ["http://localhost:1234/v1", "http://127.0.0.1:8001", "http://192.168.1.23:8001/v1", "http://spark-c2e5.local:8001", "http://10.0.0.5:8000", "http://172.20.1.1:8000", "http://spark:8001/v1", "http://gpu-1.lan:8000"];
   const remote = ["https://api.openai.com/v1", "http://172.32.0.1:8000", "http://8.8.8.8", "not a url"];
   const wrongLocal = local.filter((u) => !isPrivateUrl(u));
   const wrongRemote = remote.filter((u) => isPrivateUrl(u));
   if (wrongLocal.length || wrongRemote.length) fail(`isPrivateUrl wrong for ${JSON.stringify([...wrongLocal, ...wrongRemote])}`);
-  else console.log("  ok  LAN/.local/loopback are local; hosted and public addresses are not");
+  else console.log("  ok  LAN/.local/.lan/bare names are local; hosted and public addresses are not");
 
   // ── response time card ─────────────────────────────────────────────
   console.log("\nresponse time:");
