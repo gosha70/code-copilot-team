@@ -173,6 +173,7 @@ export interface DashboardLatency extends LatencySummary {
 /** Columns the sessions list can be ordered by (the grid's headers);
  *  the server's closed map — anything else is a 400. */
 export type SessionSort =
+  | "id"
   | "started_at"
   | "copilot"
   | "project_path"
