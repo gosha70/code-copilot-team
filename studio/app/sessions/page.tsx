@@ -159,6 +159,7 @@ function Sessions() {
                 <Th column="favorite" className="py-2 pr-0.5" label={TAG_LABEL.favorite}><TagHeaderIcon tag="favorite" /></Th>
                 <Th column="todo" className="pr-0.5" label={TAG_LABEL.todo}><TagHeaderIcon tag="todo" /></Th>
                 <Th column="analyzed" className="pr-3" label={TAG_LABEL.analyzed}><TagHeaderIcon tag="analyzed" /></Th>
+                <Th column="id" className="pr-3">Session</Th>
                 <Th column="copilot" className="pr-3">Copilot</Th>
                 <Th column="project_path" className="pr-3">Project</Th>
                 <Th column="model" className="pr-3">Model</Th>
@@ -178,6 +179,15 @@ function Sessions() {
                       onToggle={(tag, on) => toggleTag(s.id, tag, on, tagOverrides[s.id] ?? s.tags)}
                     />
                   </td>
+                  <td className="py-2 pr-3 tabular-nums">
+                    <Link
+                      href={`/sessions/${s.id}`}
+                      className="text-blue-600 hover:underline"
+                      title="Open this session"
+                    >
+                      {s.id}
+                    </Link>
+                  </td>
                   <td className="py-2">
                     <Link href={`/sessions/${s.id}`} className="text-blue-600 hover:underline">
                       {s.copilot}
@@ -196,7 +206,7 @@ function Sessions() {
               ))}
               {data.sessions.length === 0 && (
                 <tr>
-                  <td colSpan={11} className="py-6 text-center text-slate-500">
+                  <td colSpan={12} className="py-6 text-center text-slate-500">
                     {data.excluded_noise > 0
                       ? `No sessions worth showing — ${data.excluded_noise.toLocaleString()} excluded as noise (toggle above).`
                       : "No sessions. Run the Analysis page's Load sessions step."}

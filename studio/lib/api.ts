@@ -173,6 +173,7 @@ export interface DashboardLatency extends LatencySummary {
 /** Columns the sessions list can be ordered by (the grid's headers);
  *  the server's closed map — anything else is a 400. */
 export type SessionSort =
+  | "id"
   | "started_at"
   | "copilot"
   | "project_path"
@@ -703,7 +704,10 @@ export interface TuningFinding {
   evidence_turns: number[];
   explanation: string;
   recommendation: string;
-  config_change: { file: string; diff: string } | null;
+  /** file_found is the project check on the suggested path: true when it
+   *  exists, false when it does not, null when the project is unavailable
+   *  so the path could not be checked. */
+  config_change: { file: string; diff: string; file_found?: boolean | null } | null;
 }
 export interface CoachingPrompt {
   turn: number | null;
@@ -717,7 +721,9 @@ export interface Inefficiency {
   wasted_turns: number | null;
   wasted_seconds: number | null;
   lever: "SCRIPT" | "HOOK" | "SKILL" | "STEERING";
-  starter: { file: string; content: string } | null;
+  /** A starter may be a new file: true when it exists or its directory
+   *  does, false when neither does, null when the project is unavailable. */
+  starter: { file: string; content: string; file_found?: boolean | null } | null;
 }
 export interface AnalysisResult {
   summary: string;
@@ -807,6 +813,36 @@ export interface BenchmarkSummary {
 export interface RoutingEvidenceSettings {
   configured: boolean;
   root_count: number;
+}
+
+/** The runtime routing registry (~/.code-copilot-team/routing.toml),
+ *  summarised read-only. Credentials, endpoints and any field outside the
+ *  server's whitelist never reach the browser. */
+export interface RoutingRegistryProfile {
+  id: string;
+  backend: string | null;
+  provider: string | null;
+  model: string | null;
+  capability_tier: string | null;
+  priority: number | null;
+  roles: string[];
+  quota_pool: string | null;
+  data_policy: string | null;
+}
+
+export interface RoutingRegistryPayload {
+  path: string;
+  configured: boolean;
+  valid: boolean;
+  error: string | null;
+  schema_version: number | null;
+  policy: {
+    enabled: boolean | null;
+    preferred_profile: string | null;
+    failback: string | null;
+  } | null;
+  route_classes: Record<string, string[]>;
+  profiles: RoutingRegistryProfile[];
 }
 
 export interface RoutingEvidenceSetSummary {
@@ -1245,6 +1281,8 @@ export interface PipelineRun {
   load?: LoadSelection;
   judge?: JudgeOptions;
   steps?: string[];
+  /** Copilot session ids to scope the judge and KPI steps to. */
+  sessions?: string[];
 }
 
 /** Running counts from the embed step. */
@@ -1926,6 +1964,8 @@ export const api = {
       `/api/judge/agreement?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`,
     ),
   // routing-shadow (#261): read-only shadow-mode surfaces.
+  routingRegistry: () =>
+    get<RoutingRegistryPayload>("/api/routing/registry"),
   routingEvidence: () =>
     get<{ sets: RoutingEvidenceEntry[] }>("/api/routing/evidence"),
   routingEvidenceSet: (setId: string) =>

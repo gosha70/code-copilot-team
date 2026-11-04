@@ -16,7 +16,11 @@ from session_analytics.config import ENV_NOISE_MIN_DURATION
 from session_analytics.ingest.pipeline import ingest
 from session_analytics.routing_calibration import GATE_IDS
 
-from session_analytics.tests.support import CLAUDE_CODE_ROOT, RegistryResetTestCase
+from session_analytics.tests.support import (
+    CLAUDE_CODE_ROOT,
+    FIXTURES,
+    RegistryResetTestCase,
+)
 
 _FASTAPI = (
     importlib.util.find_spec("fastapi") is not None
@@ -814,6 +818,228 @@ class TestApi(RegistryResetTestCase):
         conf = self.client.get("/api/judge/models").json()["configured"]
         self.assertIn(conf["source"], ("settings", "packaged default"))
         self.assertTrue(conf["spec"])
+
+    def test_a_selection_scopes_the_judge_and_never_widens(self) -> None:
+        # Two loaded sessions; a scoped judge run must see ONLY the
+        # selected one, and a selection that resolves to nothing must
+        # refuse — never fall back to the whole store.
+        from session_analytics.judge.contracts import TurnLabels
+        from session_analytics.judge.registry import register_judge
+        from session_analytics.relational.db import Database
+
+        ingest(
+            dsn=self.dsn,
+            copilots=[C.COPILOT_AIDER],
+            root=FIXTURES / "aider",
+            full=True,
+        )
+        db = Database.connect(self.dsn)
+        try:
+            rows = db.query(
+                "SELECT id, session_id FROM copilot_session ORDER BY id"
+            )
+            self.assertGreaterEqual(len(rows), 2)
+            target_id, target_ref = int(rows[0][0]), str(rows[0][1])
+            other_id = int(rows[1][0])
+            target_turns = {
+                int(r[0])
+                for r in db.query(
+                    "SELECT id FROM copilot_turn WHERE session_id = ?",
+                    (target_id,),
+                )
+            }
+            other_turns = {
+                int(r[0])
+                for r in db.query(
+                    "SELECT id FROM copilot_turn WHERE session_id = ?",
+                    (other_id,),
+                )
+            }
+        finally:
+            db.close()
+
+        seen: list[int] = []
+
+        class _Recorder:
+            judge_id = "rec"
+
+            def __init__(self, model: str = "") -> None:
+                self._model = model or "m"
+
+            def rate_turn(self, ctx, rubric):
+                seen.append(ctx.turn_id)
+                return TurnLabels(
+                    bool_labels={l: False for l in rubric.bool_labels},
+                    sentiment="NEUTRAL",
+                    interaction_quality=3,
+                    judge_id=self.judge_id,
+                    judge_model=self._model,
+                )
+
+            def complete(self, prompt, *, timeout=120):  # pragma: no cover
+                raise NotImplementedError
+
+        register_judge("rec", _Recorder)
+
+        def run(sessions: list[str]) -> dict:
+            r = self.client.post(
+                "/api/pipeline/run/judge",
+                json={"judge": {"judge": "rec:m"}, "sessions": sessions},
+            )
+            self.assertEqual(r.status_code, 200, r.text)
+            for _ in range(200):
+                job = next(
+                    x
+                    for x in self.client.get("/api/pipeline/status").json()["steps"]
+                    if x["id"] == "judge"
+                )["job"]
+                if job["state"] != "running":
+                    return job
+                _time.sleep(0.05)
+            return job
+
+        job = run([target_ref])
+        self.assertEqual(job["state"], "done", job)
+        self.assertTrue(seen, "the judge was never called")
+        self.assertTrue(
+            set(seen) <= target_turns,
+            f"judge saw turns outside the selection: {sorted(set(seen) - target_turns)}",
+        )
+        self.assertFalse(set(seen) & other_turns)
+
+        # No resolution → refusal, and the model is never called.
+        seen.clear()
+        job = run(["not-loaded-ref"])
+        self.assertEqual(job["state"], "failed", job)
+        self.assertIn("none of the selected sessions are loaded", job["message"])
+        self.assertIn("not-loaded-ref", job["message"])
+        self.assertEqual(seen, [])
+
+    def test_a_selection_spends_the_judge_cap_per_session(self) -> None:
+        # Each selected session gets its OWN turn budget: the old shared
+        # pool let a big first session eat the cap and left the rest
+        # unlabelled (the owner saw "kpis computed for 1 of 2").
+        from session_analytics.judge.contracts import TurnLabels
+        from session_analytics.judge.registry import register_judge
+        from session_analytics.relational.db import Database
+
+        ingest(
+            dsn=self.dsn,
+            copilots=[C.COPILOT_AIDER],
+            root=FIXTURES / "aider",
+            full=True,
+        )
+        db = Database.connect(self.dsn)
+        try:
+            # The two sessions with the most turns, so each has more
+            # judgeable turns than the cap and the cap is the binding part.
+            top = db.query(
+                "SELECT s.id, s.session_id, COUNT(t.id) AS n FROM copilot_session s "
+                "JOIN copilot_turn t ON t.session_id = s.id "
+                "GROUP BY s.id ORDER BY n DESC LIMIT 2"
+            )
+            self.assertEqual(len(top), 2, top)
+            ids = [int(r[0]) for r in top]
+            refs = [str(r[1]) for r in top]
+        finally:
+            db.close()
+
+        class _Tally:
+            judge_id = "tally"
+
+            def __init__(self, model: str = "") -> None:
+                self._model = model or "m"
+
+            def rate_turn(self, ctx, rubric):
+                return TurnLabels(
+                    bool_labels={l: False for l in rubric.bool_labels},
+                    sentiment="NEUTRAL",
+                    interaction_quality=3,
+                    judge_id=self.judge_id,
+                    judge_model=self._model,
+                )
+
+            def complete(self, prompt, *, timeout=120):  # pragma: no cover
+                raise NotImplementedError
+
+        register_judge("tally", _Tally)
+        r = self.client.post(
+            "/api/pipeline/run/judge",
+            json={"judge": {"judge": "tally:m", "limit": 5}, "sessions": refs},
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        for _ in range(200):
+            job = next(
+                x
+                for x in self.client.get("/api/pipeline/status").json()["steps"]
+                if x["id"] == "judge"
+            )["job"]
+            if job["state"] != "running":
+                break
+            _time.sleep(0.05)
+        self.assertEqual(job["state"], "done", job)
+        db = Database.connect(self.dsn)
+        try:
+            counts = dict(
+                db.query(
+                    "SELECT t.session_id, COUNT(*) FROM heuristic_label h "
+                    "JOIN copilot_turn t ON t.id = h.turn_id GROUP BY t.session_id"
+                )
+            )
+        finally:
+            db.close()
+        per_session = [int(counts.get(sid, 0)) for sid in ids]
+        for sid, n in zip(ids, per_session):
+            self.assertGreater(n, 0, f"session {sid} got no labels: {per_session}")
+            self.assertLessEqual(n, 5, f"session {sid} exceeded its cap: {per_session}")
+
+    def test_a_judge_that_labels_nothing_fails_the_step(self) -> None:
+        # A missing model made every judge call 404 and the step still
+        # reported "done, 0 labelled" — a success report for work that was
+        # not done. Zero labels out of a non-zero attempt count is a
+        # failure, with the last reason in the message.
+        from session_analytics.judge.contracts import PARSE_BACKEND_ERROR, TurnLabels
+        from session_analytics.judge.registry import register_judge
+
+        class _Dead:
+            judge_id = "dead"
+
+            def __init__(self, model: str = "") -> None:
+                self._model = model or "m"
+
+            def rate_turn(self, ctx, rubric):
+                return TurnLabels(
+                    bool_labels={l: None for l in rubric.bool_labels},
+                    sentiment=None,
+                    interaction_quality=None,
+                    parse_status=PARSE_BACKEND_ERROR,
+                    judge_id=self.judge_id,
+                    judge_model=self._model,
+                    metadata={"error": "HTTP 404: model 'm' not found"},
+                )
+
+            def complete(self, prompt, *, timeout=120):  # pragma: no cover
+                raise NotImplementedError
+
+        register_judge("dead", _Dead)
+        r = self.client.post(
+            "/api/pipeline/run/judge",
+            json={"judge": {"judge": "dead:m", "limit": 3}},
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        for _ in range(200):
+            job = next(
+                x
+                for x in self.client.get("/api/pipeline/status").json()["steps"]
+                if x["id"] == "judge"
+            )["job"]
+            if job["state"] != "running":
+                break
+            _time.sleep(0.05)
+        self.assertEqual(job["state"], "failed", job)
+        self.assertIn("no turn could be judged", job["message"])
+        self.assertIn("check the judge under Settings", job["message"])
+        self.assertIn("HTTP 404", job["message"])
 
     def test_benchmark_payload_names_the_runs_root_and_the_link_step_runs_it(self) -> None:
         # The Benchmark page: with no runs root the page says so; with one,

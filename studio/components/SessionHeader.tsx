@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef } from "react";
 import { EffortEstimate, EffortSummary, SessionDetail, SessionTagsInfo } from "@/lib/api";
 import { Stat, formatCost, formatDuration } from "@/components/ui";
 import SessionTagIcons, { HandTag } from "@/components/SessionTags";
@@ -9,10 +10,14 @@ import { MIXED_NOTE, UNSTAMPED_NOTE, harnessFacts, harnessState } from "@/lib/ha
 // model, "4659 turns · 46 errors · 3d 7h · —" — with the project's
 // medians in a smaller grey sentence under it. The numbers were there;
 // nothing said whether they were large. Now: a title that names the
-// project, badges for copilot and model, when it ran, and one tile per
-// metric with the comparison to THIS project's other sessions written
-// on it ("2.2× the project median"), coloured when the session is past
-// the project's p90.
+// project, badges for copilot and model, one tile per metric with the
+// comparison to THIS project's other sessions written on it ("2.2× the
+// project median"), coloured when the session is past the project's p90.
+//
+// The ten labelled facts (start/end, session id, baseline, harness stamp)
+// used to sit under that as two wrapping rows of small grey type, and the
+// page opened as a wall of metadata. They now live in one dialog behind
+// the gear beside the title, where a reader looks when they need them.
 
 /** How a session figure compares with its project. Pure. */
 export function versusProject(
@@ -57,14 +62,41 @@ export function errorRate(errors: number, turns: number): string {
   return `${((errors / turns) * 100).toFixed(1)} per 100 turns`;
 }
 
-/** One labelled fact: the label small and grey above the value, so a
- *  row of them reads as facts rather than as a sentence. */
+/** One labelled fact. `display: contents` lets the wrapper disappear so
+ *  the dt/dd pair lands in the dialog's two grid columns — a table look
+ *  without a table's markup. */
 function Fact({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div>
-      <dt className="text-[11px] uppercase tracking-wide text-slate-500">{label}</dt>
-      <dd className={"text-slate-700 " + (mono ? "font-mono text-xs" : "")}>{value}</dd>
+    <div className="contents">
+      <dt className="self-center text-[11px] uppercase tracking-wide text-slate-500">{label}</dt>
+      <dd
+        className={
+          "self-center text-slate-700 " + (mono ? "font-mono text-xs break-all" : "")
+        }
+      >
+        {value}
+      </dd>
     </div>
+  );
+}
+
+function DetailsIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      width="15"
+      height="15"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5" />
+      <circle cx="12" cy="8" r="1" fill="currentColor" stroke="none" />
+    </svg>
   );
 }
 
@@ -75,23 +107,28 @@ export function HarnessFacts({ data }: { data: SessionDetail }) {
   const state = harnessState(data);
   if (state === "unstamped") {
     return (
-      <p className="mt-2 text-xs text-slate-500" title={UNSTAMPED_NOTE}>
-        Harness: unstamped
+      <p
+        className="mt-4 border-t border-slate-100 pt-3 text-xs text-slate-500"
+        title={UNSTAMPED_NOTE}
+      >
+        Harness: unstamped — this session predates the harness stamp.
       </p>
     );
   }
   return (
-    <dl className="mt-2 flex flex-wrap gap-x-6 gap-y-2 text-sm">
+    <dl className="mt-4 grid grid-cols-[9rem,1fr] gap-x-4 gap-y-2.5 border-t border-slate-100 pt-3 text-sm">
       {harnessFacts(data).map((f) => (
-        <div key={f.label} title={f.title}>
-          <dt className="text-[11px] uppercase tracking-wide text-slate-500">{f.label}</dt>
-          <dd className="font-mono text-xs text-slate-700">{f.value}</dd>
+        <div key={f.label} className="contents">
+          <dt className="self-center text-[11px] uppercase tracking-wide text-slate-500" title={f.title}>
+            {f.label}
+          </dt>
+          <dd className="self-center font-mono text-xs text-slate-700">{f.value}</dd>
         </div>
       ))}
       {state === "mixed" && (
-        <div title={MIXED_NOTE}>
-          <dt className="text-[11px] uppercase tracking-wide text-slate-500">Harness</dt>
-          <dd className="text-xs text-amber-700">mixed — earliest stamp shown</dd>
+        <div className="contents" title={MIXED_NOTE}>
+          <dt className="self-center text-[11px] uppercase tracking-wide text-slate-500">Harness</dt>
+          <dd className="self-center text-xs text-amber-700">mixed — earliest stamp shown</dd>
         </div>
       )}
     </dl>
@@ -133,6 +170,7 @@ export default function SessionHeader({
         : cost.note || undefined;
   const started = data.started_at ? new Date(data.started_at) : null;
   const ended = data.ended_at ? new Date(data.ended_at) : null;
+  const details = useRef<HTMLDialogElement>(null);
   return (
     <div className="space-y-3">
       <div>
@@ -149,6 +187,16 @@ export default function SessionHeader({
             </span>
           )}
           <SessionTagIcons tags={tags ?? data.tags} onToggle={onToggleTag} size="md" />
+          <button
+            type="button"
+            onClick={() => details.current?.showModal()}
+            aria-label="Session details"
+            title="Started, ended, session id and the harness stamp"
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-sm text-slate-700 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2"
+          >
+            <DetailsIcon />
+            Details
+          </button>
         </div>
         <p
           className="text-xs text-slate-500 font-mono mt-0.5"
@@ -156,20 +204,6 @@ export default function SessionHeader({
         >
           {data.project_path || ""}
         </p>
-        <dl className="mt-2 flex flex-wrap gap-x-6 gap-y-2 text-sm">
-          <Fact label="Started" value={started ? started.toLocaleString() : "unknown"} />
-          <Fact label="Ended" value={ended ? ended.toLocaleString() : "unknown"} />
-          <Fact label="Session id" value={data.session_id} mono />
-          <Fact
-            label="Compared with"
-            value={
-              b
-                ? `${b.sessions} other session${b.sessions === 1 ? "" : "s"} of this project`
-                : "nothing yet — too few sessions of this project"
-            }
-          />
-        </dl>
-        <HarnessFacts data={data} />
       </div>
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <Stat
@@ -207,6 +241,45 @@ export default function SessionHeader({
           tone={cost.tone}
         />
       </div>
+
+      <dialog
+        ref={details}
+        aria-labelledby="session-details-title"
+        onClick={(e) => {
+          // A click on the backdrop lands on the dialog element itself.
+          if (e.target === e.currentTarget) e.currentTarget.close();
+        }}
+        className="w-[min(46rem,calc(100vw-2rem))] rounded-lg border border-slate-200 p-0 text-slate-900 backdrop:bg-slate-900/40"
+      >
+        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
+          <h2 id="session-details-title" className="text-sm font-semibold text-slate-800">
+            Session details
+          </h2>
+          <button
+            type="button"
+            onClick={() => details.current?.close()}
+            className="border border-slate-300 bg-white text-slate-700 text-sm px-3 py-1 rounded hover:bg-slate-50"
+          >
+            Close
+          </button>
+        </div>
+        <div className="px-5 py-4">
+          <dl className="grid grid-cols-[9rem,1fr] gap-x-4 gap-y-2.5 text-sm">
+            <Fact label="Started" value={started ? started.toLocaleString() : "unknown"} />
+            <Fact label="Ended" value={ended ? ended.toLocaleString() : "unknown"} />
+            <Fact label="Session id" value={data.session_id} mono />
+            <Fact
+              label="Compared with"
+              value={
+                b
+                  ? `${b.sessions} other session${b.sessions === 1 ? "" : "s"} of this project`
+                  : "nothing yet — too few sessions of this project"
+              }
+            />
+          </dl>
+          <HarnessFacts data={data} />
+        </div>
+      </dialog>
     </div>
   );
 }

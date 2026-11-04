@@ -598,6 +598,12 @@ try {
   const nothing = ls.loadPlan({ ...disc, new: 0, new_bytes: 0 }, new Set(), "", "");
   if (nothing.count !== 0) fail("all-loaded listing still offers a load");
   else console.log("  ok  all loaded → nothing to load");
+  const bySize = ls.sortSessions(disc.sessions, "bytes", "desc");
+  if (bySize.map((s) => s.session_id).join(",") !== "b,a") fail(`size sort wrong: ${bySize.map((s) => s.session_id)}`);
+  else if (ls.sortSessions(disc.sessions, "source", "asc").map((s) => s.session_id).join(",") !== "b,a") fail("source sort wrong");
+  else if (ls.sortSessions(disc.sessions, "state", "asc").map((s) => s.session_id).join(",") !== "a,b") fail("state sort wrong");
+  else if (ls.sortSessions(disc.sessions, "modified", "desc").map((s) => s.session_id).join(",") !== "a,b") fail("modified sort wrong");
+  else console.log("  ok  load rows sort by size, source, state and modified");
   const panelProps = {
     listing: disc, error: null, since: "", limit: "", picked: new Set(["b"]), running: false,
     onSince() {}, onLimit() {}, onTogglePick() {}, onPickNew() {}, onClearPicks() {}, onLoad() {},
@@ -685,12 +691,34 @@ try {
   // ── which judge URLs count as local ───────────────────────────────
   console.log("\nlocal judge urls:");
   const { isPrivateUrl } = await import(pathToFileURL(join(out, "lib/urls.js")));
-  const local = ["http://localhost:1234/v1", "http://127.0.0.1:8001", "http://192.168.1.23:8001/v1", "http://spark-c2e5.local:8001", "http://10.0.0.5:8000", "http://172.20.1.1:8000"];
-  const remote = ["https://api.openai.com/v1", "http://172.32.0.1:8000", "http://8.8.8.8", "not a url"];
+  const local = [
+    "http://localhost:1234/v1",
+    "http://127.0.0.1:8001",
+    "http://192.168.1.23:8001/v1",
+    "http://spark-c2e5.local:8001",
+    "http://10.0.0.5:8000",
+    "http://172.20.1.1:8000",
+    "http://spark:8001/v1",
+    "http://gpu-1.lan:8000",
+    "http://169.254.10.20:8001", // IPv4 link-local
+    "http://100.101.102.103:8001/v1", // CGNAT / Tailscale
+    "http://[fd12:3456::1]:8001", // IPv6 unique-local
+    "http://[fe80::1]:8001", // IPv6 link-local
+    "http://[::1]:8001", // IPv6 loopback, bracket form
+  ];
+  const remote = [
+    "https://api.openai.com/v1",
+    "http://172.32.0.1:8000", // just outside 172.16/12
+    "http://100.128.0.1:8001", // just outside 100.64/10
+    "http://[2001:db8::1]:8000", // public IPv6
+    "http://spark.tail1234.ts.net:8001", // Funnel shares the suffix: warns
+    "http://8.8.8.8",
+    "not a url",
+  ];
   const wrongLocal = local.filter((u) => !isPrivateUrl(u));
   const wrongRemote = remote.filter((u) => isPrivateUrl(u));
   if (wrongLocal.length || wrongRemote.length) fail(`isPrivateUrl wrong for ${JSON.stringify([...wrongLocal, ...wrongRemote])}`);
-  else console.log("  ok  LAN/.local/loopback are local; hosted and public addresses are not");
+  else console.log("  ok  LAN/.local/.lan/bare names are local; hosted and public addresses are not");
 
   // ── response time card ─────────────────────────────────────────────
   console.log("\nresponse time:");

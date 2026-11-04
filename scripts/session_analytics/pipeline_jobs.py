@@ -237,6 +237,11 @@ def start_all(
     sequence = list(RUN_ALL_SEQUENCE)
     if include_judge:
         sequence.insert(sequence.index(STEP_KPIS), STEP_JUDGE)
+    else:
+        # KPIs roll up the judge's labels. Without the judge in this run
+        # the rollup has nothing new to summarise, so Run all leaves it to
+        # the Compute KPIs step, which stays individually runnable.
+        sequence.remove(STEP_KPIS)
     if only:
         # An ordered SUBSET (the Similar tab runs embed + similar): the
         # pipeline's order is kept whatever order the caller named.

@@ -67,6 +67,7 @@ _SESSION_SELECT_COLS = f"{_SESSION_COLS}, {_COST_ROLLUP_SQL}, {_TAG_SELECT_COLS}
 #: an alias in ORDER BY only bare, and the NULLS-last wrapper needs an
 #: expression on both dialects.
 SESSION_SORT_COLUMNS: dict[str, str] = {
+    "id": "id",
     "started_at": "started_at",
     "copilot": "copilot",
     "project_path": "project_path",
