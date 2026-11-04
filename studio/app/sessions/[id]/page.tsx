@@ -340,10 +340,10 @@ function TurnCard({
   const text = t.archived ? t.content : t.content_preview;
   const long = (text || "").length > 300 || (text || "").split("\n").length > 3;
   return (
-    <Card className={highlighted ? "!p-3 ring-2 ring-blue-400" : "!p-3"}>
+    <Card className={highlighted ? "!p-3 ring-2 ring-inset ring-blue-400" : "!p-3"}>
       <div
         id={`turn-${t.sequence_num}`}
-        className="flex items-start gap-3 scroll-mt-20"
+        className="flex items-start gap-3 scroll-mt-20 pt-0.5"
       >
         <div className="flex flex-col items-end gap-1 shrink-0 w-24">
           <span
