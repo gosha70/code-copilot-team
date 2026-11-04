@@ -27,7 +27,7 @@ function barClass(active: boolean) {
     FOCUS_BAR +
     " " +
     (active
-      ? "bg-white/15 font-medium text-white"
+      ? "bg-slate-600 font-medium text-white"
       : "text-slate-300 hover:bg-white/10 hover:text-white")
   );
 }
@@ -39,7 +39,7 @@ function bannerClass(active: boolean) {
     FOCUS_BANNER +
     " " +
     (active
-      ? "bg-white/20 font-medium text-white"
+      ? "bg-slate-600 font-medium text-white"
       : "text-slate-300 hover:bg-white/10 hover:text-white")
   );
 }
