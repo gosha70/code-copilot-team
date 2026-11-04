@@ -866,6 +866,17 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             ],
         }
 
+    # ── routing registry (read-only, sanitized) ─────────────────────────
+    # The runtime registry the supervisor routes under. Only declaration
+    # fields leave the server — no credential references, endpoints or
+    # unknown keys. `cct routing validate` remains the authoritative check;
+    # this is the summary the page shows first.
+    @app.get("/api/routing/registry")
+    def routing_registry() -> dict[str, Any]:
+        from ..routing_registry import registry_summary
+
+        return registry_summary()
+
     # ── routing evidence (routing-shadow #261, shadow-mode only) ───────
     # Sets are addressed by opaque id; invalid sets surface with their
     # closed sanitized state; no payload carries a filesystem path.

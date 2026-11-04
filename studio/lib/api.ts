@@ -810,6 +810,36 @@ export interface RoutingEvidenceSettings {
   root_count: number;
 }
 
+/** The runtime routing registry (~/.code-copilot-team/routing.toml),
+ *  summarised read-only. Credentials, endpoints and any field outside the
+ *  server's whitelist never reach the browser. */
+export interface RoutingRegistryProfile {
+  id: string;
+  backend: string | null;
+  provider: string | null;
+  model: string | null;
+  capability_tier: string | null;
+  priority: number | null;
+  roles: string[];
+  quota_pool: string | null;
+  data_policy: string | null;
+}
+
+export interface RoutingRegistryPayload {
+  path: string;
+  configured: boolean;
+  valid: boolean;
+  error: string | null;
+  schema_version: number | null;
+  policy: {
+    enabled: boolean | null;
+    preferred_profile: string | null;
+    failback: string | null;
+  } | null;
+  route_classes: Record<string, string[]>;
+  profiles: RoutingRegistryProfile[];
+}
+
 export interface RoutingEvidenceSetSummary {
   state: "valid";
   set_id: string;
@@ -1927,6 +1957,8 @@ export const api = {
       `/api/judge/agreement?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`,
     ),
   // routing-shadow (#261): read-only shadow-mode surfaces.
+  routingRegistry: () =>
+    get<RoutingRegistryPayload>("/api/routing/registry"),
   routingEvidence: () =>
     get<{ sets: RoutingEvidenceEntry[] }>("/api/routing/evidence"),
   routingEvidenceSet: (setId: string) =>
