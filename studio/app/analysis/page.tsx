@@ -13,6 +13,7 @@ import {
 } from "@/lib/api";
 import { Card, Stat, formatCost, useApi } from "@/components/ui";
 import { correlateProgressLine } from "@/lib/benchmarkIntro";
+import { isPrivateUrl } from "@/lib/urls";
 import JudgeQuality from "@/components/JudgeQuality";
 import LoadSelectionPanel, { loadPlan } from "@/components/LoadSelection";
 import JudgeProgressBar, { EmbedProgressBar, judgeChoiceLabel } from "@/components/JudgeProgress";
@@ -162,9 +163,10 @@ export default function AnalysisPage() {
   // silently 404'd on a machine that had llama3.2 instead.
   const [models, setModels] = useState<JudgeModels | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  // Opt-in, never implied: the judge costs money per turn, so a
-  // "run everything" button must not spend it without being asked.
-  const [includeJudge, setIncludeJudge] = useState(false);
+  // The judge costs money per turn, so a whole-store run never includes
+  // it unless asked. With an explicit selection it IS the analysis the
+  // user asked for, so the box starts checked; it can be unticked.
+  const [judgeChoice, setJudgeChoice] = useState<boolean | null>(null);
   // Optional processing (benchmark linking, embeddings, similarity, KPI
   // rollups) stays out of the goal flow unless the user opens it.
   const [showOptional, setShowOptional] = useState(false);
@@ -197,6 +199,10 @@ export default function AnalysisPage() {
   const [since, setSince] = useState("");
   const [loadLimit, setLoadLimit] = useState("");
   const [picked, setPicked] = useState<Set<string>>(new Set());
+  // Effective opt-in: an explicit tick/untick wins; otherwise the judge
+  // follows the selection (on when sessions are picked, off for the
+  // whole store).
+  const includeJudge = judgeChoice ?? picked.size > 0;
 
   const loadListing = useCallback(async () => {
     try {
@@ -336,6 +342,15 @@ export default function AnalysisPage() {
   // plus the sessions this run will read (the selection, else every new
   // session under the filters).
   const analysisCount = status.counts.sessions + (listing ? plan.count : 0);
+  // Off this network? The same rule as Settings: claude-code always is;
+  // an openai-compatible judge counts as external unless its base URL is
+  // a private address (a LAN vLLM box is as local as Ollama).
+  const cloudJudgeNow =
+    !!models &&
+    (models.backend === "claude-code" ||
+      (models.backend === "openai" &&
+        models.url.startsWith("http") &&
+        !isPrivateUrl(models.url)));
   const coreSteps = status.steps.filter((s) => CORE_STEP_IDS.includes(s.id));
   const optionalSteps = status.steps.filter((s) =>
     OPTIONAL_STEP_IDS.includes(s.id),
@@ -471,7 +486,8 @@ export default function AnalysisPage() {
           first, then analyses the selected sessions (or every loaded session
           when nothing is selected); with a selection, optional processing is
           skipped. The LLM judge and Compute KPIs run only when the judge is
-          checked — 5 steps unchecked, 7 checked.
+          checked — 5 steps unchecked, 7 checked; with sessions selected the
+          judge is checked for you.
         </p>
 
         <p className="text-sm text-slate-600 mt-2">{step.blurb}</p>
@@ -638,25 +654,38 @@ export default function AnalysisPage() {
               "Load sessions -> Link benchmark runs -> Build knowledge graph " +
               "-> Embed sessions -> Find similar sessions -> LLM judge -> " +
               "Compute KPIs. The judge and the KPI rollup run only when the " +
-              "judge is checked: 5 steps unchecked, 7 checked."
+              "judge is checked: 5 steps unchecked, 7 checked. With sessions " +
+              "selected the judge is checked for you."
             }
             className="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700 disabled:opacity-50"
           >
             {allRunning
               ? "Running all…"
-              : picked.size > 0
-                ? `Run all steps · ${picked.size} selected`
-                : `Run all steps · ${analysisCount.toLocaleString()} sessions`}
+              : includeJudge
+                ? picked.size > 0
+                  ? `Run all steps · ${picked.size} selected`
+                  : `Run all steps · ${analysisCount.toLocaleString()} sessions`
+                : picked.size > 0
+                  ? `Run without the judge · ${picked.size} selected`
+                  : `Run without the judge · ${analysisCount.toLocaleString()} sessions`}
           </button>
           <label className="flex items-center gap-1.5 text-sm text-slate-600 mr-2">
             <input
               type="checkbox"
               checked={includeJudge}
-              onChange={(e) => setIncludeJudge(e.target.checked)}
+              onChange={(e) => setJudgeChoice(e.target.checked)}
               className="accent-blue-600"
             />
             include LLM judge
           </label>
+          {includeJudge && cloudJudgeNow && (
+            <span className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+              ⚠ This judge
+              {models?.configured.spec ? ` (${models.configured.spec})` : ""} is off
+              your network: turn previews and steering-file excerpts go to it.
+              Choose a judge on this machine or your LAN for a fully-local run.
+            </span>
+          )}
           {step.id !== "ingest" && (
             <button
               onClick={() => run(step.id)}
