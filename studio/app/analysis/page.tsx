@@ -266,15 +266,15 @@ export default function AnalysisPage() {
     loadListing();
   }, [loadListing]);
 
-  // When a load finishes, the listing's loaded/new column is stale and
-  // the pick has been served: clear it so the button falls back to
-  // "Load N new" rather than offering the same sessions again.
+  // When a load finishes, refresh the listing so the state column shows
+  // the sessions as loaded. The pick is KEPT on purpose: the same
+  // selection then scopes the analysis ("Run all steps · N selected"),
+  // which is the point of choosing sessions before reading them.
   // Steps are found BY ID: an index breaks the moment a step is added
   // (and the judge index was already wrong — it pointed at embed).
   const ingestState = status?.steps.find((s) => s.id === "ingest")?.job.state;
   useEffect(() => {
     if (ingestState === "done") {
-      setPicked(new Set());
       loadListing();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
