@@ -743,7 +743,8 @@ export default function SettingsPage() {
 
         {cloudJudge && (
           <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mt-3">
-            ⚠ This judge sends redacted turn previews off your network. Choose Ollama, or a
+            ⚠ This judge sends redacted turn previews and short excerpts of the
+            project&apos;s steering files off your network. Choose Ollama, or a
             server on this machine or your LAN, for a fully-local judge.
           </p>
         )}

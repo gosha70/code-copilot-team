@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import tempfile
+from pathlib import Path
+from unittest import mock
 
 from session_analytics import constants as C
 from session_analytics.adapters import claude_code
@@ -334,3 +337,185 @@ class TestSessionAnalysis(RegistryResetTestCase):
         d = sa.all_analyses(self.db, self.session_id)
         self.assertEqual(set(d), set(C.ANALYSIS_KINDS))
         self.assertTrue(all(v is None for v in d.values()))
+
+    def _set_project(self, root: Path) -> None:
+        self.db.execute(
+            "UPDATE copilot_session SET project_path = ?", (str(root),)
+        )
+        self.db.commit()
+
+    def test_project_context_reads_the_actual_harness_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "AGENTS.md").write_text(
+                "# Rules\nUse AGENTS.md for steering.\n", encoding="utf-8"
+            )
+            (root / ".claude").mkdir()
+            (root / ".claude" / "settings.json").write_text("{}\n", encoding="utf-8")
+            (root / ".claude" / "skills" / "review").mkdir(parents=True)
+            (root / ".claude" / "skills" / "review" / "SKILL.md").write_text(
+                "# Review\n", encoding="utf-8"
+            )
+            self._set_project(root)
+            ctx = sa.project_context(self.db, self.session_id)
+            self.assertTrue(ctx.available)
+            self.assertIn("AGENTS.md", ctx.files)
+            self.assertIn(".claude/settings.json", ctx.files)
+            self.assertIn(".claude/skills/review/SKILL.md", ctx.files)
+            self.assertEqual([name for name, _ in ctx.excerpts], ["AGENTS.md"])
+            self.assertIn("Use AGENTS.md", ctx.excerpts[0][1])
+            rendered = sa.render_project(ctx)
+            self.assertIn("files that actually exist here", rendered)
+            self.assertIn("Use AGENTS.md", rendered)
+            self.assertIn("Do not name CLAUDE.md", rendered)
+
+    def test_project_context_unavailable_is_not_empty(self) -> None:
+        self._set_project(Path("/nonexistent/project/for-test"))
+        ctx = sa.project_context(self.db, self.session_id)
+        self.assertFalse(ctx.available)
+        self.assertIn("not available", sa.render_project(ctx))
+        self.assertIn("set config_change to null", sa.render_project(ctx))
+
+    def test_prompt_carries_project_files_and_harness_stamp(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "AGENTS.md").write_text(
+                "# Steering\nNever edit CLAUDE.md.\n", encoding="utf-8"
+            )
+            self._set_project(root)
+            self.db.execute(
+                "UPDATE copilot_session SET cli_version = ?, cct_version = ?",
+                ("2.1.0", "1.1.0"),
+            )
+            self.db.commit()
+            judge = _CannedJudge(_TUNING_OK)
+            sa.analyze_session(
+                self.db, self.session_id, C.ANALYSIS_KIND_TUNING, judge=judge
+            )
+            prompt = judge.prompts[0]
+            self.assertIn("PROJECT CONFIGURATION", prompt)
+            self.assertIn("AGENTS.md", prompt)
+            self.assertIn("Never edit CLAUDE.md", prompt)
+            self.assertIn("harness stamp: CLI 2.1.0; CCT 1.1.0", prompt)
+
+    def test_suggested_config_paths_are_checked_against_the_project(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".claude").mkdir()
+            (root / ".claude" / "settings.json").write_text("{}\n", encoding="utf-8")
+            # A real file the inventory deliberately leaves out must NOT
+            # read as "found" — the check is membership, not existence.
+            (root / ".env").write_text("SECRET=1\n", encoding="utf-8")
+            self._set_project(root)
+            text = json.dumps({
+                "summary": "s",
+                "findings": [
+                    {"category": "hooks", "severity": "low", "title": "listed",
+                     "config_change": {"file": ".claude/settings.json", "diff": "+x"}},
+                    {"category": "skills", "severity": "low", "title": "env",
+                     "config_change": {"file": ".env", "diff": "+y"}},
+                    {"category": "skills", "severity": "low", "title": "absolute",
+                     "config_change": {"file": "/etc/passwd", "diff": "+z"}},
+                    {"category": "skills", "severity": "low", "title": "traversal",
+                     "config_change": {"file": "../AGENTS.md", "diff": "+t"}},
+                ],
+            })
+            row = sa.analyze_session(
+                self.db, self.session_id, C.ANALYSIS_KIND_TUNING,
+                judge=_CannedJudge(text),
+            )
+            found = {
+                f["title"]: f["config_change"]["file_found"]
+                for f in row["result"]["findings"]
+            }
+            self.assertEqual(
+                found,
+                {"listed": True, "env": False, "absolute": False, "traversal": False},
+            )
+            # Without a project on disk a relative path cannot be judged —
+            # unknown, not "missing"; an absolute one is still refused.
+            self._set_project(Path("/nonexistent/project/for-test"))
+            row = sa.analyze_session(
+                self.db, self.session_id, C.ANALYSIS_KIND_TUNING,
+                judge=_CannedJudge(text), force=True,
+            )
+            found = {
+                f["title"]: f["config_change"]["file_found"]
+                for f in row["result"]["findings"]
+            }
+            self.assertIsNone(found["listed"])
+            self.assertIsNone(found["env"])
+            self.assertFalse(found["absolute"])
+            self.assertFalse(found["traversal"])
+
+    def _config(self, mode: str, *, rules=(), override=None):
+        """Patch load_config so the excerpt mode is deterministic."""
+        cfg = mock.Mock()
+        cfg.redaction_mode = mode
+        cfg.project_id_rules = rules
+        cfg.project_override.side_effect = lambda key: override if key else None
+        return mock.patch.object(sa, "load_config", return_value=cfg)
+
+    def test_project_excerpts_are_redacted_with_the_session_mode(self) -> None:
+        # The excerpts leave the machine inside a judge prompt: they get
+        # the same redaction the session's own text got at ingest.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "AGENTS.md").write_text(
+                "# Rules\nNever commit secrets.\n```\nAPI_KEY=sk-live-123\n```\n",
+                encoding="utf-8",
+            )
+            self._set_project(root)
+            self.db.execute(
+                "UPDATE copilot_session SET redaction_mode = ?", (C.REDACT_CODE,)
+            )
+            self.db.commit()
+            with self._config(C.REDACT_CODE):
+                ctx = sa.project_context(self.db, self.session_id)
+            excerpt = ctx.excerpts[0][1]
+            self.assertIn("Never commit secrets", excerpt)
+            self.assertNotIn("sk-live-123", excerpt)
+            self.assertIn("code redacted", excerpt)
+            self.db.execute(
+                "UPDATE copilot_session SET redaction_mode = ?",
+                (C.REDACT_METADATA_ONLY,),
+            )
+            self.db.commit()
+            with self._config(C.REDACT_CODE):
+                ctx = sa.project_context(self.db, self.session_id)
+            self.assertNotIn("Never commit secrets", ctx.excerpts[0][1])
+            self.assertIn("[redacted", ctx.excerpts[0][1])
+
+    def test_excerpts_use_the_stricter_of_recorded_and_current_mode(self) -> None:
+        # A project tightened AFTER ingest must not leak under the stale
+        # recorded mode: the excerpt is read now, so the floor is the
+        # stricter of the two.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "AGENTS.md").write_text(
+                "# Rules\nKeep prose.\n```\nAPI_KEY=sk-live-123\n```\n",
+                encoding="utf-8",
+            )
+            self._set_project(root)
+            # Recorded 'none' must not override a project since set to 'code'.
+            self.db.execute(
+                "UPDATE copilot_session SET redaction_mode = ?", (C.REDACT_NONE,)
+            )
+            self.db.commit()
+            with self._config(C.REDACT_CODE):
+                ctx = sa.project_context(self.db, self.session_id)
+            self.assertNotIn("sk-live-123", ctx.excerpts[0][1])
+            # A per-project override tightened after ingest wins too.
+            self.db.execute(
+                "UPDATE copilot_session SET redaction_mode = ?", (C.REDACT_CODE,)
+            )
+            self.db.commit()
+            override = ProjectOverride(redaction_mode=C.REDACT_METADATA_ONLY)
+            with self._config(
+                C.REDACT_CODE,
+                rules=(ProjectIdRule(match=str(root), id="demo"),),
+                override=override,
+            ):
+                ctx = sa.project_context(self.db, self.session_id)
+            self.assertNotIn("Keep prose", ctx.excerpts[0][1])
+            self.assertIn("[redacted", ctx.excerpts[0][1])

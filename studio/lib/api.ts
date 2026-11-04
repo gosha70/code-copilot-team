@@ -703,7 +703,10 @@ export interface TuningFinding {
   evidence_turns: number[];
   explanation: string;
   recommendation: string;
-  config_change: { file: string; diff: string } | null;
+  /** file_found is the project check on the suggested path: true when it
+   *  exists, false when it does not, null when the project is unavailable
+   *  so the path could not be checked. */
+  config_change: { file: string; diff: string; file_found?: boolean | null } | null;
 }
 export interface CoachingPrompt {
   turn: number | null;
@@ -717,7 +720,9 @@ export interface Inefficiency {
   wasted_turns: number | null;
   wasted_seconds: number | null;
   lever: "SCRIPT" | "HOOK" | "SKILL" | "STEERING";
-  starter: { file: string; content: string } | null;
+  /** A starter may be a new file: true when it exists or its directory
+   *  does, false when neither does, null when the project is unavailable. */
+  starter: { file: string; content: string; file_found?: boolean | null } | null;
 }
 export interface AnalysisResult {
   summary: string;

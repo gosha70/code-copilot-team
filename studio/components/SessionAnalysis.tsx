@@ -307,9 +307,14 @@ function Findings({
           </p>
           {f.config_change && (
             <div className="mt-2">
-              <div className="flex items-center justify-between mb-1">
+              <div className="flex items-center justify-between mb-1 gap-2">
                 <span className="text-xs font-mono text-slate-500">
                   {f.config_change.file}
+                  {f.config_change.file_found === false && (
+                    <span className="ml-2 font-sans text-rose-700">
+                      not in this project&apos;s listed files — check the path
+                    </span>
+                  )}
                 </span>
                 <CopyButton text={f.config_change.diff} />
               </div>
@@ -442,6 +447,11 @@ function Efficiency({
                 >
                   {open === i ? "hide starter" : `starter: ${x.starter.file}`}
                 </button>
+                {x.starter.file_found === false && (
+                  <span className="text-rose-700">
+                    {" "}— not in this project&apos;s listed files; check the path
+                  </span>
+                )}
               </>
             )}
           </p>

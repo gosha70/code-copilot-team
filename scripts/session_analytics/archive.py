@@ -31,7 +31,7 @@ from . import constants as C
 from .config import NoiseConfig, ProjectIdRule, ProjectOverride
 from .contracts import SessionRef
 from .ingest.project_key import ProjectKeyResolver
-from .ingest.redaction import redact_text
+from .ingest.redaction import redact_text, stricter_mode
 from .registry import get_adapter, list_adapter_ids
 from .session_filter import keep_clause
 from .relational.db import Database, apply_ddl, now_iso
@@ -80,22 +80,6 @@ class ArchiveStats:
 
 
 # ── pure helpers (unit-testable without DB/FS) ──────────────────────────
-
-
-def stricter_mode(a: str, b: str) -> str:
-    """FR-4 redaction floor: the stricter of two modes wins — FAIL CLOSED.
-
-    Strictness rank is positional in ``constants.REDACTION_STRICTNESS``
-    (none < code < metadata-only). An UNKNOWN mode collapses the result to
-    ``metadata-only`` — the strictest mode ``redact_text`` actually
-    implements. Returning the unknown string itself would be a hole:
-    ``redact_text`` treats any unrecognized mode as ``code`` (fence-stripping
-    only), which is LOOSER than a metadata-only floor.
-    """
-    if a not in C.REDACTION_STRICTNESS or b not in C.REDACTION_STRICTNESS:
-        return C.REDACT_METADATA_ONLY
-    rank = C.REDACTION_STRICTNESS.index
-    return a if rank(a) >= rank(b) else b
 
 
 def escape_like(query: str) -> str:
