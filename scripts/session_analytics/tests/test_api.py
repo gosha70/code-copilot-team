@@ -915,6 +915,84 @@ class TestApi(RegistryResetTestCase):
         self.assertIn("not-loaded-ref", job["message"])
         self.assertEqual(seen, [])
 
+    def test_a_selection_spends_the_judge_cap_per_session(self) -> None:
+        # Each selected session gets its OWN turn budget: the old shared
+        # pool let a big first session eat the cap and left the rest
+        # unlabelled (the owner saw "kpis computed for 1 of 2").
+        from session_analytics.judge.contracts import TurnLabels
+        from session_analytics.judge.registry import register_judge
+        from session_analytics.relational.db import Database
+
+        ingest(
+            dsn=self.dsn,
+            copilots=[C.COPILOT_AIDER],
+            root=FIXTURES / "aider",
+            full=True,
+        )
+        db = Database.connect(self.dsn)
+        try:
+            # The two sessions with the most turns, so each has more
+            # judgeable turns than the cap and the cap is the binding part.
+            top = db.query(
+                "SELECT s.id, s.session_id, COUNT(t.id) AS n FROM copilot_session s "
+                "JOIN copilot_turn t ON t.session_id = s.id "
+                "GROUP BY s.id ORDER BY n DESC LIMIT 2"
+            )
+            self.assertEqual(len(top), 2, top)
+            ids = [int(r[0]) for r in top]
+            refs = [str(r[1]) for r in top]
+        finally:
+            db.close()
+
+        class _Tally:
+            judge_id = "tally"
+
+            def __init__(self, model: str = "") -> None:
+                self._model = model or "m"
+
+            def rate_turn(self, ctx, rubric):
+                return TurnLabels(
+                    bool_labels={l: False for l in rubric.bool_labels},
+                    sentiment="NEUTRAL",
+                    interaction_quality=3,
+                    judge_id=self.judge_id,
+                    judge_model=self._model,
+                )
+
+            def complete(self, prompt, *, timeout=120):  # pragma: no cover
+                raise NotImplementedError
+
+        register_judge("tally", _Tally)
+        r = self.client.post(
+            "/api/pipeline/run/judge",
+            json={"judge": {"judge": "tally:m", "limit": 5}, "sessions": refs},
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        for _ in range(200):
+            job = next(
+                x
+                for x in self.client.get("/api/pipeline/status").json()["steps"]
+                if x["id"] == "judge"
+            )["job"]
+            if job["state"] != "running":
+                break
+            _time.sleep(0.05)
+        self.assertEqual(job["state"], "done", job)
+        db = Database.connect(self.dsn)
+        try:
+            counts = dict(
+                db.query(
+                    "SELECT t.session_id, COUNT(*) FROM heuristic_label h "
+                    "JOIN copilot_turn t ON t.id = h.turn_id GROUP BY t.session_id"
+                )
+            )
+        finally:
+            db.close()
+        per_session = [int(counts.get(sid, 0)) for sid in ids]
+        for sid, n in zip(ids, per_session):
+            self.assertGreater(n, 0, f"session {sid} got no labels: {per_session}")
+            self.assertLessEqual(n, 5, f"session {sid} exceeded its cap: {per_session}")
+
     def test_benchmark_payload_names_the_runs_root_and_the_link_step_runs_it(self) -> None:
         # The Benchmark page: with no runs root the page says so; with one,
         # "Link benchmark runs" is the correlate step, run from the page.

@@ -639,25 +639,22 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
                     family, model = (judge_opts.judge.split(":", 1) + [""])[:2]
                     judge_obj = get_judge(family, model)
                 if scoped:
-                    # One runner call per selected session; the turn cap is
-                    # spent across them, not restarted for each session.
-                    remaining = judge_opts.limit
+                    # One runner call per selected session, each with the
+                    # FULL turn cap: a selection means "analyse THESE
+                    # sessions", so a large first session must not starve
+                    # the rest — the shared pool judged only the first and
+                    # left the others without labels or KPI rows.
                     for sid in scoped:
-                        if remaining is not None and remaining <= 0:
-                            break
-                        before = stats.total
                         if judge_obj is not None:
                             run_judge(
                                 conn, judge_obj, rubric, session_id=sid,
-                                limit=remaining, **kw,
+                                limit=judge_opts.limit, **kw,
                             )
                         else:
                             run_default_by_copilot(
                                 conn, rubric, cfg, session_id=sid,
-                                limit=remaining, **kw,
+                                limit=judge_opts.limit, **kw,
                             )
-                        if remaining is not None:
-                            remaining = max(0, remaining - (stats.total - before))
                 elif judge_obj is not None:
                     run_judge(conn, judge_obj, rubric, limit=judge_opts.limit, **kw)
                 else:

@@ -342,6 +342,14 @@ export default function AnalysisPage() {
   // plus the sessions this run will read (the selection, else every new
   // session under the filters).
   const analysisCount = status.counts.sessions + (listing ? plan.count : 0);
+  // The judge turn cap is PER SELECTED SESSION (whole-store runs keep a
+  // single total), so the most a run can judge is the product — the
+  // number that decides cost on a hosted judge.
+  const turnsPerRun = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 0;
+  const turnsNote =
+    picked.size > 0
+      ? `up to ${(turnsPerRun * picked.size).toLocaleString()} turns across ${picked.size.toLocaleString()} selected session${picked.size === 1 ? "" : "s"}`
+      : `up to ${turnsPerRun.toLocaleString()} turns in this run`;
   // Off this network? The same rule as Settings: claude-code always is;
   // an openai-compatible judge counts as external unless its base URL is
   // a private address (a LAN vLLM box is as local as Ollama).
@@ -487,7 +495,8 @@ export default function AnalysisPage() {
           when nothing is selected); with a selection, optional processing is
           skipped. The LLM judge and Compute KPIs run only when the judge is
           checked — 5 steps unchecked, 7 checked; with sessions selected the
-          judge is checked for you.
+          judge is checked for you. With a selection, the Turns cap applies to
+          each selected session, so every one gets judged.
         </p>
 
         <p className="text-sm text-slate-600 mt-2">{step.blurb}</p>
@@ -610,13 +619,16 @@ export default function AnalysisPage() {
 
         {step.id === "judge" && (
           <div className="flex items-center gap-2 mt-3 flex-wrap">
-            <label className="text-xs text-slate-500">Turns</label>
+            <label className="text-xs text-slate-500">
+              {picked.size > 0 ? "Turns per session" : "Turns"}
+            </label>
             <input
               type="number"
               value={limit}
               onChange={(e) => setLimit(Number(e.target.value))}
               className="border border-slate-300 bg-white text-slate-900 rounded px-2 py-1 text-sm w-20"
             />
+            <span className="text-xs text-slate-500">{turnsNote}</span>
             {/* #313: a run name keeps this run apart from the packaged
                 one; "only turns labelled by" makes it cover the same
                 turns so the two can be compared below. */}
