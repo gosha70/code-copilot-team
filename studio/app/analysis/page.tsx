@@ -68,9 +68,9 @@ function Stepper({
                 className={
                   "w-7 h-7 rounded-full flex items-center justify-center text-xs shrink-0 border-2 " +
                   (failed
-                    ? "bg-rose-500 border-rose-500 text-white"
+                    ? "bg-rose-600 border-rose-600 text-white"
                     : s.done
-                      ? "bg-emerald-500 border-emerald-500 text-white"
+                      ? "bg-emerald-700 border-emerald-700 text-white"
                       : running
                         ? "bg-white border-blue-500 text-blue-600 animate-pulse"
                         : active
@@ -140,7 +140,7 @@ function Funnel({ counts }: { counts: PipelineStatus["counts"] }) {
           </span>
           {c.note && <span className="text-xs text-slate-500">({c.note})</span>}
           {i < cells.length - 1 && (
-            <span className="text-slate-300 ml-2">→</span>
+            <span className="text-slate-500 ml-2">→</span>
           )}
         </span>
       ))}
