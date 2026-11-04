@@ -147,6 +147,31 @@ generated, gated site with a `cct` command in front of it.
   (#331, built unattended).
 - **A user cookbook** for Session Analytics (#315), including ports, the judge
   on a LAN host, and troubleshooting.
+- **The Analysis pipeline is a selection-first flow.** Pick sessions in the
+  Load step (with their native session ids shown), load them, and the judge and
+  KPI steps run over exactly that selection — a selection that matches nothing
+  loaded is refused, never widened to the whole store. With sessions selected
+  the judge is included by default, the turn cap applies per selected session,
+  and "Run all" waits until the session listing is known. A judge run that
+  labels nothing fails the step with the reason, and a mostly failed run leads
+  its message with the failure count, in the failure colour.
+- **Agent Tuning is grounded in the session's real harness.** The judge is
+  given the names of the project's actual steering and configuration files
+  (AGENTS.md, CLAUDE.md, `.claude/…`, `.cursor/…`), a harness stamp, and short
+  excerpts of the steering files only, redacted under the stricter of the
+  session's recorded mode and the project's current one. Proposed file paths
+  are checked against that listed set — a path the inventory does not contain
+  is marked as unchecked, not presented as copy-ready.
+- **Studio navigation, Settings and session pages.** Two-level navigation with
+  section memory; Settings as collapsible, visually distinct groups with each
+  probe inside its card; session properties behind a labelled Details button
+  beside the title; a sortable session id column; and the off-network judge
+  warning beside Run all, with bare hostnames, `.local`/`.lan` names, RFC 1918,
+  link-local, CGNAT and IPv6 unique-local/link-local addresses treated as local.
+- **Routing shows what the supervisor will actually do.** The page reads the
+  registry and validates it through the same constrained validator the
+  cooldown supervisor runs, reporting an invalid registry rather than a
+  sanitized guess; the Benchmark page explains a run before listing one.
 
 #### Documentation and the `cct` command
 
