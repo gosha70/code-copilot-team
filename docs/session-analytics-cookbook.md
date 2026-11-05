@@ -212,10 +212,15 @@ parsed to list them:
 ```
 
 On the Analysis pipeline page the **Load sessions** step shows the same list
-under **Which sessions**: filter by date and count, or tick sessions,
-and the button says what it will read ("Load 3 selected · 12.1 MB").
-**Run all steps** uses the same selection. `watch` runs ingest in a
-loop:
+under **Which sessions**: filter by date and count, or tick sessions; the
+button says "Load 3 selected" and the size to read sits beside it.
+**Run all steps** uses the same selection, and with sessions selected the
+LLM judge is included by default (untick it to load and graph only). The
+judge's turn cap applies to each selected session, a run that stops at a
+failed step leaves the later steps not-done rather than showing an old
+"done", and a turn whose last attempt failed is retried on the next run.
+A loaded row links to its session page, so the session stays reachable
+after loading. `watch` runs ingest in a loop:
 
 ```bash
 ./scripts/session-analytics watch --interval 15

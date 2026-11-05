@@ -40,7 +40,7 @@ About five minutes from clone to a first session.
 
 ```bash
 # 1. Clone the latest stable release (master is unreleased, in development)
-git clone --branch v1.1.0 https://github.com/gosha70/code-copilot-team.git
+git clone --branch v2.0.0 https://github.com/gosha70/code-copilot-team.git
 cd code-copilot-team
 
 # 2. Install for your tool — see "Choose your tool" below
@@ -53,15 +53,12 @@ claude-code ~/projects/my-app
 Every other install path — Pi, Codex, Cursor, Copilot, Windsurf, Aider, the
 Claude Code plugin — is in [Install options](docs/install.md).
 
-> **Stable versus unreleased.** `v1.1.0` is the latest release and what the
-> Quick Start installs. Some of what this page describes landed after it: the
-> `cct` command-line front door and the generated feature index, the reviewer
-> readiness probe, and unattended auto-build runs. To use those, work from
-> `master` instead — `git checkout master && ./scripts/setup.sh --sync --claude-code` —
-> and read it as in-development. Lines below marked **(master)** need it.
+> **Released as v2.0.0.** Everything this page describes is in the latest
+> release and what the Quick Start installs. `master` continues as active
+> development; read it as in-development.
 
 ```bash
-./scripts/cct list                  # (master) every feature, command, skill and capability
+./scripts/cct list                  # every feature, command, skill and capability
 ```
 
 ## Choose your tool
@@ -104,7 +101,7 @@ claude-code ~/projects/my-app
 line, and the global rules load without being asked for.
 **Verify:** ask the agent "which rules are loaded?" — it should name the four
 global rules.
-**If not:** run `./scripts/cct doctor` **(master)** — it checks the tools, the
+**If not:** run `./scripts/cct doctor` — it checks the tools, the
 provider profile and each installed adapter, and says which is missing. Then
 `./scripts/setup.sh --sync --claude-code`. Full layout:
 [configuration layers](docs/configuration-layers.md).
@@ -113,7 +110,7 @@ provider profile and each installed adapter, and says which is missing. Then
 
 ```bash
 # Declare a reviewer in ~/.code-copilot-team/providers.toml, then prove it
-# answers — the probe is a (master) command:
+# answers — the probe command:
 scripts/review-round-runner.sh . --probe --peer <name> --subject claude --out /tmp/probe.json
 jq '{provider, verdict, duration_sec, error}' /tmp/probe.json
 ```
@@ -123,13 +120,13 @@ jq '{provider, verdict, duration_sec, error}' /tmp/probe.json
 `/review-submit` at the end of a phase.
 **If not:** exit 2 means nothing in the chain passed its healthcheck; exit 3
 means the provider ran and returned no parseable verdict — the answer's tail is
-in the file. On `v1.1.0`, which has no probe, check the provider with
+in the file. On releases before v2.0.0, which have no probe, check the provider with
 `scripts/providers-health.sh --provider <name>` instead. The ordered setup is
 the [auto code review cookbook](docs/auto-code-review-setup.md).
 
 ### Your first unattended run
 
-**(master)**, and it has prerequisites: an approved SDD bundle for the feature
+It has prerequisites: an approved SDD bundle for the feature
 (`spec.md`, `plan.md`, `tasks.md` and a finalized `verification.yaml`), a
 reviewer that answers, and `gh` authenticated for the pull request.
 
@@ -192,8 +189,7 @@ Sync updates commands and `.claude/` contents but never overwrites your
 
 Maturity labels are defined in [feature maturity](docs/maturity.md); a feature
 marked `unreleased` is on `master` only. The full index with adapter support
-per feature is [docs/features.md](docs/features.md), or ask the CLI
-**(master)**:
+per feature is [docs/features.md](docs/features.md), or ask the CLI:
 
 ```bash
 ./scripts/cct features                   # one line per feature
