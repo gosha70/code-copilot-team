@@ -540,3 +540,51 @@ class TestSessionAnalysis(RegistryResetTestCase):
                 ctx = sa.project_context(self.db, self.session_id)
             self.assertNotIn("Keep prose", ctx.excerpts[0][1])
             self.assertIn("[redacted", ctx.excerpts[0][1])
+
+    def test_an_excerpt_is_redacted_before_it_is_truncated(self) -> None:
+        # Reviewer finding: the excerpt was cut to 1,200 chars BEFORE
+        # redaction, so a fence that opens inside the cut and closes after
+        # it never matched, and the block's contents reached the judge
+        # verbatim under "code". Redact the whole file first.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prose = "# Rules\n" + "x" * 1140 + "\n"
+            (root / "AGENTS.md").write_text(
+                prose + "```\nsecret=sk-live-straddle\n" + "y" * 300 + "\n```\n",
+                encoding="utf-8",
+            )
+            self._set_project(root)
+            self.db.execute(
+                "UPDATE copilot_session SET redaction_mode = ?", (C.REDACT_CODE,)
+            )
+            self.db.commit()
+            with self._config(C.REDACT_CODE):
+                ctx = sa.project_context(self.db, self.session_id)
+            excerpt = ctx.excerpts[0][1]
+            self.assertLessEqual(len(excerpt), sa._STEERING_EXCERPT_CHARS)
+            self.assertNotIn("sk-live-straddle", excerpt)
+            self.assertIn("code redacted", excerpt)
+
+    def test_the_inventory_keeps_the_steering_files_under_the_cap(self) -> None:
+        # Reviewer finding: the inventory was sorted and capped, so dotted
+        # paths (".claude/...") pushed AGENTS.md/CLAUDE.md out of a project
+        # with many artifacts — and the prompt then said no steering file
+        # exists. The cap must bound only the glob entries.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "AGENTS.md").write_text("# Rules\nKeep me.\n", encoding="utf-8")
+            agents = root / ".claude" / "agents"
+            agents.mkdir(parents=True)
+            for i in range(45):
+                (agents / f"a{i:02d}.md").write_text("# A\n", encoding="utf-8")
+            self._set_project(root)
+            self.db.execute(
+                "UPDATE copilot_session SET redaction_mode = ?", (C.REDACT_CODE,)
+            )
+            self.db.commit()
+            with self._config(C.REDACT_CODE):
+                ctx = sa.project_context(self.db, self.session_id)
+            self.assertIn("AGENTS.md", ctx.files)
+            self.assertLessEqual(len(ctx.files), sa._CONFIG_LIST_CAP)
+            self.assertEqual([n for n, _ in ctx.excerpts], ["AGENTS.md"])
+            self.assertIn("Keep me", ctx.excerpts[0][1])

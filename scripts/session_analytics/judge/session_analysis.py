@@ -352,7 +352,11 @@ def project_context(db: Database, session_id: int) -> ProjectContext:
         for path in sorted(glob.glob(os.path.join(root, pattern))):
             if os.path.isfile(path):
                 found.append(os.path.relpath(path, root).replace(os.sep, "/"))
-    files = tuple(sorted(set(found))[:_CONFIG_LIST_CAP])
+    # Steering files are the grounding's point: never let the dotted glob
+    # entries (".claude/..." sorts first) push them out of the cap.
+    steering = sorted(n for n in set(found) if n in _STEERING_FILES)
+    others = sorted(n for n in set(found) if n not in _STEERING_FILES)
+    files = tuple((steering + others)[:_CONFIG_LIST_CAP])
     excerpts: list[tuple[str, str]] = []
     total = 0
     for name in _STEERING_FILES:
@@ -360,11 +364,15 @@ def project_context(db: Database, session_id: int) -> ProjectContext:
             continue
         try:
             with open(os.path.join(root, name), encoding="utf-8", errors="replace") as fh:
-                text = fh.read(_STEERING_EXCERPT_CHARS).strip()
+                text = fh.read().strip()
         except OSError:
             continue
         if text:
-            redacted = redact_text(text, mode)
+            # Redact the WHOLE file, then truncate. Truncating first
+            # would cut a fence before its closing marker, the strip
+            # would not match, and the block's contents would reach the
+            # judge under a mode that promised fenced blocks are removed.
+            redacted = redact_text(text, mode)[:_STEERING_EXCERPT_CHARS]
             excerpts.append((name, redacted))
             total += len(redacted)
     return ProjectContext(True, root, files, tuple(excerpts))
