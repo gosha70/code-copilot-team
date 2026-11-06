@@ -237,6 +237,11 @@ def start_all(
     sequence = list(RUN_ALL_SEQUENCE)
     if include_judge:
         sequence.insert(sequence.index(STEP_KPIS), STEP_JUDGE)
+    else:
+        # KPIs roll up the judge's labels. Without the judge in this run
+        # the rollup has nothing new to summarise, so Run all leaves it to
+        # the Compute KPIs step, which stays individually runnable.
+        sequence.remove(STEP_KPIS)
     if only:
         # An ordered SUBSET (the Similar tab runs embed + similar): the
         # pipeline's order is kept whatever order the caller named.
@@ -254,6 +259,16 @@ def start_all(
 
     def _sequence() -> str:
         done: list[str] = []
+        with _lock:
+            # A run starts from a clean slate: a step's "done" from an
+            # earlier run must not sit beside steps this run has not
+            # reached (Compute KPIs shown done while the LLM judge was
+            # still at step 3 was the visible symptom). Each step then
+            # turns running -> done/failed as the sequence reaches it,
+            # and a step the run stops before stays idle, not done.
+            for step in sequence:
+                if step in runners and not _running(step):
+                    _jobs[step] = {"state": _STATE_IDLE}
         for step in sequence:
             fn = runners.get(step)
             if fn is None:

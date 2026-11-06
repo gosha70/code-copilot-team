@@ -13,15 +13,19 @@
 
 from __future__ import annotations
 
+import glob
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
 from typing import Any, Optional
 
 from .. import constants as C
-from ..config import load_map
+from ..config import load_config, load_map
+from ..ingest.project_key import ProjectKeyResolver
+from ..ingest.redaction import redact_text, stricter_mode
 from ..mcp.tools import turn_latency
 from ..relational.db import Database, now_iso
 from .contracts import (
@@ -56,6 +60,24 @@ _LIST_KEY = {
 }
 _TRUNCATION_MARK = "[… truncated {n} chars …]"
 _ERROR_HEAD_CHARS = 500
+#: Steering files whose first lines the judge may see. Only these are read;
+#: every other configuration artifact is listed by path alone. The project's
+#: steering is whatever it has — AGENTS.md on a project that moved there,
+#: CLAUDE.md on one that did not — and the judge is told which.
+_STEERING_FILES = ("AGENTS.md", "CLAUDE.md", "GEMINI.md")
+_STEERING_EXCERPT_CHARS = 1200
+_STEERING_EXCERPT_TOTAL = 3000
+#: Configuration artifacts listed to the judge by path (never their contents).
+_CONFIG_PATTERNS = (
+    ".claude/settings.json",
+    ".claude/settings.local.json",
+    ".claude/agents/*.md",
+    ".claude/skills/*/SKILL.md",
+    ".claude/hooks/*",
+    ".cursor/rules/*",
+    ".cursorrules",
+)
+_CONFIG_LIST_CAP = 40
 #: A whole-session prompt is ~10k tokens; a 3B local model answers in
 #: half a minute, a 27B one can need several minutes of prompt
 #: evaluation alone on a laptop. Generous, because a timeout here throws
@@ -282,24 +304,154 @@ def _parse_ts(value: Any) -> Optional[datetime]:
 # ── facts ───────────────────────────────────────────────────────────────
 
 
+@dataclass(frozen=True)
+class ProjectContext:
+    """What the session's project actually contains on this machine.
+
+    The judge may name a file only from ``files``; the steering files'
+    openings ride along as excerpts so the advice can quote a real rule.
+    ``available`` False (the path is gone) is distinct from empty (the
+    path has none of the recognized files), because only the first means
+    "we cannot tell you what exists" — and then the judge must not invent.
+    """
+
+    available: bool
+    root: Optional[str]
+    files: tuple[str, ...]
+    excerpts: tuple[tuple[str, str], ...]
+
+
+def project_context(db: Database, session_id: int) -> ProjectContext:
+    """The harness files this session's project actually has, read-only."""
+    row = db.query_one(
+        "SELECT project_path, redaction_mode FROM copilot_session WHERE id = ?",
+        (session_id,),
+    )
+    root = str(row[0]) if row and row[0] else ""
+    if not root or not os.path.isdir(root):
+        return ProjectContext(False, None, (), ())
+    # The excerpts leave the machine inside a judge prompt, so they are
+    # read under the STRICTER of two modes: the one recorded when this
+    # session was ingested, and the project's CURRENT effective mode. A
+    # project tightened after ingest must not leak under the stale mode.
+    cfg = load_config()
+    key = ProjectKeyResolver(cfg.project_id_rules).resolve(root)
+    override = cfg.project_override(key)
+    current = (
+        override.redaction_mode
+        if override is not None and override.redaction_mode is not None
+        else cfg.redaction_mode
+    )
+    recorded = str(row[1]) if row and row[1] else current
+    mode = stricter_mode(recorded, current)
+    found: list[str] = []
+    for name in _STEERING_FILES:
+        if os.path.isfile(os.path.join(root, name)):
+            found.append(name)
+    for pattern in _CONFIG_PATTERNS:
+        for path in sorted(glob.glob(os.path.join(root, pattern))):
+            if os.path.isfile(path):
+                found.append(os.path.relpath(path, root).replace(os.sep, "/"))
+    # Steering files are the grounding's point: never let the dotted glob
+    # entries (".claude/..." sorts first) push them out of the cap.
+    steering = sorted(n for n in set(found) if n in _STEERING_FILES)
+    others = sorted(n for n in set(found) if n not in _STEERING_FILES)
+    files = tuple((steering + others)[:_CONFIG_LIST_CAP])
+    excerpts: list[tuple[str, str]] = []
+    total = 0
+    for name in _STEERING_FILES:
+        if name not in files or total >= _STEERING_EXCERPT_TOTAL:
+            continue
+        try:
+            with open(os.path.join(root, name), encoding="utf-8", errors="replace") as fh:
+                text = fh.read().strip()
+        except OSError:
+            continue
+        if text:
+            # Redact the WHOLE file, then truncate. Truncating first
+            # would cut a fence before its closing marker, the strip
+            # would not match, and the block's contents would reach the
+            # judge under a mode that promised fenced blocks are removed.
+            redacted = redact_text(text, mode)[:_STEERING_EXCERPT_CHARS]
+            excerpts.append((name, redacted))
+            total += len(redacted)
+    return ProjectContext(True, root, files, tuple(excerpts))
+
+
+def render_project(ctx: ProjectContext) -> str:
+    """The PROJECT CONFIGURATION block the prompt embeds."""
+    if not ctx.available:
+        return (
+            "project path: not available on this machine, so the files that "
+            "configure the project's harness cannot be listed.\n"
+            "Do NOT name a file path unless it appears in the transcript. "
+            "If you cannot name a path you know exists, set config_change to null."
+        )
+    lines = [f"project root: {ctx.root}"]
+    lines.append(
+        "files that actually exist here: "
+        + (
+            ", ".join(ctx.files)
+            if ctx.files
+            else "none of the recognized steering/configuration files"
+        )
+    )
+    for name, text in ctx.excerpts:
+        lines.append(f"\n--- {name} (first {len(text)} chars) ---\n{text}")
+    lines.append(
+        "\nRULES: config_change.file must be one of the files listed above. "
+        "A starter may be new, but the page marks any path that is not in "
+        "the list as unlisted — so prefer a listed path, and say in the "
+        "content when the file would have to be created. Do not name "
+        "CLAUDE.md when the list does not include it — use the steering "
+        "file this project actually has."
+    )
+    return "\n".join(lines)
+
+
 def session_facts(db: Database, session_id: int, transcript: Transcript) -> str:
     """The numbers the judge should not have to infer from the text."""
     row = db.query_one(
         "SELECT copilot, model, project_path, turn_count, tool_call_count, "
-        "error_count, duration_seconds, "
+        "error_count, duration_seconds, cli_version, cct_version, cct_sha, "
+        "instructions_digest, providers_digest, harness_mixed, "
         "(SELECT SUM(cost_usd) FROM copilot_turn WHERE session_id = copilot_session.id) "
         "FROM copilot_session WHERE id = ?",
         (session_id,),
     )
     if row is None:
         return ""
-    copilot, model, project, turns, tools, errors, duration, cost = row
+    (
+        copilot, model, project, turns, tools, errors, duration,
+        cli_version, cct_version, cct_sha, instructions_digest,
+        providers_digest, harness_mixed, cost,
+    ) = row
     lines = [
         f"copilot: {copilot}; model: {model or 'unknown'}; project: {project}",
         f"turns: {turns}; tool calls: {tools}; errors: {errors}; "
         f"duration: {_fmt_duration(duration)}; cost: "
         + (f"${float(cost):.2f}" if cost is not None else "not priced"),
     ]
+    # The harness the session ran under (#371 A4): stamped by the copilot
+    # on ingest. Without it the judge has no idea which harness spec the
+    # advice must fit, so it says "unstamped" rather than guessing.
+    stamp: list[str] = []
+    if cli_version:
+        stamp.append(f"CLI {cli_version}")
+    if cct_version:
+        stamp.append(f"CCT {cct_version}")
+    if cct_sha:
+        stamp.append(f"commit {str(cct_sha)[:12]}")
+    if instructions_digest:
+        stamp.append(f"instructions digest {str(instructions_digest)[:12]}")
+    if providers_digest:
+        stamp.append(f"providers digest {str(providers_digest)[:12]}")
+    if harness_mixed:
+        stamp.append("mixed harness — earliest stamp shown")
+    lines.append(
+        "harness stamp: " + "; ".join(stamp) if stamp
+        else "harness stamp: none — this session predates harness stamping"
+    )
     tool_counts: dict[str, int] = {}
     for t in transcript.all_turns:
         for name in t.tools:
@@ -367,8 +519,10 @@ def analyze_session(
         db, session_id,
         max_chars=spec.max_transcript_chars, per_turn_cap=spec.per_turn_cap_chars,
     )
+    project = project_context(db, session_id)
     prompt = spec.prompts[kind].format(
         facts=session_facts(db, session_id, transcript),
+        project=render_project(project),
         transcript=transcript.text,
     )
     model = getattr(judge, "_model_label", None) or getattr(judge, "_model", "") or ""
@@ -403,7 +557,7 @@ def analyze_session(
             f"missing keys: {', '.join(missing)}; got: {(text or '')[:_ERROR_HEAD_CHARS]}",
         )
 
-    result = _coerce(kind, obj, {t.sequence_num for t in transcript.all_turns})
+    result = _coerce(kind, obj, {t.sequence_num for t in transcript.all_turns}, project)
     _store(
         db, session_id, kind, judge, str(model), spec.version, transcript,
         parse_status=PARSE_OK, result=result, error=None,
@@ -446,7 +600,9 @@ def _record_failure(
     }
 
 
-def _coerce(kind: str, obj: dict[str, Any], valid_turns: set[int]) -> dict[str, Any]:
+def _coerce(
+    kind: str, obj: dict[str, Any], valid_turns: set[int], project: ProjectContext
+) -> dict[str, Any]:
     """Keep what the contract promises, in the shape the page renders.
 
     Enums are normalised and items with unknown values dropped; turn
@@ -469,7 +625,7 @@ def _coerce(kind: str, obj: dict[str, Any], valid_turns: set[int]) -> dict[str, 
         offered += 1
         if not isinstance(raw, dict):
             continue
-        item = _ITEM_SHAPE[kind](raw, valid_turns)
+        item = _ITEM_SHAPE[kind](raw, valid_turns, project)
         if item is None:
             continue
         ok = True
@@ -514,14 +670,45 @@ def _number(v: Any) -> Optional[float]:
     return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
 
-def _file_block(v: Any, body_key: str) -> Optional[dict[str, str]]:
+def _file_block(v: Any, body_key: str, project: ProjectContext) -> Optional[dict[str, Any]]:
     if not isinstance(v, dict):
         return None
     file, body = _text(v.get("file")), _text(v.get(body_key))
-    return {"file": file, body_key: body} if file and body else None
+    if not (file and body):
+        return None
+    return {
+        "file": file,
+        body_key: body,
+        # True: the path is one of the project's LISTED files. False: it
+        # is not (or it is absolute / traverses upward). None: no project
+        # to check against.
+        "file_found": _file_state(project, file),
+    }
 
 
-def _tuning_item(raw: dict[str, Any], valid_turns: set[int]) -> Optional[dict[str, Any]]:
+def _file_state(project: ProjectContext, file: str) -> Optional[bool]:
+    """True only when the path is one of the project's listed files.
+
+    Membership, not existence: a real file the inventory leaves out (a
+    ``.env``, say) must not read as "found", and the check must never
+    become a way to probe the filesystem. Absolute paths and any ``..``
+    segment are refused before the check. None means the project is
+    unavailable, so a well-formed relative path cannot be judged at all.
+    """
+    raw = file.strip().replace("\\", "/")
+    if not raw or os.path.isabs(raw) or raw.startswith("~"):
+        return False
+    parts = [p for p in raw.split("/") if p not in ("", ".")]
+    if not parts or ".." in parts:
+        return False
+    if not project.available:
+        return None
+    return "/".join(parts) in project.files
+
+
+def _tuning_item(
+    raw: dict[str, Any], valid_turns: set[int], project: ProjectContext
+) -> Optional[dict[str, Any]]:
     title = _text(raw.get("title"))
     if not title:
         return None
@@ -532,11 +719,13 @@ def _tuning_item(raw: dict[str, Any], valid_turns: set[int]) -> Optional[dict[st
         "evidence_turns": _turn_list(raw.get("evidence_turns"), valid_turns),
         "explanation": _text(raw.get("explanation")),
         "recommendation": _text(raw.get("recommendation")),
-        "config_change": _file_block(raw.get("config_change"), "diff"),
+        "config_change": _file_block(raw.get("config_change"), "diff", project),
     }
 
 
-def _coaching_item(raw: dict[str, Any], valid_turns: set[int]) -> Optional[dict[str, Any]]:
+def _coaching_item(
+    raw: dict[str, Any], valid_turns: set[int], _project: ProjectContext
+) -> Optional[dict[str, Any]]:
     issue, improved = _text(raw.get("issue")), _text(raw.get("improved"))
     if not (issue and improved):
         # A row without the issue or the better prompt coaches nothing.
@@ -550,7 +739,9 @@ def _coaching_item(raw: dict[str, Any], valid_turns: set[int]) -> Optional[dict[
     }
 
 
-def _efficiency_item(raw: dict[str, Any], valid_turns: set[int]) -> Optional[dict[str, Any]]:
+def _efficiency_item(
+    raw: dict[str, Any], valid_turns: set[int], project: ProjectContext
+) -> Optional[dict[str, Any]]:
     title = _text(raw.get("title"))
     if not title:
         return None
@@ -560,7 +751,7 @@ def _efficiency_item(raw: dict[str, Any], valid_turns: set[int]) -> Optional[dic
         "wasted_turns": _number(raw.get("wasted_turns")),
         "wasted_seconds": _number(raw.get("wasted_seconds")),
         "lever": _text(raw.get("lever")),
-        "starter": _file_block(raw.get("starter"), "content"),
+        "starter": _file_block(raw.get("starter"), "content", project),
     }
 
 

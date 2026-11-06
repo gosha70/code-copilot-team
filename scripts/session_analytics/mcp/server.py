@@ -231,7 +231,7 @@ def run(dsn: str = "", kuzu_path: str = "") -> None:
         resolved = resolved or cfg.dsn
         resolved_kuzu = resolved_kuzu or cfg.kuzu_path
     if not resolved:
-        raise ValueError("no DSN configured for the MCP server (see --dsn).")
+        raise ValueError("no database configured for the MCP server (see --db).")
 
     # ONCE, at startup, exactly as create_app does. Every tool here only
     # OPENS the store, so without this a server started against an older

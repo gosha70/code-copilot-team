@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 from .. import constants as C
 from ..config import PricingConfig
@@ -110,6 +110,36 @@ def upsert_session(
 
     db.commit()
     return session_id
+
+
+def resolve_selection(
+    db: Database, refs: Iterable[str]
+) -> tuple[list[int], list[str]]:
+    """Map selected copilot session ids to store ids, and report misses.
+
+    Returns ``(ids, missing)``. A non-empty ref set with no ids is a
+    REFUSAL for the caller — never "the whole store". A scoped run that
+    silently widens would spend model calls on everything the user
+    explicitly did not select.
+    """
+    unique = list(dict.fromkeys(r for r in refs if r))
+    if not unique:
+        return [], []
+    marks = ",".join("?" for _ in unique)
+    rows = db.query(
+        f"SELECT session_id, id FROM copilot_session "
+        f"WHERE session_id IN ({marks})",
+        tuple(unique),
+    )
+    by_ref = {str(r[0]): int(r[1]) for r in rows}
+    ids = sorted(by_ref[r] for r in unique if r in by_ref)
+    missing = [r for r in unique if r not in by_ref]
+    return ids, missing
+
+
+def resolve_session_refs(db: Database, refs: Iterable[str]) -> list[int]:
+    """The store ids only; see ``resolve_selection`` for the misses."""
+    return resolve_selection(db, refs)[0]
 
 
 # ── session metadata (FU-1) ─────────────────────────────────────────────

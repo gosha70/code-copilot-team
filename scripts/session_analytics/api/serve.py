@@ -33,7 +33,7 @@ def serve(
 ) -> int:
     cfg = load_config(dsn=dsn, kuzu_path=kuzu_path)
     if not cfg.dsn:
-        print("error: no DSN configured (see --dsn).", file=sys.stderr)
+        print("error: no database configured (see --db).", file=sys.stderr)
         return 2
 
     import uvicorn

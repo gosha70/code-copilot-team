@@ -54,7 +54,7 @@
 
 set -euo pipefail
 
-PI_CODE_VERSION="1.1.0"
+PI_CODE_VERSION="2.0.0"
 # Authoritative runtime provenance version (read by `pi-code provenance`). The
 # launcher owns it; a managed install has no package.json, so env is the source.
 export CCT_VERSION="$PI_CODE_VERSION"

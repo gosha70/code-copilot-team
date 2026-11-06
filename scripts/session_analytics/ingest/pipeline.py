@@ -276,11 +276,24 @@ def discover_sessions(
     db = Database.connect(dsn)
     try:
         apply_ddl(db)
+        # The store's own row id, so a loaded row can link to its session
+        # page — the load table otherwise dead-ends at "loaded" and the
+        # session is lost to the person who just loaded it.
+        store_ids = {
+            (str(copilot), str(session_id)): int(row_id)
+            for row_id, copilot, session_id in db.query(
+                "SELECT id, copilot, session_id FROM copilot_session"
+            )
+        }
         for copilot in selected:
             adapter = get_adapter(copilot)
             for ref in selection.apply(adapter.discover(root)):
                 row = describe(ref)
                 row["loaded"] = not incremental.should_ingest(db, ref, full=False)
+                row["store_id"] = (
+                    store_ids.get((copilot, str(row["session_id"])))
+                    if row["loaded"] else None
+                )
                 rows.append(row)
     finally:
         db.close()

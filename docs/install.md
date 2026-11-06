@@ -7,7 +7,7 @@ install more than one adapter.
 
 ```bash
 # 1. Clone the latest stable release (drop --branch for unreleased master)
-git clone --branch v1.1.0 https://github.com/gosha70/code-copilot-team.git
+git clone --branch v2.0.0 https://github.com/gosha70/code-copilot-team.git
 cd code-copilot-team
 
 # 2. Install for your tool(s)

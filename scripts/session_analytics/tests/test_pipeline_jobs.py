@@ -105,6 +105,64 @@ class TestSingleFlight(unittest.TestCase):
         # embed and similar between graph and kpis
         self.assertEqual(pj.RUN_ALL_SEQUENCE, ("ingest", "correlate", "graph", "embed", "similar", "kpis"))
 
+    def test_run_all_skips_kpis_without_the_judge(self) -> None:
+        # KPIs roll up the judge's labels: the default Run all (no judge)
+        # must not compute a rollup from nothing. The KPI step stays
+        # individually runnable — an explicit `only` still runs it.
+        ran: list[str] = []
+        runners = {s: (lambda s=s: ran.append(s) or "ok") for s in pj.STEPS}
+
+        def wait() -> None:
+            for _ in range(100):
+                if pj.job_state(pj.STEP_ALL)["state"] != "running":
+                    break
+                time.sleep(0.02)
+
+        pj.start_all(runners, include_judge=False)
+        wait()
+        self.assertNotIn(pj.STEP_KPIS, ran)
+        self.assertIn(pj.STEP_INGEST, ran)
+
+        ran.clear()
+        pj.start_all(runners, include_judge=True)
+        wait()
+        self.assertIn(pj.STEP_JUDGE, ran)
+        self.assertIn(pj.STEP_KPIS, ran)
+        self.assertLess(ran.index(pj.STEP_JUDGE), ran.index(pj.STEP_KPIS))
+
+        ran.clear()
+        pj.start_all(runners, include_judge=False, only=[pj.STEP_KPIS])
+        wait()
+        self.assertEqual(ran, [pj.STEP_KPIS])
+
+    def test_run_all_starts_from_a_clean_slate(self) -> None:
+        # Owner's report: a restarted run showed Compute KPIs done beside
+        # an LLM judge that had not run — a stale "done" from an earlier
+        # run sitting next to a step this run had not reached. The steps
+        # the run will touch start idle, and a step the run never reaches
+        # stays idle, not done.
+        pj._jobs[pj.STEP_JUDGE] = {"state": "done", "message": "old judge"}
+        pj._jobs[pj.STEP_KPIS] = {"state": "done", "message": "old kpis"}
+
+        def fail() -> str:
+            raise RuntimeError("5 judge attempts failed")
+
+        runners = {s: (lambda: "ok") for s in pj.STEPS}
+        runners[pj.STEP_JUDGE] = fail
+
+        def wait() -> None:
+            for _ in range(200):
+                if pj.job_state(pj.STEP_ALL)["state"] != "running":
+                    break
+                time.sleep(0.02)
+
+        pj.start_all(runners, include_judge=True)
+        wait()
+        self.assertEqual(pj.job_state(pj.STEP_JUDGE)["state"], "failed")
+        # Never reached — and, crucially, NOT the stale "done".
+        self.assertEqual(pj.job_state(pj.STEP_KPIS)["state"], "idle")
+        self.assertIn("stopped at 'judge'", pj.job_state(pj.STEP_ALL)["message"])
+
     def test_progress_rides_on_the_running_job_and_survives_completion(self) -> None:
         gate = threading.Event()
 

@@ -104,6 +104,53 @@ class TestRunnerAndKpis(RegistryResetTestCase):
         finally:
             db.close()
 
+    def test_a_failed_attempt_is_retried(self) -> None:
+        # The funnel's "N judge attempts failed" must be able to clear: a
+        # turn whose only row is a failed attempt is selected again on the
+        # next run, and once labelled successfully it is not judged again.
+        from session_analytics.judge.contracts import PARSE_BACKEND_ERROR
+
+        class _DeadJudge:
+            judge_id = "dead"
+
+            def rate_turn(self, ctx: TurnContext, rubric: Rubric) -> TurnLabels:
+                return TurnLabels(
+                    bool_labels={label: None for label in rubric.bool_labels},
+                    sentiment=None,
+                    interaction_quality=None,
+                    parse_status=PARSE_BACKEND_ERROR,
+                    judge_id=self.judge_id,
+                    judge_model="dead-1",
+                    metadata={"error": "HTTP 404: model 'm' not found"},
+                )
+
+        dsn, rubric = self._seed()
+        db = Database.connect(dsn)
+        try:
+            apply_ddl(db)
+            first = run_judge(db, _DeadJudge(), rubric)
+            self.assertEqual(first.parse_ok, 0)
+            self.assertEqual(first.parse_failed, 4)
+            failed = db.query(
+                "SELECT COUNT(*) FROM heuristic_label WHERE parse_status <> ?", (PARSE_OK,)
+            )[0][0]
+            self.assertEqual(failed, 4)
+
+            # A retry picks the same four turns up again and succeeds.
+            second = run_judge(db, _FakeJudge(), rubric)
+            self.assertEqual(second.labeled, 4)
+            self.assertEqual(second.parse_ok, 4)
+            ok = db.query(
+                "SELECT COUNT(*) FROM heuristic_label WHERE parse_status = ?", (PARSE_OK,)
+            )[0][0]
+            self.assertEqual(ok, 4)
+
+            # Successfully labelled: nothing left to judge.
+            third = run_judge(db, _FakeJudge(), rubric)
+            self.assertEqual(third.labeled, 0)
+        finally:
+            db.close()
+
     def test_kpis_math(self) -> None:
         dsn, rubric = self._seed()
         db = Database.connect(dsn)

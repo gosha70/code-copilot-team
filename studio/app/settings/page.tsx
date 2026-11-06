@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { api, ConfigResponse, EmbedModels, JudgeModels, ProjectRedactionRow } from "@/lib/api";
 import { Card, ErrorNote, Loading, useApi } from "@/components/ui";
 import PathPicker from "@/components/PathPicker";
@@ -261,6 +261,80 @@ const META: Record<
   },
 };
 
+const TEST_BUTTON =
+  "border border-slate-300 bg-white text-slate-700 text-sm px-3 py-1 rounded hover:bg-slate-50";
+
+/** One configurable feature as its own card. The header is the toggle, so
+ *  the page scans as a list of groups; the surface alternates so two
+ *  adjacent groups never read as one. */
+function SettingsGroup({
+  title,
+  blurb,
+  open,
+  onToggle,
+  tinted,
+  children,
+}: {
+  title: string;
+  blurb: string;
+  open: boolean;
+  onToggle: () => void;
+  tinted: boolean;
+  children: ReactNode;
+}) {
+  const id = `settings-group-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+  return (
+    <section
+      className={
+        "overflow-hidden rounded-lg border border-slate-300 shadow-sm " +
+        (tinted ? "bg-slate-200/70" : "bg-white")
+      }
+    >
+      <h3>
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={id}
+          onClick={onToggle}
+          className={
+            "flex w-full items-center gap-2 px-4 py-3 text-left " +
+            (open ? "border-b border-slate-300/70" : "")
+          }
+        >
+          <span className="flex-1 text-sm font-semibold text-slate-800">
+            {title}
+          </span>
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 10 6"
+            width="10"
+            height="6"
+            className={
+              "shrink-0 text-slate-600 transition-transform " +
+              (open ? "rotate-180" : "")
+            }
+          >
+            <path
+              d="M1 1l4 4 4-4"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+      </h3>
+      {open && (
+        <div id={id} className="px-4 pb-4">
+          <p className="text-xs text-slate-600 mb-3">{blurb}</p>
+          {children}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function SettingsPage() {
   const [cfg, setCfg] = useState<ConfigResponse | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
@@ -306,6 +380,9 @@ export default function SettingsPage() {
   // ONE open at a time. Help is on demand behind a (?) — permanently
   // rendering every explanation is what made this page unreadable.
   const [openHelp, setOpenHelp] = useState<string | null>(null);
+  // Groups collapse independently and start open, so a first visit shows
+  // everything and the header states the grouping.
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   // Fields that name something on THIS machine get a Browse… button —
   // a path should be findable, not remembered and retyped.
   const [picking, setPicking] = useState<{ key: string; mode: "file" | "dir" } | null>(
@@ -482,7 +559,7 @@ export default function SettingsPage() {
       </div>
 
       {cfg.legacy_db_key && (
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-slate-600">
           Your <code>.env</code> names the database with the old key{" "}
           <code>CCT_SA_DSN</code>; it still works, and Save writes it as{" "}
           <code>CCT_SA_DB</code>.
@@ -508,9 +585,21 @@ export default function SettingsPage() {
         </div>
       )}
 
-      <Card title="Configuration (.env — shared with the CLI)">
-        <div className="space-y-6">
-          {GROUPS.map((g) => {
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-700">Configuration</h2>
+          <p className="text-xs text-slate-600">
+            .env — shared with the CLI. One Save applies every group below;
+            the tests read the saved file, so Save first.
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-3">
+          <button onClick={save} className="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">Save</button>
+          {saved && <span className="text-sm text-slate-600">{saved}</span>}
+        </div>
+      </div>
+      <div className="space-y-4">
+          {GROUPS.map((g, gi) => {
             const inGroup = cfg.fields.filter((f) => {
               if (!g.keys.includes(f.key)) return false;
               // Judge group: show only what the chosen backend uses.
@@ -524,11 +613,16 @@ export default function SettingsPage() {
             });
             if (inGroup.length === 0) return null;
             return (
-              <fieldset key={g.title} className="border border-slate-200 rounded p-3">
-                <legend className="text-sm font-semibold text-slate-700 px-1">
-                  {g.title}
-                </legend>
-                <p className="text-xs text-slate-500 mb-3">{g.blurb}</p>
+              <SettingsGroup
+                key={g.title}
+                title={g.title}
+                blurb={g.blurb}
+                open={collapsed[g.title] !== true}
+                onToggle={() =>
+                  setCollapsed((c) => ({ ...c, [g.title]: !c[g.title] }))
+                }
+                tinted={gi % 2 === 1}
+              >
                 <div className="space-y-3">
           {inGroup.map((f) => {
             const m = META[f.key] || { label: f.key };
@@ -552,7 +646,7 @@ export default function SettingsPage() {
                         "flex items-center justify-center " +
                         (openHelp === f.key
                           ? "border-blue-500 bg-blue-500 text-white"
-                          : "border-slate-300 bg-white text-slate-500 hover:border-slate-400 hover:text-slate-700")
+                          : "border-slate-300 bg-white text-slate-600 hover:border-slate-400 hover:text-slate-700")
                       }
                     >
                       ?
@@ -594,7 +688,7 @@ export default function SettingsPage() {
                 ) : f.key === "CCT_SA_EMBED_MODEL" && !embedOther && embedListState === "loading" ? (
                   <select
                     disabled
-                    className="border border-slate-300 bg-slate-50 text-slate-500 rounded px-2 py-1 text-sm w-full font-mono"
+                    className="border border-slate-300 bg-slate-50 text-slate-600 rounded px-2 py-1 text-sm w-full font-mono"
                   >
                     <option>{values[f.key] ? `${values[f.key]} — listing the server's models…` : "listing the server's models…"}</option>
                   </select>
@@ -642,7 +736,7 @@ export default function SettingsPage() {
                       )}
                       <option value="__other__">Other…</option>
                     </select>
-                    <span className="shrink-0 text-xs text-slate-500">
+                    <span className="shrink-0 text-xs text-slate-600">
                       {embedModelList.length === 1 ? "1 embedding model" : `${embedModelList.length} embedding models`} on the server
                       {embedModels?.not_embedding?.length
                         ? ` · ${embedModels.not_embedding.length} chat model${embedModels.not_embedding.length === 1 ? "" : "s"} left out`
@@ -675,7 +769,7 @@ export default function SettingsPage() {
                       )}
                       <option value="__other__">Other…</option>
                     </select>
-                    <span className="shrink-0 text-xs text-slate-500">
+                    <span className="shrink-0 text-xs text-slate-600">
                       {modelList.length === 1 ? "1 model" : `${modelList.length} models`} on the server
                     </span>
                   </div>
@@ -693,7 +787,7 @@ export default function SettingsPage() {
                     onChange={(e) => set(f.key, e.target.value)}
                   />
                   {f.key === "CCT_SA_JUDGE_MODEL" && models && (
-                    <span className="shrink-0 self-center text-xs text-slate-500">
+                    <span className="shrink-0 self-center text-xs text-slate-600">
                       {modelOther
                         ? "typed name"
                         : effectiveBackend !== savedBackend
@@ -721,7 +815,7 @@ export default function SettingsPage() {
                     {m.help && <p>{m.help}</p>}
                     {m.example && (
                       <p className="mt-1">
-                        <span className="text-slate-500">e.g.</span>{" "}
+                        <span className="text-slate-600">e.g.</span>{" "}
                         <code className="bg-white border border-slate-200 px-1 rounded font-mono">
                           {m.example}
                         </code>
@@ -736,58 +830,70 @@ export default function SettingsPage() {
             );
           })}
                 </div>
-              </fieldset>
+                {g.title === "Storage" && (
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <button type="button" onClick={testConn} className={TEST_BUTTON}>
+                      Test database
+                    </button>
+                    <ProbeBox result={probe} />
+                  </div>
+                )}
+                {g.title === "LLM-as-Judge" && (
+                  <>
+                    {cloudJudge && (
+                      <p className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+                        ⚠ This judge sends redacted turn previews and short excerpts of the
+                        project&apos;s steering files off your network. Choose Ollama, or a
+                        server on this machine or your LAN, for a fully-local judge.
+                      </p>
+                    )}
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <button type="button" onClick={testJudge} className={TEST_BUTTON}>
+                        Test judge LLM
+                      </button>
+                      <ProbeBox result={judgeProbe} />
+                    </div>
+                    <p className="mt-3 text-xs text-slate-600">
+                      Judge in effect:{" "}
+                      <code className="bg-slate-100 text-slate-700 px-1 rounded">{models?.configured.spec ?? cfg.judge_default}</code>
+                      {models?.configured.source === "settings" ? " (from your saved settings)" : " (the packaged default)"}
+                      {models && models.url ? (
+                        models.reachable ? (
+                          <span> · {models.models.length === 1 ? "1 model" : `${models.models.length} models`} on the server at {models.url}</span>
+                        ) : (
+                          <span className="text-rose-700">
+                            {" "}· could not list models at {models.list_url ?? models.url} ({models.error})
+                          </span>
+                        )
+                      ) : null}
+                      .
+                    </p>
+                  </>
+                )}
+                {g.title === "Embeddings" && (
+                  <>
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <button type="button" onClick={testEmbedding} className={TEST_BUTTON}>
+                        Test embedding
+                      </button>
+                      <ProbeBox result={embedProbe} />
+                    </div>
+                    <p className="mt-3 text-xs text-slate-600">
+                      Embedding in effect:{" "}
+                      <code className="bg-slate-100 text-slate-700 px-1 rounded">
+                        {embedModels?.configured.model_set ? embedModels.configured.spec : "none — choose an embedding model above"}
+                      </code>
+                      .
+                    </p>
+                  </>
+                )}
+              </SettingsGroup>
             );
           })}
         </div>
 
-        {cloudJudge && (
-          <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mt-3">
-            ⚠ This judge sends redacted turn previews off your network. Choose Ollama, or a
-            server on this machine or your LAN, for a fully-local judge.
-          </p>
-        )}
-
-        {/* Both probes read the SAVED file, not the form: Save first.
-            "Test judge" sends one tiny prompt to the judge the settings
-            resolve to and shows the answer or the backend's own reason. */}
-        <div className="mt-4 flex items-center gap-3 flex-wrap">
-          <button onClick={save} className="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">Save</button>
-          <button onClick={testConn} className="bg-slate-800 text-white text-sm px-4 py-1.5 rounded hover:bg-slate-700">Test database</button>
-          <button onClick={testJudge} className="bg-slate-800 text-white text-sm px-4 py-1.5 rounded hover:bg-slate-700">
-            Test judge LLM
-          </button>
-          <button onClick={testEmbedding} className="bg-slate-800 text-white text-sm px-4 py-1.5 rounded hover:bg-slate-700">
-            Test embedding
-          </button>
-          {saved && <span className="text-sm text-slate-600">{saved}</span>}
-        </div>
-        <p className="mt-2 text-xs text-slate-500">
-          Judge in effect:{" "}
-          <code className="bg-slate-100 text-slate-700 px-1 rounded">{models?.configured.spec ?? cfg.judge_default}</code>
-          {models?.configured.source === "settings" ? " (from your saved settings)" : " (the packaged default)"}
-          {models && models.url ? (
-            models.reachable ? (
-              <span> · {models.models.length === 1 ? "1 model" : `${models.models.length} models`} on the server at {models.url}</span>
-            ) : (
-              <span className="text-rose-700">
-                {" "}· could not list models at {models.list_url ?? models.url} ({models.error})
-              </span>
-            )
-          ) : null}
-          . Embedding in effect:{" "}
-          <code className="bg-slate-100 text-slate-700 px-1 rounded">
-            {embedModels?.configured.model_set ? embedModels.configured.spec : "none — choose an embedding model above"}
-          </code>
-          . All three tests use the saved settings — Save first.
-        </p>
-        <ProbeBox result={probe} />
-        <ProbeBox result={judgeProbe} />
-        <ProbeBox result={embedProbe} />
-      </Card>
-
       <Card title="Effective per-project redaction">
-        <p className="text-xs text-slate-500 mb-3">
+        <p className="text-xs text-slate-600 mb-3">
           Read-only — the redaction mode each project’s already-ingested sessions were recorded
           with. To change redaction for future ingests, edit the per-project config file.
         </p>
@@ -796,11 +902,11 @@ export default function SettingsPage() {
         ) : projects === null ? (
           <Loading />
         ) : projects.length === 0 ? (
-          <p className="text-sm text-slate-500">No per-project data yet — ingest some sessions.</p>
+          <p className="text-sm text-slate-600">No per-project data yet — ingest some sessions.</p>
         ) : (
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-left text-slate-500 border-b border-slate-200">
+              <tr className="text-left text-slate-600 border-b border-slate-200">
                 <th className="py-1 font-medium">Project</th>
                 <th className="py-1 font-medium text-right">Sessions</th>
                 <th className="py-1 font-medium">Effective redaction</th>
@@ -817,7 +923,7 @@ export default function SettingsPage() {
                     {p.effective_redaction_mode === "mixed" ? (
                       <span>
                         mixed{" "}
-                        <span className="text-xs text-slate-500">
+                        <span className="text-xs text-slate-600">
                           (
                           {Object.entries(p.redaction_modes)
                             .map(([mode, count]) => `${mode}: ${count}`)

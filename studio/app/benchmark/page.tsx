@@ -80,14 +80,11 @@ export default function BenchmarkPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">Benchmark</h1>
-        <p className="text-sm text-slate-500 mt-1">
-          Results of this repository&rsquo;s benchmark harness. A run attempts
-          tasks from a public benchmark (Aider Polyglot, SWE-bench) with a
-          copilot and scores each attempt pass or fail. Outcomes are imported
-          for every backend; session linking applies to Claude Code runs whose
-          run record names a Claude Code session that is loaded here, and a
-          linked session tells you what its outcome cost and how long it took.
-          Nothing is here until you run the harness and link its runs.{" "}
+        <p className="text-sm text-slate-600 mt-1">
+          Measure whether a model or configuration change actually improved
+          outcomes. Each run attempts tasks from a public benchmark with a
+          copilot and scores every attempt pass or fail; nothing is here until
+          you run the harness and link its runs.{" "}
           <Link href="/learn/benchmarks--README" className="text-blue-700 hover:underline">
             How to run the harness →
           </Link>
@@ -129,15 +126,16 @@ export default function BenchmarkPage() {
               Set the runs folder in Settings
             </Link>
           )}
-          {linkJobLine(data.link_job) && (
-            <span
-              className={`text-xs ${
-                data.link_job.state === "failed" ? "text-rose-700" : "text-slate-500"
-              }`}
-            >
-              {linkJobLine(data.link_job)}
-            </span>
-          )}
+          {linkJobLine(data.link_job) &&
+            !(data.link_job.state === "done" && data.link_job.skipped) && (
+              <span
+                className={`text-xs ${
+                  data.link_job.state === "failed" ? "text-rose-700" : "text-slate-500"
+                }`}
+              >
+                {linkJobLine(data.link_job)}
+              </span>
+            )}
           {linkError && <span className="text-xs text-rose-700">{linkError}</span>}
         </div>
         {intro.state !== "linked" && intro.state !== "outcomes-only" && (
@@ -197,10 +195,9 @@ export default function BenchmarkPage() {
           </p>
         </Card>
       )}
-      <RoutingCard
-        sets={routing.data?.sets ?? null}
-        error={routing.error}
-      />
+      {(routing.data?.sets?.length ?? 0) > 0 && (
+        <RoutingCard sets={routing.data?.sets ?? null} error={routing.error} />
+      )}
     </div>
   );
 }
