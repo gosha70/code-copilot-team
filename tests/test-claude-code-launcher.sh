@@ -162,7 +162,33 @@ assert_contains "PI backend default unchanged (symmetry)" \
 assert_eq "setup.sh bakes the repo path at every install site" "3" \
     "$(grep -c '^\s*bake_launcher_repo_path$' "$REPO_DIR/adapters/claude-code/setup.sh")"
 
-rm -rf "$FAKE_REPO" "$PROJ" "$DRIVER_LOG"
+# ── cct shim (#410) ──
+# setup.sh installs ~/.local/bin/cct wherever it installs the launcher.
+# Only the installer function is sourced, against a throwaway HOME, so
+# the real ~/.claude is never touched.
+assert_eq "setup.sh installs the cct shim at every launcher install site" "3" \
+    "$(grep -c '^\s*install_cct_shim$' "$REPO_DIR/adapters/claude-code/setup.sh")"
+SHIM_HOME=$(mktemp -d)
+SHIM_OUT=$(HOME="$SHIM_HOME" SCRIPT_DIR="$REPO_DIR/adapters/claude-code" bash -c '
+    eval "$(sed -n "/^install_cct_shim()/,/^}/p" "$SCRIPT_DIR/setup.sh")"
+    install_cct_shim && "$HOME/.local/bin/cct" help' 2>&1)
+assert_eq "the shim is installed executable" "yes" \
+    "$([[ -x "$SHIM_HOME/.local/bin/cct" ]] && echo yes || echo no)"
+assert_contains "the shim runs scripts/cct from this checkout" "$SHIM_OUT" "cct — code-copilot-team CLI"
+assert_contains "the checkout path is baked into the shim" \
+    "$(cat "$SHIM_HOME/.local/bin/cct")" "CCT_REPO_DIR_DEFAULT=\"$REPO_DIR\""
+FAKE_CCT=$(mktemp -d)
+mkdir -p "$FAKE_CCT/scripts"
+printf '#!/usr/bin/env bash\necho "OVERRIDE-CCT $*"\n' > "$FAKE_CCT/scripts/cct"
+chmod +x "$FAKE_CCT/scripts/cct"
+assert_contains "CCT_REPO_DIR overrides the baked checkout" \
+    "$(HOME="$SHIM_HOME" CCT_REPO_DIR="$FAKE_CCT" "$SHIM_HOME/.local/bin/cct" doctor 2>&1)" "OVERRIDE-CCT doctor"
+# A moved or deleted checkout is a named failure, not bash's "no such file".
+GONE_RC=0; GONE_OUT=$(CCT_REPO_DIR="/nonexistent-cct-checkout" "$SHIM_HOME/.local/bin/cct" help 2>&1) || GONE_RC=$?
+assert_exit "the shim exits 2 when its checkout is gone" 2 "$GONE_RC"
+assert_contains "the shim names the remedy when its checkout is gone" "$GONE_OUT" "CCT_REPO_DIR"
+
+rm -rf "$FAKE_REPO" "$PROJ" "$DRIVER_LOG" "$SHIM_HOME" "$FAKE_CCT"
 
 echo ""
 echo "========================================="

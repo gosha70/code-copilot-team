@@ -4,6 +4,7 @@
 # One discoverable entry point for finding and validating everything the
 # harness offers. Add it to PATH (or call scripts/cct) and run `cct help`.
 #
+#   cct start [path] [...] start a harness session (the claude-code launcher)
 #   cct features [...]     what the harness offers: maturity, adapters, guides
 #   cct list [--write]     browse every feature, slash command, skill, and capability
 #   cct doctor [...]       is this machine ready? tools, providers, adapters
@@ -21,6 +22,12 @@ USAGE
   cct <command> [options]
 
 COMMANDS
+  start           Start a harness session in a project. Runs the installed
+                  claude-code launcher (per-project cmux/tmux session, transcript
+                  log, peer-review flags), so every launcher argument passes through.
+                    cct start                        this directory
+                    cct start ~/projects/my-app      that project
+                    cct start --peer-review <name> ~/projects/my-app
   features        What the harness offers, from shared/features/catalog.yaml:
                   maturity, release, which adapters enforce it, and its guide.
                     cct features                     one line per feature
@@ -57,6 +64,7 @@ COMMANDS
   help            Show this help.
 
 EXAMPLES
+  cct start ~/projects/my-app  # open a harness session there
   cct features                 # what can this thing do?
   cct features --adapter pi    # …and what does my tool actually enforce?
   cct list                     # every command, skill and capability
@@ -77,6 +85,23 @@ cmd="${1:-help}"
 [[ $# -gt 0 ]] && shift || true
 
 case "$cmd" in
+  start)
+    # The installed launcher does the work; cct is the name the user types.
+    # Only an INSTALLED launcher qualifies: running this checkout's copy
+    # would open a session without the rules setup.sh installs.
+    if launcher="$(command -v claude-code 2>/dev/null)"; then
+      :
+    elif [[ -x "$HOME/.local/bin/claude-code" ]]; then
+      launcher="$HOME/.local/bin/claude-code"
+    else
+      echo "cct start: the claude-code launcher is not installed." >&2
+      echo "cct start runs the INSTALLED launcher (~/.local/bin/claude-code), never a checkout's copy:" >&2
+      echo "a session started from the checkout would run without the installed rules." >&2
+      echo "Run ./scripts/setup.sh --claude-code from your checkout, then retry." >&2
+      exit 2
+    fi
+    exec "$launcher" "$@"
+    ;;
   features)
     exec python3 "$SCRIPT_DIR/lib/cct_features.py" "$@"
     ;;
@@ -98,5 +123,5 @@ case "$cmd" in
     exec python3 "$SCRIPT_DIR/lib/cct_config.py" "$@"
     ;;
   help|-h|--help) usage ;;
-  *) echo "cct: unknown command '$cmd'" >&2; echo "Did you mean: features, list, routing, doctor, config, help?" >&2; usage >&2; exit 2 ;;
+  *) echo "cct: unknown command '$cmd'" >&2; echo "Did you mean: features, list, routing, doctor, config, start, help?" >&2; usage >&2; exit 2 ;;
 esac
