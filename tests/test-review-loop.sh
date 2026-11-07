@@ -1770,6 +1770,71 @@ assert_exit "#406: CCT_REVIEW_CHECK_TEST_CLAIMS=false keeps the reviewer's verdi
 assert_eq "#406: ...and runs nothing" "null" \
     "$(jq -r '.findings[0].test_claim' "$P/.cct/review/findings-round-1.json")"
 rm -rf "$P"
+
+# (e) a finding that names the test but claims no failure is not checked
+#     (review of PR #418: "lacks a case" is not a claim a run can contradict)
+NOCLAIM_PROFILE=$(mktemp)
+cat > "$NOCLAIM_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "printf '### Summary\nGap.\n\n### Findings\nFINDING|blocking|testing|tests/test_claim.sh|whole file|tests/test_claim.sh lacks a case for the empty input|Add one\n\n### Verdict\nFAIL\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); write_state "$P" 0
+add_claim_test "$P" 0
+RC=0; OUTPUT=$(CCT_PROVIDER_PROFILE="$NOCLAIM_PROFILE" bash "$RUNNER" "$P" 2>&1) || RC=$?
+assert_exit "#406: a finding with no failure claim still blocks (exit 1)" 1 "$RC"
+assert_eq "#406: ...and nothing is run for it" "null" \
+    "$(jq -r '.findings[0].test_claim' "$P/.cct/review/findings-round-1.json")"
+rm -rf "$P"; rm -f "$NOCLAIM_PROFILE"
+
+# (f) a "test"-named script outside a test directory is never run
+#     (review of PR #418: scripts/test-deploy.sh is not a test)
+SCRIPT_PROFILE=$(mktemp)
+cat > "$SCRIPT_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "printf '### Summary\nA script fails.\n\n### Findings\nFINDING|blocking|correctness|scripts/test-deploy.sh|whole file|scripts/test-deploy.sh fails on the new branch|Fix it\n\n### Verdict\nFAIL\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); write_state "$P" 0
+mkdir -p "$P/scripts"; printf '#!/usr/bin/env bash\necho RAN > ran.marker\nexit 0\n' > "$P/scripts/test-deploy.sh"
+git -C "$P" add -A && git -C "$P" commit -q -m "fixture: a deploy script named test-"
+RC=0; OUTPUT=$(CCT_PROVIDER_PROFILE="$SCRIPT_PROFILE" bash "$RUNNER" "$P" 2>&1) || RC=$?
+assert_exit "#406: a non-test script named test-* is left as written (exit 1)" 1 "$RC"
+assert_eq "#406: ...and was never executed" "0" "$([[ -f "$P/ran.marker" ]] && echo 1 || echo 0)"
+rm -rf "$P"; rm -f "$SCRIPT_PROFILE"
+
+# (g) a pytest node id is run through pytest (review of PR #418: this
+#     path was dead — the bracket class in the regex never compiled)
+if python3 -m pytest --version >/dev/null 2>&1; then
+NODE_PROFILE=$(mktemp)
+cat > "$NODE_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "printf '### Summary\nA test fails.\n\n### Findings\nFINDING|blocking|testing|tests/test_claim.py|test_ok|tests/test_claim.py::test_ok fails on the new branch|Fix it\n\n### Verdict\nFAIL\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); write_state "$P" 0
+mkdir -p "$P/tests"; printf 'def test_ok():\n    assert True\n' > "$P/tests/test_claim.py"
+git -C "$P" add -A && git -C "$P" commit -q -m "fixture: tests/test_claim.py"
+RC=0; OUTPUT=$(CCT_PROVIDER_PROFILE="$NODE_PROFILE" bash "$RUNNER" "$P" 2>&1) || RC=$?
+assert_exit "#406: a pytest node id that passes disputes the claim (exit 0)" 0 "$RC"
+assert_eq "#406: ...recording the node id it ran" "tests/test_claim.py::test_ok" \
+    "$(jq -r '.findings[0].test_claim.reference' "$P/.cct/review/findings-round-1.json")"
+rm -rf "$P"; rm -f "$NODE_PROFILE"
+else
+    echo "  SKIP: pytest not available — node-id claim case not run"
+fi
 rm -f "$CLAIM_PROFILE"
 
 # Summary

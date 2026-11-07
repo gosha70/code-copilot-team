@@ -1061,7 +1061,12 @@ check_test_claim() {
     # check_test_claim <file> <line_hint> <description>
     # Prints {reference, command, exit_code, disputed, output_tail} or nothing.
     local text="$1 $2 $3" ref="" cmd=()
-    ref=$(printf '%s' "$text" | grep -oE '[A-Za-z0-9_./-]+\.py::[A-Za-z0-9_:\[\]-]+' | head -1 || true)
+    # Only a finding that CLAIMS a failure is checked. "tests/x.sh lacks a
+    # case for Y" names a test and claims nothing a run could contradict.
+    printf '%s' "$text" | grep -qiE '\b(fail(s|ed|ing|ure)?|broken|red|regress(es|ed|ion)?|error(s|ed)?|does not pass|doesn.t pass|no longer pass(es)?)\b' \
+        || return 0
+    # A pytest node id first: path.py::name (brackets allowed for parametrized ids).
+    ref=$(printf '%s' "$text" | grep -oE '[A-Za-z0-9_./-]+\.py::[][A-Za-z0-9_:.-]+' | head -1 || true)
     if [[ -n "$ref" ]]; then
         cmd=(python3 -m pytest -q -p no:cacheprovider "$ref")
     else
@@ -1074,8 +1079,14 @@ check_test_claim() {
         esac
     fi
     local path="${ref%%::*}"
-    # Inside the project only: no absolute paths, no parent escapes.
+    # Inside the project only: no absolute paths, no parent escapes. And
+    # only a TEST file: under a test(s)/ directory, or named test_*, *_test
+    # or *.test/*.spec — never any script that happens to start with "test".
     case "$path" in /*|*..*) return 0 ;; esac
+    case "/$path" in
+        */tests/*|*/test/*|*/test_*|*_test.*|*.test.*|*.spec.*) ;;
+        *) return 0 ;;
+    esac
     [[ -f "$PROJECT_DIR/$path" ]] || return 0
     local rc=0 out
     if command -v timeout >/dev/null 2>&1; then
