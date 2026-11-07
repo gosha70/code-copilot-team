@@ -30,6 +30,11 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   `phase_tests`), re-runs `test.command` once at landing before anything
   is pushed or opened as a PR (`landing.test_rc`, event `landing_tests`),
   and parks with `test_failure` when that run fails (#403).
+- **auto-build keeps one review record per phase and reports a bypass as a
+  bypass.** Each phase's `build-review.md` is kept as
+  `collaboration/build-review-phase-<n>.md`; the automation summary and the
+  PR body say `bypassed (escalation esc-N)` for a phase accepted through
+  `/review-decide approve` instead of "Review: PASS" (#404).
 
 ### Changed
 

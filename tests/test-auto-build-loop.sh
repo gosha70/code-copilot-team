@@ -972,6 +972,14 @@ assert_exit "approve-resume completes" 0 "$RC"
 assert_eq "escalation resolved" "true" "$(jq -r '.resolved' "$P"/.cct/auto-build/demo-feat/escalations/esc-1.json)"
 assert_eq "bypass approval scoped to phase 1" "esc-1" "$(jq -r '.phases["1"].bypass_approved' "$P"/.cct/auto-build/demo-feat/state.json)"
 assert_eq "final status done after approve" "done" "$(jq -r '.status' "$P"/.cct/auto-build/demo-feat/state.json)"
+# #404: the bypass is recorded per phase and reported as a bypass.
+assert_eq "#404: the bypassed phase keeps its own review artifact" "1" \
+    "$([[ -f "$P/specs/demo-feat/collaboration/build-review-phase-1.md" ]] && echo 1 || echo 0)"
+assert_contains "#404: the summary reports the bypass, not PASS" \
+    "$(cat "$P/specs/demo-feat/automation-summary.md")" \
+    "Review: bypassed — human approval via /review-decide approve (escalation esc-1"
+assert_eq "#404: ...and never says Review: PASS for it" "0" \
+    "$(grep -c 'Review: PASS' "$P/specs/demo-feat/automation-summary.md")"
 rm -rf "$P"
 
 # REJECT: park -> /review-decide reject -> aborted
@@ -8823,7 +8831,27 @@ assert_eq "#403: landing re-ran test.command on the final head" "0" \
     "$(jq -r '.landing.test_rc' "$L403/state.json" 2>/dev/null)"
 assert_eq "#403: landing test run journaled" "1" \
     "$(grep -c '"event":"landing_tests"' "$L403/events.jsonl" 2>/dev/null)"
+# #404: a reviewed phase keeps its own artifact and the PASS line names it.
+assert_eq "#404: a reviewed phase keeps its own review artifact" "1" \
+    "$([[ -f "$P/specs/demo-feat/collaboration/build-review-phase-1.md" ]] && echo 1 || echo 0)"
+assert_contains "#404: the summary's PASS line names the phase artifact" \
+    "$(cat "$P/specs/demo-feat/automation-summary.md")" \
+    "Review: PASS (see specs/demo-feat/collaboration/build-review-phase-1.md)."
 rm -rf "$P"
+
+# #404: the PR body counts reviewed phases and names each bypassed one.
+PB_TMP=$(mktemp -d)
+jq -n '{phases: {"1": {bypass_approved: null}, "2": {bypass_approved: "esc-1"}}}' > "$PB_TMP/state.json"
+PB_OUT=$(STATE="$PB_TMP/state.json" FEATURE_ID=demo-feat BRANCH_NAME=feature/demo PROFILE=pr DONE_COUNT=2 \
+    bash -c 'eval "$(sed -n "/^state_get()/,/^}/p" "$0")"; eval "$(sed -n "/^compose_pr_body()/,/^}/p" "$0")"; compose_pr_body "$1"; cat "$1"' \
+    "$DRIVER" "$PB_TMP/body.md" 2>&1)
+assert_contains "#404: the PR body counts the phases reviewed to PASS" "$PB_OUT" \
+    "2 phase(s) completed: 1 reviewed to PASS"
+assert_contains "#404: ...and names the bypassed phase with its escalation" "$PB_OUT" \
+    "phase 2: bypassed (escalation esc-1)"
+assert_eq "#404: ...never claiming every phase was reviewed to PASS" "0" \
+    "$(grep -c 'each reviewed' <<<"$PB_OUT")"
+rm -rf "$PB_TMP"
 
 # (b) A test command that passes while the phase is built but fails on
 #     the final head must not land: the phase review directory exists in

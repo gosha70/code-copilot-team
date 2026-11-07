@@ -4238,6 +4238,72 @@ landing_test_gate() {
     fi
 }
 
+# ── Per-phase review record (#404) ───────────────────────────
+# The runner writes ONE collaboration/build-review.md per feature and
+# every phase rewrites it, so the record of a phase accepted on a human
+# bypass survived only in commit history (wiki-studio 0.8.1; restored by
+# hand after the external reviewer held the PR). Each phase keeps its own
+# copy. build-review.md stays as the latest: the stop hook and
+# verify_pass_gate read it.
+archive_phase_review_artifact() {
+    local n="$1" src="$SPEC_DIR/collaboration/build-review.md"
+    local dst="$SPEC_DIR/collaboration/build-review-phase-$n.md"
+    local rdir="$LEDGER_DIR/phase-$n/review"
+    mkdir -p "$SPEC_DIR/collaboration"
+    if [[ -f "$src" ]]; then
+        cp "$src" "$dst"
+        return 0
+    fi
+    # No runner artifact: a breaker can trip before the runner writes one.
+    # The phase still gets a record in the spec directory, composed from
+    # the review state the driver just archived, so a bypass is never
+    # evidenced only by the gitignored ledger.
+    [[ -f "$rdir/loop-summary.json" ]] || return 0
+    local findings
+    findings=$(ls "$rdir"/findings-round-*.json 2>/dev/null | sort | tail -1)
+    {
+        echo "---"
+        echo "feature_id: $FEATURE_ID"
+        echo "phase: $n"
+        echo "status: $(jq -r 'if .bypass == true then "bypassed" else (.verdict // "unknown") end' "$rdir/loop-summary.json")"
+        echo "verdict: $(jq -r '.verdict // "unknown"' "$rdir/loop-summary.json")"
+        echo "bypass: $(jq -r '.bypass // false' "$rdir/loop-summary.json")"
+        echo "bypass_approved: $(state_get ".phases[\"$n\"].bypass_approved // empty")"
+        echo "---"
+        echo
+        echo "# Review record — phase $n"
+        echo
+        echo "Composed by auto-build-loop from the archived review state; the"
+        echo "runner wrote no build-review.md before the breaker tripped."
+        echo
+        if [[ -n "$findings" ]]; then
+            echo "## Findings ($(basename "$findings"))"
+            echo
+            jq -r '.findings[]? | "- [\(.severity)] \(.id): \(.description) (file: \(.file))"' "$findings"
+        else
+            echo "No findings file was written before the breaker tripped."
+        fi
+    } > "$dst"
+}
+
+# What the summary and the PR body say about a phase's review. A phase
+# whose archived loop-summary.json carries bypass=true was NOT reviewed
+# to PASS; it was accepted by a human, and the line says so.
+phase_review_line() {
+    local n="$1" summary="$LEDGER_DIR/phase-$n/review/loop-summary.json"
+    local artifact="specs/$FEATURE_ID/collaboration/build-review-phase-$n.md"
+    [[ -f "$SPEC_DIR/collaboration/build-review-phase-$n.md" ]] \
+        || artifact="specs/$FEATURE_ID/collaboration/build-review.md"
+    if [[ -f "$summary" && "$(jq -r '.bypass // false' "$summary" 2>/dev/null)" == "true" ]]; then
+        local esc when
+        esc=$(state_get ".phases[\"$n\"].bypass_approved // empty")
+        when=$(jq -r '.resolved_at // empty' "$LEDGER_DIR/escalations/${esc:-none}.json" 2>/dev/null)
+        echo "Review: bypassed — human approval via /review-decide approve (escalation ${esc:-unknown}${when:+, resolved $when}); the reviewer's findings are in $artifact."
+        return 0
+    fi
+    echo "Review: PASS (see $artifact)."
+}
+
 # ── Driver-owned commits (FR-8) ──────────────────────────────
 
 # Sets COMMIT_SHA global; returns 1 on empty diff. Not command substitution
@@ -4495,6 +4561,7 @@ run_review_loop() {
             if [[ -n "$appr" && "$appr" != "null" ]]; then
                 mkdir -p "$phase_dir"
                 mv "$PROJECT_DIR/.cct/review" "$phase_dir/review"
+                archive_phase_review_artifact "$n"
                 journal "review_bypass_accepted" "phase $n via $appr"
                 return 0
             fi
@@ -4608,6 +4675,7 @@ run_review_loop() {
                 verify_pass_gate
                 mkdir -p "$phase_dir"
                 mv "$PROJECT_DIR/.cct/review" "$phase_dir/review"
+                archive_phase_review_artifact "$n"
                 journal "review_pass" "phase $n after $round round(s)"
                 return 0
                 ;;
@@ -4764,7 +4832,7 @@ phase_gate() {
     {
         echo ""
         echo "### Phase $n complete — $title ($(now_iso))"
-        echo "Review: PASS (see specs/$FEATURE_ID/collaboration/build-review.md)."
+        phase_review_line "$n"
     } >> "$SUMMARY_MD"
     # rc 1 (no diff) is tolerable on an idempotent re-entry; rc 2 is a real
     # git failure and the review artifact is REQUIRED — a run that pushes
@@ -5634,8 +5702,22 @@ compose_pr_body() {
         echo "## Autonomous build — $FEATURE_ID"
         echo
         echo "Built by \`scripts/auto-build-loop.sh\` under the \`$PROFILE\` profile."
-        echo "Branch \`$BRANCH_NAME\` — $DONE_COUNT phase(s) completed, each reviewed"
-        echo "to PASS by the gating reviewer before the driver committed it."
+        # #404: a bypassed phase is reported as bypassed, never folded
+        # into "reviewed to PASS".
+        local bypassed reviewed p
+        bypassed=$(jq -r '[.phases | to_entries[] | select((.value.bypass_approved // "") != "") | .key] | sort_by(tonumber) | .[]' "$STATE" 2>/dev/null)
+        reviewed=$(( DONE_COUNT - $(printf '%s\n' "$bypassed" | grep -c .) ))
+        if [[ -z "$bypassed" ]]; then
+            echo "Branch \`$BRANCH_NAME\` — $DONE_COUNT phase(s) completed, each reviewed"
+            echo "to PASS by the gating reviewer before the driver committed it."
+        else
+            echo "Branch \`$BRANCH_NAME\` — $DONE_COUNT phase(s) completed: $reviewed reviewed to PASS"
+            echo "by the gating reviewer; the rest accepted on a human-approved bypass"
+            echo "(\`/review-decide approve\`), each with its own record:"
+            for p in $bypassed; do
+                echo "- phase $p: bypassed (escalation $(state_get ".phases[\"$p\"].bypass_approved")) — \`specs/$FEATURE_ID/collaboration/build-review-phase-$p.md\`"
+            done
+        fi
         echo
         echo "- Automation summary: \`specs/$FEATURE_ID/automation-summary.md\`"
         echo "- Review artifacts: \`specs/$FEATURE_ID/collaboration/\`"
