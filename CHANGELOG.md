@@ -10,6 +10,24 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ## [Unreleased]
 
+### Added
+
+- **`cct start [path] [launcher args…]`** opens a harness session through the
+  installed `claude-code` launcher, so starting a session is spelled with the
+  harness's own name. Without an installed launcher it exits 2 and names
+  `setup.sh --claude-code` (#410).
+- **`cct` on `PATH`.** `setup.sh --claude-code` installs a `~/.local/bin/cct`
+  shim next to the launcher, with the checkout path baked in and
+  `CCT_REPO_DIR` as the override. A shim whose checkout has moved exits 2
+  and names the remedy, and `cct doctor` checks the shim's target (#410).
+
+### Changed
+
+- **The Claude Code plugin is named `cct`.** Plugin components are now
+  `/cct:shape` and `cct:build`; install with `/plugin install
+  cct@code-copilot-team`. Copies installed under the earlier
+  `code-copilot-team` name keep working until uninstalled (#410).
+
 ## [2.0.0]
  The harness learned to run unattended, to route work across models, and to
 show its own work. Six real unattended builds shaped the autonomy engine — and

@@ -47,9 +47,9 @@ unchanged.
   anything unmatched is `unknown` and FAILS CLOSED. Increment B owns
   what each cause does; an HTTP status alone never determines cause.
 > Commands on this page are written `./scripts/cct …`, to be run from the
-> repository root. `setup.sh` does not put a `cct` shim on `PATH`, so the bare
-> `cct …` spelling used by the tool's own `--help` only works if you have put
-> `scripts/` on `PATH` yourself.
+> repository root. `setup.sh --claude-code` installs a `cct` shim in
+> `~/.local/bin`, so the bare `cct …` spelling used by the tool's own `--help`
+> works once that directory is on `PATH`.
 
 - **Inspection commands** (read-only; no probe, no network, no state
   writes): `./scripts/cct routing validate` (registry + repo restrictions +

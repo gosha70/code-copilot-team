@@ -104,6 +104,33 @@ def check_tools(report: Report) -> None:
             report.add("Tools", tool, BAD if required else WARN, f"not installed — {why}")
 
 
+SHIM_BAKED_LINE = re.compile(r'^CCT_REPO_DIR_DEFAULT="(?P<path>.*)"\s*$', re.MULTILINE)
+
+
+def check_shim(report: Report) -> None:
+    """The `cct` on PATH (#410). setup.sh installs a shim that execs
+    scripts/cct in a baked checkout; a shim whose checkout has moved fails
+    every command, so a passing doctor must have looked at the target."""
+    shim = shutil.which("cct")
+    if not shim:
+        report.add("Tools", "cct", WARN, "not on PATH — `cct start` needs setup.sh --claude-code; ./scripts/cct works from a checkout")
+        return
+    try:
+        text = Path(shim).read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        report.add("Tools", "cct", BAD, f"{shim}: unreadable ({exc.strerror})")
+        return
+    match = SHIM_BAKED_LINE.search(text)
+    if match is None:
+        report.add("Tools", "cct", OK, f"{shim} (not the setup.sh shim)")
+        return
+    target = Path(os.environ.get("CCT_REPO_DIR") or match.group("path"))
+    if (target / "scripts" / "cct").is_file():
+        report.add("Tools", "cct", OK, f"{shim} → {target}")
+    else:
+        report.add("Tools", "cct", BAD, f"points at a checkout that is gone: {target} — set CCT_REPO_DIR or re-run setup.sh --claude-code")
+
+
 def profile_path() -> Path:
     return Path(os.environ.get("CCT_PROVIDER_PROFILE", Path.home() / ".code-copilot-team/providers.toml"))
 
@@ -260,6 +287,7 @@ def main() -> None:
 
     if not args.adapter:
         check_tools(report)
+        check_shim(report)
         providers = check_profile(repo, report)
         if not args.no_network:
             check_health(repo, report, providers, profile_path())

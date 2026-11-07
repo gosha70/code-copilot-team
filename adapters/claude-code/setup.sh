@@ -49,6 +49,30 @@ bake_launcher_repo_path() {
     ' "$LAUNCHER_TARGET" > "$tmp" && mv "$tmp" "$LAUNCHER_TARGET" && chmod +x "$LAUNCHER_TARGET"
 }
 
+# install_cct_shim — #410: `cct` is the one command name the user types.
+# The shim execs scripts/cct in the checkout this setup ran from. A symlink
+# would not do: scripts/cct finds its lib/ from BASH_SOURCE, which for a
+# symlink is the link's directory. CCT_REPO_DIR env still overrides.
+install_cct_shim() {
+    local repo_root shim="$HOME/.local/bin/cct"
+    repo_root="$(cd "$SCRIPT_DIR/../.." && pwd)"
+    mkdir -p "$HOME/.local/bin"
+    # A moved or deleted checkout must be a named failure, not bash's
+    # "no such file": `cct doctor` reads the same baked line.
+    printf '%s\n' \
+        '#!/usr/bin/env bash' \
+        '# cct — installed by adapters/claude-code/setup.sh. CCT_REPO_DIR overrides the baked checkout.' \
+        "CCT_REPO_DIR_DEFAULT=\"$repo_root\"" \
+        'target="${CCT_REPO_DIR:-$CCT_REPO_DIR_DEFAULT}/scripts/cct"' \
+        'if [[ ! -x "$target" ]]; then' \
+        '    echo "cct: the checkout this shim was installed from is not there: $target" >&2' \
+        '    echo "Set CCT_REPO_DIR to your checkout, or re-run ./scripts/setup.sh --claude-code from it." >&2' \
+        '    exit 2' \
+        'fi' \
+        'exec "$target" "$@"' > "$shim"
+    chmod +x "$shim"
+}
+
 # Provider config: delegate --provider to the shared translator (T2.2).
 source "$SHARED_DIR/scripts/provider-setup.sh"
 if cct_handle_provider_flag "claude-code" "$@"; then exit 0; fi
@@ -496,7 +520,8 @@ if [[ "$SYNC_MODE" == "1" ]]; then
         cp "$LAUNCHER_SOURCE" "$LAUNCHER_TARGET"
         chmod +x "$LAUNCHER_TARGET"
         bake_launcher_repo_path
-        echo "[done] Synced launcher to $LAUNCHER_TARGET"
+        install_cct_shim
+        echo "[done] Synced launcher to $LAUNCHER_TARGET and cct shim to $HOME/.local/bin/cct"
     fi
 
     install_helper_scripts
@@ -948,8 +973,10 @@ if [[ -f "$LAUNCHER_SOURCE" ]]; then
         cp "$LAUNCHER_SOURCE" "$LAUNCHER_TARGET"
         chmod +x "$LAUNCHER_TARGET"
         bake_launcher_repo_path
+        install_cct_shim
         echo ""
         echo "[done] Installed claude-code launcher to $LAUNCHER_TARGET"
+        echo "[done] Installed cct shim to $HOME/.local/bin/cct"
     fi
 else
     echo ""
@@ -1458,7 +1485,9 @@ if [[ -f "$LAUNCHER_SOURCE" ]]; then
     cp "$LAUNCHER_SOURCE" "$LAUNCHER_TARGET"
     chmod +x "$LAUNCHER_TARGET"
     bake_launcher_repo_path
+    install_cct_shim
     echo "[done] Installed launcher to $LAUNCHER_TARGET"
+    echo "[done] Installed cct shim to $HOME/.local/bin/cct"
 else
     echo "[skip] Launcher not found at $LAUNCHER_SOURCE"
 fi

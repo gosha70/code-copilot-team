@@ -32,7 +32,7 @@ echo "=== cct CLI ==="
 
 assert "cct is executable" "[[ -x '$CCT' ]]"
 HELP=$(bash "$CCT" help)
-for c in features list routing doctor config help; do
+for c in start features list routing doctor config help; do
   assert "help documents: $c" "grep -qE '^  $c ' <<<\"\$HELP\""
 done
 # Capture, then grep: these commands exit nonzero by design, and under
@@ -42,6 +42,69 @@ RC=0; bash "$CCT" no-such-command >/dev/null 2>&1 || RC=$?
 assert "an unknown command exits 2" "[[ '$RC' == '2' ]]"
 assert "an unknown command suggests the real ones" \
   "grep -q 'Did you mean: features' <<<\"\$UNKNOWN_OUT\""
+assert "an unknown command suggests start too" \
+  "grep -q ', start, ' <<<\"\$UNKNOWN_OUT\""
+
+# ── start: a harness session is a cct action (#410) ──────────
+# A mock launcher records its argv; cct must hand everything through
+# unchanged and return the launcher's exit code.
+START_BIN=$(mktemp -d)
+START_LOG=$(mktemp)
+cat > "$START_BIN/claude-code" <<'MOCK'
+#!/usr/bin/env bash
+{ printf 'LAUNCHER-ARGV:'; printf ' %q' "$@"; printf '\n'; } >> "${START_LOG:?}"
+exit "${MOCK_LAUNCHER_RC:-0}"
+MOCK
+chmod +x "$START_BIN/claude-code"
+START_RC=0; PATH="$START_BIN:$PATH" START_LOG="$START_LOG" bash "$CCT" start /tmp/demo-app --peer-review deepseek || START_RC=$?
+assert "start execs the launcher on PATH" "[[ '$START_RC' == '0' ]]"
+assert "start passes the path and launcher flags through verbatim" \
+  "grep -qF 'LAUNCHER-ARGV: /tmp/demo-app --peer-review deepseek' '$START_LOG'"
+START_RC=0; PATH="$START_BIN:$PATH" START_LOG="$START_LOG" MOCK_LAUNCHER_RC=3 bash "$CCT" start || START_RC=$?
+assert "start returns the launcher's exit code" "[[ '$START_RC' == '3' ]]"
+
+# Without the launcher on PATH, ~/.local/bin is the install location.
+START_HOME=$(mktemp -d)
+mkdir -p "$START_HOME/.local/bin"
+cp "$START_BIN/claude-code" "$START_HOME/.local/bin/claude-code"
+: > "$START_LOG"
+START_RC=0; HOME="$START_HOME" PATH="/usr/bin:/bin" START_LOG="$START_LOG" bash "$CCT" start || START_RC=$?
+assert "start falls back to ~/.local/bin/claude-code" \
+  "[[ '$START_RC' == '0' ]] && grep -q 'LAUNCHER-ARGV:' '$START_LOG'"
+
+# No launcher anywhere: a named failure, never this checkout's own copy.
+EMPTY_HOME=$(mktemp -d)
+NOLAUNCHER_OUT=$(HOME="$EMPTY_HOME" PATH="/usr/bin:/bin" bash "$CCT" start 2>&1 || true)
+START_RC=0; HOME="$EMPTY_HOME" PATH="/usr/bin:/bin" bash "$CCT" start >/dev/null 2>&1 || START_RC=$?
+assert "start without an installed launcher exits 2" "[[ '$START_RC' == '2' ]]"
+assert "start without a launcher names the install command" \
+  "grep -q 'setup.sh --claude-code' <<<\"\$NOLAUNCHER_OUT\""
+assert "start without a launcher says it wants the installed one, not the checkout" \
+  "grep -q 'INSTALLED launcher' <<<\"\$NOLAUNCHER_OUT\""
+rm -r "$START_BIN" "$START_HOME" "$EMPTY_HOME"; rm "$START_LOG"
+
+# ── doctor looks at the cct shim's target (#410) ─────────────
+# A shim on PATH whose baked checkout is gone must FAIL doctor; one whose
+# checkout is present is OK. Both shims are planted first on PATH.
+SHIM_BIN=$(mktemp -d)
+printf '#!/usr/bin/env bash\nCCT_REPO_DIR_DEFAULT="/nonexistent-cct-checkout"\nexec "$CCT_REPO_DIR_DEFAULT/scripts/cct" "$@"\n' > "$SHIM_BIN/cct"
+chmod +x "$SHIM_BIN/cct"
+DEAD_SHIM_JSON=$(PATH="$SHIM_BIN:$PATH" bash "$CCT" doctor --no-network --json 2>&1 || true)
+assert "doctor fails a cct shim whose checkout is gone" \
+  "python3 -c \"
+import json, sys
+d = json.loads(sys.stdin.read())
+row = next(c for c in d['checks'] if c['check'] == 'cct')
+sys.exit(0 if row['status'] == 'fail' and 'gone' in row['detail'] else 1)\" <<<\"\$DEAD_SHIM_JSON\""
+printf '#!/usr/bin/env bash\nCCT_REPO_DIR_DEFAULT="%s"\nexec "$CCT_REPO_DIR_DEFAULT/scripts/cct" "$@"\n' "$REPO_DIR" > "$SHIM_BIN/cct"
+LIVE_SHIM_JSON=$(PATH="$SHIM_BIN:$PATH" bash "$CCT" doctor --no-network --json 2>&1 || true)
+assert "doctor passes a cct shim whose checkout is present" \
+  "python3 -c \"
+import json, sys
+d = json.loads(sys.stdin.read())
+row = next(c for c in d['checks'] if c['check'] == 'cct')
+sys.exit(0 if row['status'] == 'ok' else 1)\" <<<\"\$LIVE_SHIM_JSON\""
+rm -r "$SHIM_BIN"
 
 # ── features: faithful to the catalog ────────────────────────
 N=$(ruby -ryaml -e 'puts YAML.load_file(ARGV[0])["features"].size' "$CATALOG")

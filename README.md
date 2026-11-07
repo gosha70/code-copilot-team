@@ -47,15 +47,16 @@ cd code-copilot-team
 ./scripts/setup.sh --claude-code    # Claude Code → ~/.claude/
 
 # 3. Open a project — global rules load automatically
-claude-code ~/projects/my-app
+cct start ~/projects/my-app         # (master) on v2.0.0: claude-code ~/projects/my-app
 ```
 
 Every other install path — Pi, Codex, Cursor, Copilot, Windsurf, Aider, the
 Claude Code plugin — is in [Install options](docs/install.md).
 
 > **Released as v2.0.0.** Everything this page describes is in the latest
-> release and what the Quick Start installs. `master` continues as active
-> development; read it as in-development.
+> release and what the Quick Start installs, except lines marked **(master)**:
+> those landed after it. `master` continues as active development; read it as
+> in-development.
 
 ```bash
 ./scripts/cct list                  # every feature, command, skill and capability
@@ -94,11 +95,12 @@ what to do when it does not happen.
 ### Your first session
 
 ```bash
-claude-code ~/projects/my-app
+cct start ~/projects/my-app         # (master) on v2.0.0: claude-code ~/projects/my-app
 ```
 
-**Expect:** the launcher opens a session with your git branch in the status
-line, and the global rules load without being asked for.
+**Expect:** `cct start` runs the `claude-code` launcher, which opens a session
+with your git branch in the status line, and the global rules load without
+being asked for.
 **Verify:** ask the agent "which rules are loaded?" — it should name the four
 global rules.
 **If not:** run `./scripts/cct doctor` — it checks the tools, the
