@@ -28,7 +28,7 @@ Rules load in every session; skills load when they are relevant; agents, hooks a
 
 ## 2. Discover what the harness offers
 
-`setup.sh` installs the adapter's configuration; it does not put `cct` on your `PATH`, so call it from the repository:
+`setup.sh --claude-code` installs a `cct` shim in `~/.local/bin`; the examples on this page call `./scripts/cct` from the repository instead, which works in any checkout whether or not that directory is on `PATH`:
 
 ```bash
 ./scripts/cct features
