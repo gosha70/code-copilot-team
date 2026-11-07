@@ -169,6 +169,7 @@ export function LatencyStat({
         `p90 ${formatDuration(data.p90)} · over ` +
         `${data.measured_turns.toLocaleString()} assistant turns in ` +
         `${data.sessions.toLocaleString()} sessions` +
+        (data.basis ? ` · ${data.basis}` : "") +
         (error ? " · refresh failed, last successful load" : "")
       }
     />

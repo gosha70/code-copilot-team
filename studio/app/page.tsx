@@ -127,6 +127,7 @@ export default function DashboardPage() {
         <Stat
           label="Avg duration"
           value={formatDuration(data.totals.avg_duration_seconds)}
+          note="wall clock, first entry to last, averaged over the sessions shown"
         />
         <LatencyStat data={latency.data} error={latency.error} />
       </div>
