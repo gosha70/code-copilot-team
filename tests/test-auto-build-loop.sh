@@ -8841,7 +8841,7 @@ rm -rf "$P"
 
 # #404: the PR body counts reviewed phases and names each bypassed one.
 PB_TMP=$(mktemp -d)
-jq -n '{phases: {"1": {bypass_approved: null}, "2": {bypass_approved: "esc-1"}}}' > "$PB_TMP/state.json"
+jq -n '{phases: {"1": {status: "done", bypass_approved: null}, "2": {status: "done", bypass_approved: "esc-1"}}}' > "$PB_TMP/state.json"
 PB_OUT=$(STATE="$PB_TMP/state.json" FEATURE_ID=demo-feat BRANCH_NAME=feature/demo PROFILE=pr DONE_COUNT=2 \
     bash -c 'eval "$(sed -n "/^state_get()/,/^}/p" "$0")"; eval "$(sed -n "/^compose_pr_body()/,/^}/p" "$0")"; compose_pr_body "$1"; cat "$1"' \
     "$DRIVER" "$PB_TMP/body.md" 2>&1)
@@ -8872,7 +8872,49 @@ assert_eq "#403: ...and the outcome is not landed" "0" \
     "$(jq -r '.outcome // "none"' "$L403/state.json" 2>/dev/null | grep -c '^landed$')"
 assert_eq "#403: ...with the landing exit code in the ledger" "1" \
     "$(jq -r '.landing.test_rc' "$L403/state.json" 2>/dev/null)"
+# Review of PR #417: the landing park must bind its recovery to the
+# parked HEAD, or a manual "fix" commit resumes and lands unreviewed.
+ESC403=$(ls "$L403"/escalations/esc-*.json 2>/dev/null | head -1)
+assert_eq "#417: the landing park records parked_head" "$(git -C "$P" rev-parse HEAD)" \
+    "$(jq -r '.history.parked_head // empty' "$ESC403" 2>/dev/null)"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$P/project-test.sh"
+echo "stray" > "$P/stray.txt"
+git -C "$P" add -A && git -C "$P" commit -qm "manual fix plus a stray file"
+run_driver "$P" --resume
+assert_exit "#417: resume after the manual fix lands (exit 0)" 0 "$RC"
+assert_eq "#417: ...only after a recovery review of the delta" "1" \
+    "$(grep -c '"event":"artifact_recovery_reviewed"' "$L403/events.jsonl" 2>/dev/null)"
 rm -rf "$P"
+
+# Review of PR #417: a phase-2 bypass must not inherit phase 1's PASS
+# artifact. The reviewer passes phase 1 and fails phase 2 (it sees
+# extra.sh, phase 2's file, in the snapshot) until the breaker trips.
+COND_PROFILE=$(mktemp)
+cat > "$COND_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "if [ -f extra.sh ]; then printf '### Summary\nIssues.\n\n### Findings\nFINDING|blocking|correctness|extra.sh|near top|Wrong|Fix it\n\n### Verdict\nFAIL\n'; else printf '### Summary\nFine.\n\n### Findings\n\n### Verdict\nPASS\n'; fi"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project)
+cfg_set "$P" '.phases.milestone_every = 0'
+REVIEW_PROFILE="$COND_PROFILE" run_driver "$P"
+assert_exit "#417: phase 2 trips the breaker and parks (exit 4)" 4 "$RC"
+fake_review_decide "$P" approve
+REVIEW_PROFILE="$COND_PROFILE" run_driver "$P" --resume
+assert_exit "#417: the approved bypass resumes to done (exit 0)" 0 "$RC"
+C417="$P/specs/demo-feat/collaboration"
+assert_eq "#417: phase 1 keeps its PASS record" "1" \
+    "$(grep -c '^verdict: PASS' "$C417/build-review-phase-1.md" 2>/dev/null)"
+assert_eq "#417: phase 2's record says bypassed, not phase 1's PASS" "1" \
+    "$(grep -c '^status: bypassed' "$C417/build-review-phase-2.md" 2>/dev/null)"
+assert_eq "#417: the two phase records differ" "1" \
+    "$(cmp -s "$C417/build-review-phase-1.md" "$C417/build-review-phase-2.md" && echo 0 || echo 1)"
+rm -rf "$P"
+rm -f "$COND_PROFILE"
 
 # (c) The wiki-studio 0.8.0 shape: the test command's last line prints a
 #     coverage FAIL and exits 1. The phase is never committed; the run

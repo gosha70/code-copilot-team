@@ -4232,9 +4232,15 @@ landing_test_gate() {
         --arg rc "$rc" --arg log "$log"
     journal "landing_tests" "final head rc=$rc (log: $log)"
     if [[ $rc -ne 0 ]]; then
+        # parked_head binds the recovery: the test_failure resume arm
+        # reviews any commit past it before resolving, exactly as for a
+        # coverage park. Without the key the arm treats this as a legacy
+        # pre-review park and a manual "fix" lands with no review.
         dispose "test_failure" \
             "test.command failed on the final head at landing (rc $rc, log: $log) — the run does not land" \
-            "$(jq -n --arg log "$log" --arg rc "$rc" '{last_log: $log, landing_rc: ($rc | tonumber)}')"
+            "$(jq -n --arg log "$log" --arg rc "$rc" \
+                  --arg h "$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "")" \
+                  '{last_log: $log, landing_rc: ($rc | tonumber), parked_head: $h}')"
     fi
 }
 
@@ -4246,18 +4252,27 @@ landing_test_gate() {
 # copy. build-review.md stays as the latest: the stop hook and
 # verify_pass_gate read it.
 archive_phase_review_artifact() {
-    local n="$1" src="$SPEC_DIR/collaboration/build-review.md"
+    # archive_phase_review_artifact <phase> <pass|bypass>
+    local n="$1" mode="${2:-pass}" src="$SPEC_DIR/collaboration/build-review.md"
     local dst="$SPEC_DIR/collaboration/build-review-phase-$n.md"
     local rdir="$LEDGER_DIR/phase-$n/review"
     mkdir -p "$SPEC_DIR/collaboration"
-    if [[ -f "$src" ]]; then
+    # Written once. A later recovery review (coverage or artifact
+    # recovery) rewrites build-review.md for the delta it reviewed; the
+    # phase's own record stays and the summary line keeps naming it.
+    if [[ -e "$dst" ]]; then
+        journal "phase_review_record_kept" "phase $n: $(basename "$dst") exists — not overwritten"
+        return 0
+    fi
+    if [[ "$mode" == "pass" && -f "$src" ]]; then
         cp "$src" "$dst"
         return 0
     fi
-    # No runner artifact: a breaker can trip before the runner writes one.
-    # The phase still gets a record in the spec directory, composed from
-    # the review state the driver just archived, so a bypass is never
-    # evidenced only by the gitignored ledger.
+    # A bypass composes its record from the archived review state, ALWAYS:
+    # the runner writes build-review.md only on PASS and nothing removes it
+    # between phases, so whatever build-review.md holds at a bypass is an
+    # earlier phase's PASS (wiki-studio 0.8.1 phase 2 took phase 1's). The
+    # same composition covers a PASS whose runner wrote no artifact.
     [[ -f "$rdir/loop-summary.json" ]] || return 0
     local findings
     findings=$(ls "$rdir"/findings-round-*.json 2>/dev/null | sort | tail -1)
@@ -4561,7 +4576,7 @@ run_review_loop() {
             if [[ -n "$appr" && "$appr" != "null" ]]; then
                 mkdir -p "$phase_dir"
                 mv "$PROJECT_DIR/.cct/review" "$phase_dir/review"
-                archive_phase_review_artifact "$n"
+                archive_phase_review_artifact "$n" bypass
                 journal "review_bypass_accepted" "phase $n via $appr"
                 return 0
             fi
@@ -4675,7 +4690,7 @@ run_review_loop() {
                 verify_pass_gate
                 mkdir -p "$phase_dir"
                 mv "$PROJECT_DIR/.cct/review" "$phase_dir/review"
-                archive_phase_review_artifact "$n"
+                archive_phase_review_artifact "$n" pass
                 journal "review_pass" "phase $n after $round round(s)"
                 return 0
                 ;;
@@ -5704,14 +5719,19 @@ compose_pr_body() {
         echo "Built by \`scripts/auto-build-loop.sh\` under the \`$PROFILE\` profile."
         # #404: a bypassed phase is reported as bypassed, never folded
         # into "reviewed to PASS".
-        local bypassed reviewed p
-        bypassed=$(jq -r '[.phases | to_entries[] | select((.value.bypass_approved // "") != "") | .key] | sort_by(tonumber) | .[]' "$STATE" 2>/dev/null)
-        reviewed=$(( DONE_COUNT - $(printf '%s\n' "$bypassed" | grep -c .) ))
+        # Counted from the ledger: DONE_COUNT is this run's phases, and a
+        # --start-phase run would otherwise go negative.
+        local bypassed reviewed completed p
+        bypassed=$(jq -r '[.phases | to_entries[] | select(.value.status == "done" and ((.value.bypass_approved // "") != "")) | .key] | sort_by(tonumber) | .[]' "$STATE" 2>/dev/null)
+        completed=$(jq -r '[.phases[] | select(.status == "done")] | length' "$STATE" 2>/dev/null)
+        [[ "$completed" =~ ^[0-9]+$ ]] || completed="$DONE_COUNT"
+        reviewed=$(( completed - $(printf '%s\n' "$bypassed" | grep -c .) ))
+        (( reviewed < 0 )) && reviewed=0
         if [[ -z "$bypassed" ]]; then
-            echo "Branch \`$BRANCH_NAME\` — $DONE_COUNT phase(s) completed, each reviewed"
+            echo "Branch \`$BRANCH_NAME\` — $completed phase(s) completed, each reviewed"
             echo "to PASS by the gating reviewer before the driver committed it."
         else
-            echo "Branch \`$BRANCH_NAME\` — $DONE_COUNT phase(s) completed: $reviewed reviewed to PASS"
+            echo "Branch \`$BRANCH_NAME\` — $completed phase(s) completed: $reviewed reviewed to PASS"
             echo "by the gating reviewer; the rest accepted on a human-approved bypass"
             echo "(\`/review-decide approve\`), each with its own record:"
             for p in $bypassed; do
