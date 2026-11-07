@@ -21,6 +21,14 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   `CCT_REPO_DIR` as the override. A shim whose checkout has moved exits 2
   and names the remedy, and `cct doctor` checks the shim's target (#410).
 
+### Added
+
+- **Close-keyword audit for hand-opened PRs.** The `phase-workflow` skill
+  gains "Opening a Pull Request": run `scripts/pre-pr-check.sh` before
+  `gh pr create`, confirm `closingIssuesReferences` after, and never put a
+  closing verb before an issue a later PR must close. The
+  `copilot-conventions` Git Discipline carries the rule (#408).
+
 ### Changed
 
 - **The Claude Code plugin is named `cct`.** Plugin components are now
