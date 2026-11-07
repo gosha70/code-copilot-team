@@ -1506,6 +1506,34 @@ start_session() {
 # the -p value as a project path. stdout stays pure claude output (the
 # driver parses result JSON from it): the invocation is logged, never
 # tee'd.
+# ── Gateway compatibility notice (#399) ──────────────────────
+# When a deferred tool is loaded, Claude Code adds the tool's full
+# definition to the conversation (a `tool_addition` block carrying a
+# `tool_definition`). DeepSeek's Anthropic-compatible endpoint rejects
+# that block — 422 "unknown variant `tool_definition`, expected
+# `tool_reference`" — and the request fails before the model sees it;
+# the retry-without-tool-search that Claude Code 2.1.305+ does after a
+# 400/422 does not cover this block, and a session already carrying it
+# keeps failing on resume. The wrapper cannot make a gateway accept it.
+# What it can do is say so when a gateway is configured and no
+# compatibility setting is. "Configured" means ANTHROPIC_BASE_URL is set;
+# the wrapper never guesses a provider from the URL. Applying the
+# variables belongs to an explicit per-launch selector (#400).
+gateway_compat_notice() {
+    [[ -n "${ANTHROPIC_BASE_URL:-}" ]] || return 0
+    [[ -z "${CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS:-}" && -z "${ENABLE_TOOL_SEARCH:-}" ]] || return 0
+    cat >&2 <<'NOTICE'
+[claude-code] ANTHROPIC_BASE_URL is set and no tool-compatibility setting is.
+  A gateway that rejects dynamic tool blocks (DeepSeek: 422 "unknown variant
+  tool_definition, expected tool_reference") fails the request before the model
+  sees it. If that happens, start a FRESH session with
+    CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 ENABLE_TOOL_SEARCH=false DISABLE_FEEDBACK_COMMAND=1
+  (a session that already carries the block keeps failing on resume). Setting
+  either variable silences this notice. Details: docs/dgx-spark/setup-cookbook.md,
+  "Gateways that reject dynamic tool blocks".
+NOTICE
+}
+
 run_headless() {
     local log_file
     mkdir -p "$LOGS_DIR" 2>/dev/null || true
@@ -1517,7 +1545,11 @@ run_headless() {
 
 for _arg in "$@"; do
     case "$_arg" in
-        -p|--print|--version)
+        -p|--print)
+            gateway_compat_notice
+            run_headless "$@"
+            ;;
+        --version)
             run_headless "$@"
             ;;
         init|list|sync|playwright|permissions|build|help|-h|--help)
@@ -1528,6 +1560,7 @@ for _arg in "$@"; do
     esac
 done
 unset _arg
+gateway_compat_notice
 
 # ── Flag parsing ─────────────────────────────────────────────
 PLAYWRIGHT=0

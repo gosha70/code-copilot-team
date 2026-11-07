@@ -162,6 +162,23 @@ assert_contains "PI backend default unchanged (symmetry)" \
 assert_eq "setup.sh bakes the repo path at every install site" "3" \
     "$(grep -c '^\s*bake_launcher_repo_path$' "$REPO_DIR/adapters/claude-code/setup.sh")"
 
+# ── Gateway compatibility notice (#399) ──
+# A configured gateway (ANTHROPIC_BASE_URL set) with no compatibility
+# setting gets the notice on stderr; a setting silences it; no gateway,
+# no notice. Never a URL-substring provider guess.
+new_logs
+ANTHROPIC_BASE_URL="https://gateway.example/anthropic" CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS= ENABLE_TOOL_SEARCH= \
+    run_launcher -p "x" --output-format json
+assert_contains "#399: a gateway with no compat setting gets the notice" "$OUTPUT" \
+    "ANTHROPIC_BASE_URL is set and no tool-compatibility setting is"
+new_logs
+ANTHROPIC_BASE_URL="https://gateway.example/anthropic" CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 \
+    run_launcher -p "x" --output-format json
+assert_eq "#399: a compat setting silences the notice" "0" "$(grep -c 'tool-compatibility' <<<"$OUTPUT")"
+new_logs
+ANTHROPIC_BASE_URL= run_launcher -p "x" --output-format json
+assert_eq "#399: no gateway, no notice" "0" "$(grep -c 'tool-compatibility' <<<"$OUTPUT")"
+
 # ── cct shim (#410) ──
 # setup.sh installs ~/.local/bin/cct wherever it installs the launcher.
 # Only the installer function is sourced, against a throwaway HOME, so

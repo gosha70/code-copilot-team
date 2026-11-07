@@ -21,6 +21,16 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   `CCT_REPO_DIR` as the override. A shim whose checkout has moved exits 2
   and names the remedy, and `cct doctor` checks the shim's target (#410).
 
+### Added
+
+- **A configured Claude Code gateway is diagnosed, not guessed.** When
+  `ANTHROPIC_BASE_URL` is set and neither `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`
+  nor `ENABLE_TOOL_SEARCH` is, the `claude-code` launcher prints a notice
+  naming the fallback that avoids the dynamic `tool_definition` block
+  DeepSeek's endpoint rejects (422 before inference) and the fresh-session
+  requirement; `cct doctor` reports the same under **Gateway**, names only.
+  The DGX cookbook documents the failure signature and the fallback (#399).
+
 ### Changed
 
 - **The Claude Code plugin is named `cct`.** Plugin components are now

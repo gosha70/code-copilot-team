@@ -60,7 +60,7 @@ code-copilot-team/
 │   ├── test-routing-packet.sh          99 immutable delegation-packet tests (#254 C T2)
 │   ├── test-routing-delegation.sh     180 route-class + packet execution + reconciliation tests (#254 C T3-T5)
 │   ├── test-routing-recovery.sh       375 probe-state + timing + probe + tick-wake tests (#257 D)
-│   └── test-claude-code-launcher.sh   33 branded-launcher + cct shim tests (#195, #410)
+│   └── test-claude-code-launcher.sh   36 branded-launcher + cct shim + gateway notice tests (#195, #410, #399)
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification
 ├── README.md

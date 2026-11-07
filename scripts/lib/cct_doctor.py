@@ -131,6 +131,34 @@ def check_shim(report: Report) -> None:
         report.add("Tools", "cct", BAD, f"points at a checkout that is gone: {target} — set CCT_REPO_DIR or re-run setup.sh --claude-code")
 
 
+GATEWAY_VAR = "ANTHROPIC_BASE_URL"
+GATEWAY_COMPAT_VARS = ("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "ENABLE_TOOL_SEARCH", "DISABLE_FEEDBACK_COMMAND")
+GATEWAY_GUIDE = "docs/dgx-spark/setup-cookbook.md"
+
+
+def check_gateway(report: Report) -> None:
+    """#399: a Claude Code gateway and its tool-compatibility settings.
+    A text-completion healthcheck cannot see this failure: DeepSeek's
+    Anthropic-compatible endpoint accepts prompts and rejects the dynamic
+    `tool_definition` block Claude Code adds when a deferred tool loads
+    (422 before inference). Names only, never values."""
+    if not os.environ.get(GATEWAY_VAR):
+        report.add("Gateway", "claude-code", OK, f"{GATEWAY_VAR} not set — native Anthropic endpoint")
+        return
+    present = [v for v in GATEWAY_COMPAT_VARS if os.environ.get(v)]
+    absent = [v for v in GATEWAY_COMPAT_VARS if not os.environ.get(v)]
+    detail = f"{GATEWAY_VAR} set; " + (f"set: {', '.join(present)}" if present else "no compatibility variable set")
+    if absent:
+        detail += f"; not set: {', '.join(absent)}"
+    if "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS" in present or "ENABLE_TOOL_SEARCH" in present:
+        report.add("Gateway", "claude-code", OK, detail)
+    else:
+        report.add("Gateway", "claude-code", WARN,
+                   detail + " — a gateway that rejects dynamic tool blocks (DeepSeek 422 tool_definition) needs "
+                   "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 ENABLE_TOOL_SEARCH=false in a fresh session; "
+                   f"see {GATEWAY_GUIDE}")
+
+
 def profile_path() -> Path:
     return Path(os.environ.get("CCT_PROVIDER_PROFILE", Path.home() / ".code-copilot-team/providers.toml"))
 
@@ -288,6 +316,7 @@ def main() -> None:
     if not args.adapter:
         check_tools(report)
         check_shim(report)
+        check_gateway(report)
         providers = check_profile(repo, report)
         if not args.no_network:
             check_health(repo, report, providers, profile_path())

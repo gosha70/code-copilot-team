@@ -330,6 +330,44 @@ export CLAUDE_CODE_MAX_OUTPUT_TOKENS=32000
 
 All five model variables are required. Claude Code asks for `sonnet`/`haiku`/`opus` by name; an unpinned tier 404s against a server that has never heard of it, and it reads as a network failure rather than a config one.
 
+### Gateways that reject dynamic tool blocks
+
+When a deferred tool is loaded mid-session, Claude Code adds the tool's full
+definition to the conversation as a `tool_addition` block carrying a
+`tool_definition`. Some Anthropic-compatible endpoints reject that block.
+DeepSeek's does; the signature, seen on Claude Code 2.1.316 (#399):
+
+```
+API Error: 422 Failed to deserialize the JSON body into the target type:
+messages[56].content: unknown variant `tool_definition`, expected `tool_reference`
+```
+
+The request fails during deserialization, before inference, so a plain
+text-completion healthcheck never sees it. The retry without tool-search
+fields that Claude Code 2.1.305+ performs after a 400/422 does not cover this
+block, and a session whose history already carries it keeps failing when
+resumed or forked.
+
+What works is the documented fallback for gateways that reject pre-release
+schema fields, started in a **fresh** session:
+
+```
+export CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1   # strips beta headers and tool-schema fields (defer_loading …)
+export ENABLE_TOOL_SEARCH=false                   # every MCP tool loads upfront; no dynamic additions
+export DISABLE_FEEDBACK_COMMAND=1                 # the SendFeedback tool, the one added in the failed session, is left out
+```
+
+The cost is that every tool definition is in context from the start. Do not
+make this the default for every Claude Code session: it is a gateway
+setting. `ENABLE_TOOL_SEARCH=true` alone does **not** avoid the failure; tool
+search is what adds the block.
+
+The `claude-code` launcher prints a notice at start when `ANTHROPIC_BASE_URL`
+is set and neither `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` nor
+`ENABLE_TOOL_SEARCH` is; `cct doctor` reports the same under **Gateway**
+(names only, never values). Applying the variables per launch belongs to the
+explicit LLM selector proposed in #400.
+
 ### The test that decides whether you can drop the bridge
 
 Claude Code ≥ 2.1.207 appends agent-registry context as a `system`-role message *inside* the messages array, after the user turn. On affected vLLM builds the prompt ends on a system block and the model answers *that* instead of the coding task — returning **HTTP 200**, `stop_reason: end_turn`, and the tool call as pseudo-XML in a text block. Roughly 90% of long agent runs die after one turn, and nothing errors.
