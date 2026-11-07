@@ -4215,6 +4215,29 @@ run_tests() {
     return $rc
 }
 
+# ── Landing test gate (#403) ─────────────────────────────────
+# The wiki-studio 0.8.0 run (2026-10-27) landed with phase-4 and phase-5
+# test logs ending in "FAIL Required test coverage of 92% not reached"
+# and no test-failure event between `testing` and `phase_commit`. Whatever
+# the phase loop saw, `landed` was set without test.command passing on
+# the head that was pushed. The landing runs test.command once more on
+# the final head and refuses to land on a non-zero exit, with the exit
+# code in the ledger either way.
+landing_test_gate() {
+    [[ -n "$TEST_CMD" ]] || return 0
+    local log="$LEDGER_DIR/landing-test.log" rc=0
+    set_status "testing"
+    run_tests "$log" || rc=$?
+    state_set '.landing.test_rc = ($rc | tonumber) | .landing.test_log = $log' \
+        --arg rc "$rc" --arg log "$log"
+    journal "landing_tests" "final head rc=$rc (log: $log)"
+    if [[ $rc -ne 0 ]]; then
+        dispose "test_failure" \
+            "test.command failed on the final head at landing (rc $rc, log: $log) — the run does not land" \
+            "$(jq -n --arg log "$log" --arg rc "$rc" '{last_log: $log, landing_rc: ($rc | tonumber)}')"
+    fi
+}
+
 # ── Driver-owned commits (FR-8) ──────────────────────────────
 
 # Sets COMMIT_SHA global; returns 1 on empty diff. Not command substitution
@@ -4821,6 +4844,12 @@ run_phase() {
         while true; do
             tlog="$phase_dir/test-$((attempt + 1)).log"
             rc=0; run_tests "$tlog" || rc=$?
+            # #403: the exit code is evidence. A run landed with phase test
+            # logs ending in a coverage FAIL and nothing in the ledger said
+            # what the driver had seen; every attempt's rc is recorded.
+            state_set '.phases[$p].test_rc = ($rc | tonumber) | .phases[$p].test_log = $log' \
+                --arg p "$n" --arg rc "$rc" --arg log "$tlog"
+            journal "phase_tests" "phase $n attempt $((attempt + 1)) rc=$rc (log: $tlog)"
             [[ $rc -eq 0 ]] && break
             attempt=$((attempt + 1))
             if [[ $attempt -gt $MAX_FIX_SESSIONS ]]; then
@@ -5989,6 +6018,10 @@ while IFS=$'\t' read -r n title ms; do
     run_phase "$n" "$title" "$ms"
     DONE_COUNT=$((DONE_COUNT + 1))
 done < "$LEDGER_DIR/phases.tsv"
+
+# Landing test gate (#403): test.command must pass on the final head
+# before anything is finalized, pushed or opened as a PR.
+landing_test_gate
 
 # Coverage gate (T6): the landing enforcement point (the default). Runs
 # BEFORE finalizing/push/PR so a failing floor blocks the landing, not

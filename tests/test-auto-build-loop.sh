@@ -8809,6 +8809,60 @@ assert_eq "G: ...having actually published through the dispatcher" "1" \
     "$(grep -c cct.routed_usage "$G_TMP/ok.jsonl" 2>/dev/null | tr -d ' ' || echo 0)"
 rm -rf "$G_TMP"
 
+# ── #403: test exit codes are ledger evidence; landing re-runs test.command ──
+# (a) The happy path records rc=0 for the phase attempt and for the
+#     landing re-run, each as a state field and a journal event.
+P=$(setup_project); single_phase "$P"
+run_driver "$P"
+L403="$P/.cct/auto-build/demo-feat"
+assert_eq "#403: phase test exit code recorded in state.json" "0" \
+    "$(jq -r '.phases["1"].test_rc' "$L403/state.json" 2>/dev/null)"
+assert_eq "#403: phase test attempt journaled" "1" \
+    "$(grep -c '"event":"phase_tests"' "$L403/events.jsonl" 2>/dev/null)"
+assert_eq "#403: landing re-ran test.command on the final head" "0" \
+    "$(jq -r '.landing.test_rc' "$L403/state.json" 2>/dev/null)"
+assert_eq "#403: landing test run journaled" "1" \
+    "$(grep -c '"event":"landing_tests"' "$L403/events.jsonl" 2>/dev/null)"
+rm -rf "$P"
+
+# (b) A test command that passes while the phase is built but fails on
+#     the final head must not land: the phase review directory exists in
+#     the ledger only after the phase's review passed, so this command
+#     fails exactly at the landing re-run.
+P=$(setup_project); single_phase "$P"
+cat > "$P/project-test.sh" << 'T'
+#!/usr/bin/env bash
+[[ ! -d .cct/auto-build/demo-feat/phase-1/review ]]
+T
+git -C "$P" commit -qam "fixture: tests fail on the final head"
+run_driver "$P"
+L403="$P/.cct/auto-build/demo-feat"
+assert_exit "#403: a failing final-head test parks the run (exit 4)" 4 "$RC"
+assert_eq "#403: ...with reason test_failure" "test_failure" \
+    "$(jq -r '.reason' "$(ls "$L403"/escalations/esc-*.json 2>/dev/null | head -1)" 2>/dev/null)"
+assert_eq "#403: ...and the outcome is not landed" "0" \
+    "$(jq -r '.outcome // "none"' "$L403/state.json" 2>/dev/null | grep -c '^landed$')"
+assert_eq "#403: ...with the landing exit code in the ledger" "1" \
+    "$(jq -r '.landing.test_rc' "$L403/state.json" 2>/dev/null)"
+rm -rf "$P"
+
+# (c) The wiki-studio 0.8.0 shape: the test command's last line prints a
+#     coverage FAIL and exits 1. The phase is never committed; the run
+#     parks after the fix sessions with the exit code recorded.
+P=$(setup_project); single_phase "$P"
+printf '#!/usr/bin/env bash\necho "FAIL Required test coverage of 92%% not reached. Total coverage: 91.90%%"\nexit 1\n' > "$P/project-test.sh"
+git -C "$P" commit -qam "fixture: coverage gate fails"
+run_driver "$P"
+L403="$P/.cct/auto-build/demo-feat"
+assert_exit "#403: a coverage FAIL exit parks the run (exit 4)" 4 "$RC"
+assert_eq "#403: ...with reason test_failure" "test_failure" \
+    "$(jq -r '.reason' "$(ls "$L403"/escalations/esc-*.json 2>/dev/null | head -1)" 2>/dev/null)"
+assert_eq "#403: ...the phase's last test exit code is 1" "1" \
+    "$(jq -r '.phases["1"].test_rc' "$L403/state.json" 2>/dev/null)"
+assert_eq "#403: ...and no phase commit was made" "0" \
+    "$(grep -c '"event":"phase_commit"' "$L403/events.jsonl" 2>/dev/null)"
+rm -rf "$P"
+
 echo "========================================="
 echo "  Results: $PASS passed, $FAIL failed"
 echo "========================================="

@@ -21,6 +21,16 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   `CCT_REPO_DIR` as the override. A shim whose checkout has moved exits 2
   and names the remedy, and `cct doctor` checks the shim's target (#410).
 
+### Fixed
+
+- **auto-build lands only when `test.command` passes on the final head.**
+  A run landed with phase test logs ending in a coverage FAIL and nothing
+  in the ledger saying what the driver had seen. The driver now records
+  every test attempt's exit code (`phases[n].test_rc`, event
+  `phase_tests`), re-runs `test.command` once at landing before anything
+  is pushed or opened as a PR (`landing.test_rc`, event `landing_tests`),
+  and parks with `test_failure` when that run fails (#403).
+
 ### Changed
 
 - **The Claude Code plugin is named `cct`.** Plugin components are now
