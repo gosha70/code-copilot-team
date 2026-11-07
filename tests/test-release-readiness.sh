@@ -149,6 +149,12 @@ echo "    package.json=$PKG_V  pi=$PI_V  pi-code=$BIN_V  plugin=$PLUGIN_V  lock=
 check "adapters/pi/package.json is authoritative and matches package.json" "[[ '$PKG_V' == '$PI_V' ]]"
 check "pi-code reports the same version" "[[ '$PI_V' == '$BIN_V' ]]"
 check "the plugin reports the same version" "[[ '$PI_V' == '$PLUGIN_V' ]]"
+# #410: the plugin is installed and namespaced by this name (/cct:shape),
+# and the marketplace entry must point at it under the same name.
+PLUGIN_NAME=$(python3 -c "import json;print(json.load(open('adapters/claude-code/plugin/.claude-plugin/plugin.json')).get('name',''))" 2>/dev/null)
+MARKET_PLUGIN_NAME=$(python3 -c "import json;print(json.load(open('.claude-plugin/marketplace.json'))['plugins'][0].get('name',''))" 2>/dev/null)
+check "the plugin is named cct" "[[ '$PLUGIN_NAME' == 'cct' ]]" "found '$PLUGIN_NAME'"
+check "the marketplace entry carries the plugin's name" "[[ '$MARKET_PLUGIN_NAME' == '$PLUGIN_NAME' ]]" "found '$MARKET_PLUGIN_NAME'"
 check "package-lock.json matches" "[[ '$PKG_V' == '$LOCK_V' ]]"
 if [[ -n "$EXPECT_VERSION" ]]; then
   check "the version is the expected $EXPECT_VERSION" "[[ '$PI_V' == '$EXPECT_VERSION' ]]" "found $PI_V"
