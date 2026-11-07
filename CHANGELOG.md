@@ -21,6 +21,16 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   `CCT_REPO_DIR` as the override. A shim whose checkout has moved exits 2
   and names the remedy, and `cct doctor` checks the shim's target (#410).
 
+### Fixed
+
+- **`/shape` and the plan agent ask the owner from the main session.**
+  Claude Code removes `AskUserQuestion` from every subagent even when it
+  is listed in `tools:`, so the `pitch-shaper` and `plan` agents could
+  never ask the open decisions they were told to ask. They now list each
+  open decision with a default (`## Open decisions` in the pitch,
+  `### Open decisions` in the plan), and `/shape` asks them in the main
+  session and records the answers before reporting (#407).
+
 ### Changed
 
 - **The Claude Code plugin is named `cct`.** Plugin components are now

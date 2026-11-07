@@ -18,7 +18,7 @@ Every non-trivial task follows three phases with distinct behaviors:
 - **Model:** Highest-capability (e.g., Opus) · **Effort:** `xhigh` (Opus 4.7) / `high` (other models)
 - Work alone. Do NOT delegate to sub-agents.
 - Read the full codebase context, understand architecture, identify risks.
-- **Ask clarifying questions** about data model shape, auth strategy, UI layout, and output formats BEFORE producing the plan. (See `clarification-protocol.md` for the full protocol and data model review gate.)
+- **Ask clarifying questions** about data model shape, auth strategy, UI layout, and output formats BEFORE producing the plan. (See `clarification-protocol.md` for the full protocol and data model review gate.) When the plan phase runs as a **subagent** (the `plan` agent, `/shape`'s `pitch-shaper`), it cannot ask: Claude Code removes `AskUserQuestion` from every subagent even when listed in `tools:` (#407). The agent lists the open decisions with defaults in its output (`### Open decisions` / `## Open decisions`), and the main session asks them and records the answers before approval.
 - Produce a concrete plan: files to touch, interfaces to change, test strategy.
 - Get user approval before moving to Phase 2.
 
