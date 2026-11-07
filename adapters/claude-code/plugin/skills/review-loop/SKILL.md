@@ -62,6 +62,10 @@ Each finding has a stable ID computed from `SHA-256(file + category + normalized
 | `warning` | No | Optional |
 | `note` | No | No — informational |
 
+### Disputed Test Claims
+
+A `blocking` finding that names a test as failing (a pytest node id such as `tests/test_x.py::test_y`, or a test file `tests/test_x.sh`, `*.test.mjs`) is checked by the runner before it counts: the runner runs that test in the project directory. A test that **passes** gets `test_claim: {reference, command, exit_code: 0, disputed: true}` on the finding; it stays in the record with the evidence but does not count toward the blocking total, and a FAIL verdict that rested only on disputed claims is recorded as PASS with `verdict_override: disputed_test_claims`. A test that fails, cannot be run, or is not a test file under the project leaves the finding as the reviewer wrote it. The next round's request shows the disputed claim and its result. `CCT_REVIEW_CHECK_TEST_CLAIMS=false` turns the check off; `CCT_REVIEW_CLAIM_TIMEOUT_SEC` (default 120) bounds one run.
+
 ## Disposition Values
 
 The builder responds to each blocking finding with a disposition in `resolution-round-N.json`:

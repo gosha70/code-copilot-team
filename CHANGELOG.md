@@ -21,6 +21,14 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   `CCT_REPO_DIR` as the override. A shim whose checkout has moved exits 2
   and names the remedy, and `cct doctor` checks the shim's target (#410).
 
+- **The review runner runs the test a gating finding claims fails before
+  it counts.** A blocking finding naming a pytest node id or a test file
+  under the project is checked by running it; a passing run marks the
+  finding `test_claim.disputed` (kept in the record with the evidence,
+  not counted as blocking), and a FAIL that rested only on disputed
+  claims is recorded as PASS with `verdict_override`.
+  `CCT_REVIEW_CHECK_TEST_CLAIMS=false` turns it off (#406).
+
 ### Changed
 
 - **The Claude Code plugin is named `cct`.** Plugin components are now

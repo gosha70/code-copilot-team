@@ -1702,6 +1702,76 @@ assert_contains "D1: …and the console says so" "$OUTPUT" "No healthy fallback 
 rm -rf "$P" "$D1_PROFILE" "$D1_FAIL_PROFILE" "$D1_BOTH_PROFILE" "$D1_DOWN_PROFILE"
 
 # ══════════════════════════════════════════════════════════════
+# #406: a blocking finding that names a test as failing is checked by
+# running that test; a passing test disputes the claim and it no longer
+# blocks. The mock reviewer names tests/test_claim.sh in every case.
+# ══════════════════════════════════════════════════════════════
+echo "=== #406: test claims are run before they block ==="
+# ══════════════════════════════════════════════════════════════
+
+CLAIM_PROFILE=$(mktemp)
+cat > "$CLAIM_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "printf '### Summary\nA test fails.\n\n### Findings\nFINDING|blocking|testing|tests/test_claim.sh|whole file|tests/test_claim.sh fails on the new branch|Fix the regression\n\n### Verdict\nFAIL\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+
+# The runner refuses an uncommitted tree, so each fixture test is committed.
+add_claim_test() {
+    # add_claim_test <project> <exit-code>
+    mkdir -p "$1/tests"
+    printf '#!/usr/bin/env bash\nexit %s\n' "$2" > "$1/tests/test_claim.sh"
+    git -C "$1" add -A && git -C "$1" commit -q -m "fixture: tests/test_claim.sh"
+}
+
+# (a) the named test passes → disputed, not blocking, verdict PASS
+P=$(setup_project); write_state "$P" 0
+add_claim_test "$P" 0
+RC=0; OUTPUT=$(CCT_PROVIDER_PROFILE="$CLAIM_PROFILE" bash "$RUNNER" "$P" 2>&1) || RC=$?
+assert_exit "#406: a claim the test run contradicts does not block (exit 0)" 0 "$RC"
+F1="$P/.cct/review/findings-round-1.json"
+assert_eq "#406: the finding is marked disputed" "true" "$(jq -r '.findings[0].test_claim.disputed' "$F1")"
+assert_eq "#406: ...with the test it ran" "tests/test_claim.sh" "$(jq -r '.findings[0].test_claim.reference' "$F1")"
+assert_eq "#406: ...and the exit code" "0" "$(jq -r '.findings[0].test_claim.exit_code' "$F1")"
+assert_eq "#406: the round's verdict is PASS" "PASS" "$(jq -r '.verdict' "$F1")"
+assert_eq "#406: ...with the override named" "disputed_test_claims" "$(jq -r '.verdict_override' "$F1")"
+assert_eq "#406: the finding is kept in the record" "blocking" "$(jq -r '.findings[0].severity' "$F1")"
+assert_contains "#406: the runner says what it did" "$OUTPUT" "marked disputed, not blocking"
+rm -rf "$P"
+
+# (b) the named test fails → the claim stands, still blocking
+P=$(setup_project); write_state "$P" 0
+add_claim_test "$P" 1
+RC=0; OUTPUT=$(CCT_PROVIDER_PROFILE="$CLAIM_PROFILE" bash "$RUNNER" "$P" 2>&1) || RC=$?
+assert_exit "#406: a claim the test run confirms still blocks (exit 1)" 1 "$RC"
+F1="$P/.cct/review/findings-round-1.json"
+assert_eq "#406: the confirmed claim is not disputed" "false" "$(jq -r '.findings[0].test_claim.disputed' "$F1")"
+assert_eq "#406: ...and records the failing exit code" "1" "$(jq -r '.findings[0].test_claim.exit_code' "$F1")"
+assert_eq "#406: the verdict stays FAIL" "FAIL" "$(jq -r '.verdict' "$F1")"
+rm -rf "$P"
+
+# (c) the named test does not exist under the project → untouched
+P=$(setup_project); write_state "$P" 0
+RC=0; OUTPUT=$(CCT_PROVIDER_PROFILE="$CLAIM_PROFILE" bash "$RUNNER" "$P" 2>&1) || RC=$?
+assert_exit "#406: an unrunnable claim is left as written (exit 1)" 1 "$RC"
+assert_eq "#406: ...with no test_claim on the finding" "null" \
+    "$(jq -r '.findings[0].test_claim' "$P/.cct/review/findings-round-1.json")"
+rm -rf "$P"
+
+# (d) the check can be turned off
+P=$(setup_project); write_state "$P" 0
+add_claim_test "$P" 0
+RC=0; OUTPUT=$(CCT_REVIEW_CHECK_TEST_CLAIMS=false CCT_PROVIDER_PROFILE="$CLAIM_PROFILE" bash "$RUNNER" "$P" 2>&1) || RC=$?
+assert_exit "#406: CCT_REVIEW_CHECK_TEST_CLAIMS=false keeps the reviewer's verdict (exit 1)" 1 "$RC"
+assert_eq "#406: ...and runs nothing" "null" \
+    "$(jq -r '.findings[0].test_claim' "$P/.cct/review/findings-round-1.json")"
+rm -rf "$P"
+rm -f "$CLAIM_PROFILE"
+
 # Summary
 # ══════════════════════════════════════════════════════════════
 
