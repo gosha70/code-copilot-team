@@ -23,6 +23,11 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Changed
 
+- **Aider sessions are discovered only under a declared root.** The packaged
+  `sources.aider` default was `~`, which made every load and listing walk
+  the whole home directory. It is now unset; set `sources.aider` in
+  `~/.cct/session-analytics.json` or `CCT_SA_SOURCE_AIDER` to the directory
+  that holds your aider projects (#402).
 - **The Claude Code plugin is named `cct`.** Plugin components are now
   `/cct:shape` and `cct:build`; install with `/plugin install
   cct@code-copilot-team`. Copies installed under the earlier
