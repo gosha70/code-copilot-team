@@ -1021,7 +1021,7 @@ try {
     started_at: "2026-09-09T16:22:03Z", updated_at: "2026-09-09T16:31:46Z", elapsed_sec: 583,
     caps: { phases: 2, fix_sessions_per_phase: 2, wall_clock_sec: 5400, cost_usd: 10 },
     cost: { metered_usd: 5.2980335, estimated_usd: 2 },
-    phases: { planned: 1, done: 1, current: 1, items: [{ n: 1, title: "US1", status: "done", rounds: 1, review_verdict: "PASS", fix_sessions: 0, commits: 2 }] },
+    phases: { planned: 1, done: 1, current: 1, items: [{ n: 1, title: "US1", status: "done", rounds: 1, review_verdict: "PASS", fix_sessions: 0, commits: 2, session: null }] },
     verifiers: { admission_mapped: 4, results: { green: 4, total: 4, frs: [] } },
     policy_decisions: [{ ts: "t", event: "merge_skipped", detail: "merge.enabled=false" }], escalations: 0,
     probe: null, earlier_terminations: [], fallbacks: [],
@@ -1066,8 +1066,13 @@ try {
   // FR-7: phases, verifiers, policy decisions, scores.
   if (rv.phasesLine(rvRun()) !== "1 of 1 planned phase done (cap 2)") fail(`phases line: ${rv.phasesLine(rvRun())}`);
   else if (rv.phaseLine(rvRun().phases.items[0]) !== "phase 1: US1 — done; 1 review round, PASS; 0 fix sessions; 2 commits") fail(`phase line: ${rv.phaseLine(rvRun().phases.items[0])}`);
-  else if (!/no review yet/.test(rv.phaseLine({ n: 1, title: "US1", status: "building", rounds: null, review_verdict: null, fix_sessions: 0, commits: 1 }))) fail("a phase without a review says so");
+  else if (!/no review yet/.test(rv.phaseLine({ n: 1, title: "US1", status: "building", rounds: null, review_verdict: null, fix_sessions: 0, commits: 1, session: null }))) fail("a phase without a review says so");
   else if (rv.verifierLine(rvRun()) !== "4 requirements mapped at admission; 4 of 4 green") fail(`verifier line: ${rv.verifierLine(rvRun())}`);
+  // #415: a phase's build session — a link when loaded, the gap named when not.
+  else if (rv.phaseSessionLink({ ...rvRun().phases.items[0], session: null }).label !== "") fail("a phase without a result file claims a session");
+  else if (rv.phaseSessionLink({ ...rvRun().phases.items[0], session: { copilot: null, session_id: null, store_id: null } }).label !== "no session id recorded") fail("a result without a session id is not named");
+  else if (JSON.stringify(rv.phaseSessionLink({ ...rvRun().phases.items[0], session: { copilot: null, session_id: "abc-123", store_id: null } })) !== JSON.stringify({ href: null, label: "session not loaded", title: "abc-123" })) fail("an unloaded session is not said to be unloaded with its native id");
+  else if (rv.phaseSessionLink({ ...rvRun().phases.items[0], session: { copilot: "claude-code", session_id: "abc-123", store_id: 42 } }).href !== "/sessions/42") fail("a loaded session does not link to its page");
   else if (rv.verifierLine(rvTerminated) !== "4 requirements mapped at admission; verifiers not run") fail("verifiers not run is said");
   else if (rv.verifierLine(rvRun({ verifiers: { admission_mapped: null, results: null } })) !== "no admission contract; verifiers not run") fail("no contract is said");
   else if (rv.policyLine(rvRun()) !== "1 policy decision" || rv.policyLine(rvRun({ policy_decisions: [] })) !== "no policy decisions recorded") fail("policy line");

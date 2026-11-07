@@ -224,6 +224,14 @@ LEDGER_VERIFICATION_FILE = "verification-results.json"
 LEDGER_PHASE_DIR_PREFIX = "phase-"
 LEDGER_REVIEW_DIR = "review"
 LEDGER_REVIEW_SUMMARY = f"{LEDGER_REVIEW_DIR}/loop-summary.json"
+#: #415 — the build session's result file(s) in a phase directory. The
+#: driver writes build-result-1.json and, after a max-turns continuation,
+#: build-result-2.json; the launcher's JSON result carries `session_id`.
+LEDGER_BUILD_RESULT_GLOB = "build-result-*.json"
+#: Copilots an auto-build session can have run under, in lookup order.
+#: The ledger does not record the backend (CCT_AUTOBUILD_BACKEND is an
+#: env var), so a native id is matched with each in turn.
+RUN_SESSION_COPILOTS = (COPILOT_CLAUDE_CODE, COPILOT_PI)
 #: The reviewer readiness probe the driver runs in preflight (#334).
 LEDGER_PROBE_FILE = "reviewer-probe.json"
 #: A termination the driver kept under a dated name because the run was

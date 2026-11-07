@@ -1459,6 +1459,14 @@ export interface RunPhase {
   review_verdict: string | null;
   fix_sessions: number;
   commits: number;
+  /** #415: the build session the driver ran for this phase. null when the
+   *  phase wrote no result file; session_id null when the result named no
+   *  session; store_id null when that session is not loaded in the store. */
+  session: {
+    copilot: string | null;
+    session_id: string | null;
+    store_id: number | null;
+  } | null;
 }
 
 export interface AutoBuildRun {

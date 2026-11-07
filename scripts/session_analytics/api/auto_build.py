@@ -111,6 +111,78 @@ def _phase_order(key: str) -> tuple[int, int, str]:
     return (1, 0, key) if n is None else (0, n, "")
 
 
+def _result_documents(path: Path) -> list[Any]:
+    """Every JSON document in a result file, arrays flattened — the same
+    reading as the driver's session_result_obj (jq -s over the file)."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    decoder = json.JSONDecoder()
+    docs: list[Any] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        while i < n and text[i].isspace():
+            i += 1
+        if i >= n:
+            break
+        try:
+            doc, end = decoder.raw_decode(text, i)
+        except json.JSONDecodeError:
+            break
+        i = end
+        if isinstance(doc, list):
+            docs.extend(doc)
+        else:
+            docs.append(doc)
+    return docs
+
+
+def _phase_session(ledger: Path, key: str) -> Optional[dict[str, Any]]:
+    """#415: the native session id the driver read from the launcher's
+    result for this phase. None when the phase wrote no result file; a
+    record with session_id None when it did but named no session (a
+    backend whose result carries none). The newest result file that
+    names a session wins — a max-turns continuation resumes the same
+    session, so build-result-2.json agrees with build-result-1.json."""
+    phase_dir = ledger / f"{C.LEDGER_PHASE_DIR_PREFIX}{key}"
+    files = sorted(phase_dir.glob(C.LEDGER_BUILD_RESULT_GLOB))
+    if not files:
+        return None
+    session_id: Optional[str] = None
+    for path in reversed(files):
+        docs = _result_documents(path)
+        results = [d for d in docs if isinstance(d, dict) and d.get("type") == "result"]
+        obj = results[-1] if results else (docs[-1] if docs and isinstance(docs[-1], dict) else {})
+        sid = _str(obj.get("session_id")) if isinstance(obj, dict) else None
+        if sid:
+            session_id = sid
+            break
+    return {"copilot": None, "session_id": session_id, "store_id": None}
+
+
+def _attach_sessions(runs: list[dict[str, Any]], db: Database) -> None:
+    """#415: resolve each phase's native session id to a store session
+    when it is loaded. Matched WITH the copilot, never on the id alone;
+    the ledger does not record the backend, so the known auto-build
+    copilots are tried in order."""
+    for run in runs:
+        for phase in run["phases"]["items"]:
+            session = phase.get("session")
+            if not session or not session.get("session_id"):
+                continue
+            for copilot in C.RUN_SESSION_COPILOTS:
+                row = db.query_one(
+                    "SELECT id FROM copilot_session WHERE copilot = ? AND session_id = ?",
+                    (copilot, session["session_id"]),
+                )
+                if row is not None:
+                    session["store_id"] = int(row[0])
+                    session["copilot"] = copilot
+                    break
+
+
 def _phases(state: dict[str, Any], ledger: Path) -> list[dict[str, Any]]:
     """Per-phase facts from the state plus each phase's review summary."""
     out: list[dict[str, Any]] = []
@@ -136,6 +208,7 @@ def _phases(state: dict[str, Any], ledger: Path) -> list[dict[str, Any]]:
             "review_verdict": review_verdict,
             "fix_sessions": _int(entry.get("fix_sessions")) or 0,
             "commits": len(commits) if isinstance(commits, list) else 0,
+            "session": _phase_session(ledger, key),
         })
     return out
 
@@ -418,6 +491,7 @@ def list_runs(db: Database, cfg: AutoBuildConfig, *, now: Optional[datetime] = N
     now = now or datetime.now(timezone.utc)
     scan = scan_runs(resolve_root(cfg), now=now, active_window_seconds=cfg.active_window_seconds)
     orphaned = _attach_verdicts(scan.runs, _verdict_rows(db))
+    _attach_sessions(scan.runs, db)
     by_outcome: dict[str, int] = {}
     no_outcome = 0
     by_verdict: dict[str, int] = {v: 0 for v in C.VERDICTS}
@@ -459,6 +533,7 @@ def _find_run(db: Database, cfg: AutoBuildConfig, key: str, now: datetime) -> Op
     for run in scan.runs:
         if run["key"] == key:
             _attach_verdicts([run], _verdict_rows(db))
+            _attach_sessions([run], db)
             return run
     return None
 

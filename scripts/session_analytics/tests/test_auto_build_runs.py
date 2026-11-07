@@ -87,8 +87,24 @@ class _Ledgers(RegistryResetTestCase):
                 "phase-1/review/loop-summary.json": {"verdict": "PASS", "rounds_completed": 1},
                 C.LEDGER_VERIFICATION_FILE: {"schema_version": 1, "frs": {
                     f"FR-{i}": {"green": True, "verifiers": []} for i in range(1, 5)}},
+                # #415: the launcher's JSON result, as `claude -p --output-format
+                # json` writes it — the session id rides on the result element.
+                "phase-1/build-result-1.json": [
+                    {"type": "system", "subtype": "init"},
+                    {"type": "result", "subtype": "success", "session_id": "sess-landed"},
+                ],
             },
         )
+        # #415: a loaded copy of that session in the store.
+        self.db.execute(
+            "INSERT INTO copilot_session (copilot, session_id) VALUES (?, ?)",
+            (C.COPILOT_CLAUDE_CODE, "sess-landed"),
+        )
+        self.db.commit()
+        self.landed_store_id = int(self.db.query_one(
+            "SELECT id FROM copilot_session WHERE copilot = ? AND session_id = ?",
+            (C.COPILOT_CLAUDE_CODE, "sess-landed"),
+        )[0])
         # Run 1: terminated_policy on provider_unavailable, no PR, phase left "building".
         _write_ledger(
             self.root, C.AUTO_BUILD_ARCHIVE_DIR, "team-developer-aliases-run1",
@@ -106,6 +122,9 @@ class _Ledgers(RegistryResetTestCase):
                                             "detail": "reviewer 'codex' failed (exit 1) in phase 1 round 1",
                                             "phase": 1, "created": "2026-09-09T01:55:23Z"},
                 C.LEDGER_TRIAGE_FILE: "# Triage report\n",
+                # #415: a backend whose result names no session (the codex
+                # path once read session_id null).
+                "phase-1/build-result-1.json": {"type": "result", "subtype": "success", "session_id": None},
             },
         )
         # An attended run that parked: outcome stays null, status parked,
@@ -608,3 +627,39 @@ class TestApi(_Ledgers):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPhaseSessions(_Ledgers):
+    """#415: each phase names the build session it ran, resolved to the
+    store when loaded, with the gap named when not."""
+
+    def _phase(self, key: str) -> dict:
+        runs = {r["key"]: r for r in AB.list_runs(self.db, self.cfg, now=NOW)["runs"]}
+        return runs[key]["phases"]["items"][0]
+
+    def test_loaded_session_resolves_to_the_store_row_with_its_copilot(self) -> None:
+        self.assertEqual(
+            self._phase(LANDED_KEY)["session"],
+            {"copilot": C.COPILOT_CLAUDE_CODE, "session_id": "sess-landed", "store_id": self.landed_store_id},
+        )
+
+    def test_unloaded_session_keeps_its_native_id_and_no_store_id(self) -> None:
+        self.db.execute("DELETE FROM copilot_session WHERE session_id = ?", ("sess-landed",))
+        self.db.commit()
+        self.assertEqual(
+            self._phase(LANDED_KEY)["session"],
+            {"copilot": None, "session_id": "sess-landed", "store_id": None},
+        )
+
+    def test_result_without_a_session_id_is_named_not_invented(self) -> None:
+        self.assertEqual(
+            self._phase(TERMINATED_KEY)["session"],
+            {"copilot": None, "session_id": None, "store_id": None},
+        )
+
+    def test_phase_without_a_result_file_has_no_session(self) -> None:
+        self.assertIsNone(self._phase(PARKED_KEY)["session"])
+
+    def test_detail_resolves_sessions_too(self) -> None:
+        run = AB.run_detail(self.db, self.cfg, LANDED_KEY, now=NOW)
+        self.assertEqual(run["phases"]["items"][0]["session"]["store_id"], self.landed_store_id)

@@ -21,6 +21,15 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   `CCT_REPO_DIR` as the override. A shim whose checkout has moved exits 2
   and names the remedy, and `cct doctor` checks the shim's target (#410).
 
+### Added
+
+- **The Runs page links each phase of an auto-build run to the session it
+  ran.** The run payload carries, per phase, the native session id the
+  driver read from the launcher's result (`build-result-*.json`) and the
+  store session it resolves to when loaded, matched with the copilot;
+  the phase line links to the session page when it is loaded and says
+  "session not loaded" with the native id on hover when it is not (#415).
+
 ### Changed
 
 - **The Claude Code plugin is named `cct`.** Plugin components are now
