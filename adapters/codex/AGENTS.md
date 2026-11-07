@@ -43,6 +43,7 @@ Before declaring a change ready for review, do the homework yourself — do not 
 - **Trace every code path.** If you changed `execute()`, also change `execute_async()`. If you changed the child side, also change the parent side. If you changed one caller, grep every caller. Shotgun surgery is a bug, not a style choice — run a final grep for related occurrences before declaring done.
 - **Trace the execution, not just the line.** Read the code path from entry to return. Many bugs — wrong fallback, missing guard, incompatible defaults — are visible without running the code. "Execute your own test plan" is necessary but not sufficient; it won't catch what the tests don't cover.
 - **Apply corrections globally.** When the user corrects a pattern (magic strings, hardcoded defaults, etc.), fix every instance in the codebase, not just the one they pointed at. Being corrected more than once for the same rule is a sign you applied the fix too narrowly the first time.
+- **Check precedent claims against the source.** A claim about what an earlier release, tag, PR or commit did ("the CHANGELOG has always carried dates", "that pitch was never built", "the release was cut from this commit") is checked against git, the tag, the PR or the package index before it is written. Four such claims were retracted after review in one stretch (wiki-studio #60, #61, #63, #66) and an external reviewer made the same error three times: memory of a repository is not a source.
 - **Do not ask for information you can find.** Before asking the user for a log, a line number, a stack trace, or "which file?" — search the code yourself with grep and file reads. The user's time is more valuable than yours. Ask only for information that cannot be derived from the repo.
 
 ## Never Fix Bugs by Regressing Features
@@ -487,6 +488,7 @@ advisory, not a boundary.
 - Bind review/merge/closure to an exact SHA; re-read state first.
 - Prefer a follow-up commit to an amend on a watched branch.
 - Keep every commit review-ready.
+- Report PR existence and state from `gh pr list` / `gh pr view`, never from the session's last action: a session reported "no PR" for a branch after the owner had opened one (wiki-studio #78).
 
 Evidence, and the guard not adopted: #291.
 

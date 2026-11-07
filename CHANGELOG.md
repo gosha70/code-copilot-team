@@ -21,6 +21,17 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   `CCT_REPO_DIR` as the override. A shim whose checkout has moved exits 2
   and names the remedy, and `cct doctor` checks the shim's target (#410).
 
+### Added
+
+- **Three rule gaps from the wiki-studio retrospective of 2026-11-04.**
+  `infra-verification`: every command a page shows gets the cheapest real
+  check (`pip install --dry-run`, `--help`, a parse); "not executed in CI"
+  is a label, not an exemption. `coding-standards` Self-Audit: precedent
+  claims about earlier releases, tags or PRs are checked against the
+  source before they are written. `safety`: PR existence and state come
+  from `gh pr list` / `gh pr view`, never from the session's last action
+  (#409).
+
 ### Changed
 
 - **The Claude Code plugin is named `cct`.** Plugin components are now
