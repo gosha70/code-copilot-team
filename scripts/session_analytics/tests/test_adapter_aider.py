@@ -18,10 +18,25 @@ class TestAiderAdapter(RegistryResetTestCase):
         # listing walked the whole home directory. Aider is scanned only
         # under a root the user declares; with none, discovery is empty
         # and touches no directory.
-        from session_analytics import config as cfgmod
+        from types import SimpleNamespace
+        from unittest import mock
 
-        self.assertIsNone(cfgmod._read_defaults()["sources"]["aider"])
-        self.assertEqual(AiderAdapter(default_root=None).discover(None), [])
+        from session_analytics import config as cfgmod
+        from session_analytics.adapters import aider as aider_mod
+
+        defaults = cfgmod._read_defaults()["sources"]
+        # The KEY stays, as null: load_config's env loop only consults
+        # copilots present in the sources map, so deleting the entry
+        # would silently disable CCT_SA_SOURCE_AIDER.
+        self.assertIn("aider", defaults)
+        self.assertIsNone(defaults["aider"])
+        # Discovery resolves a missing root through load_config(), which
+        # merges ~/.cct/session-analytics.json and CCT_SA_SOURCE_AIDER from
+        # the host — the very setting aider users are told to add. Pin the
+        # packaged default so this measures the package, not this machine.
+        packaged = SimpleNamespace(source_root=lambda copilot: None)
+        with mock.patch.object(aider_mod, "load_config", return_value=packaged):
+            self.assertEqual(AiderAdapter(default_root=None).discover(None), [])
 
     def test_discover_skips_hidden_dependency_and_library_dirs(self) -> None:
         # A declared root may be a whole tree of projects; walking every
