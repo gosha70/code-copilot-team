@@ -83,6 +83,27 @@ assert "start without a launcher says it wants the installed one, not the checko
   "grep -q 'INSTALLED launcher' <<<\"\$NOLAUNCHER_OUT\""
 rm -r "$START_BIN" "$START_HOME" "$EMPTY_HOME"; rm "$START_LOG"
 
+# ── doctor reports the Claude Code gateway and its compat settings (#399) ──
+gw_status() {
+  # gw_status <json> → the Gateway row's status
+  python3 -c "
+import json, sys
+d = json.loads(sys.stdin.read())
+print(next(c for c in d['checks'] if c['section'] == 'Gateway')['status'])" <<<"$1"
+}
+GW_NONE=$(ANTHROPIC_BASE_URL= bash "$CCT" doctor --no-network --json 2>&1 || true)
+assert "doctor: no gateway reads ok (native endpoint)" "[[ \$(gw_status \"\$GW_NONE\") == ok ]]"
+GW_BARE=$(ANTHROPIC_BASE_URL=https://gateway.example CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS= ENABLE_TOOL_SEARCH= bash "$CCT" doctor --no-network --json 2>&1 || true)
+assert "doctor: a gateway with no compat setting warns" "[[ \$(gw_status \"\$GW_BARE\") == warn ]]"
+assert "doctor: ...naming the variables, never their values" \
+  "grep -q 'CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS' <<<\"\$GW_BARE\" && ! grep -q 'gateway.example' <<<\"\$GW_BARE\""
+GW_SET=$(ANTHROPIC_BASE_URL=https://gateway.example CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 bash "$CCT" doctor --no-network --json 2>&1 || true)
+assert "doctor: a gateway with a compat setting reads ok" "[[ \$(gw_status \"\$GW_SET\") == ok ]]"
+GW_TRUE=$(ANTHROPIC_BASE_URL=https://gateway.example CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS= ENABLE_TOOL_SEARCH=true bash "$CCT" doctor --no-network --json 2>&1 || true)
+assert "doctor: ENABLE_TOOL_SEARCH=true still warns (value-aware)" "[[ \$(gw_status \"\$GW_TRUE\") == warn ]]"
+GW_FALSE=$(ANTHROPIC_BASE_URL=https://gateway.example CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS= ENABLE_TOOL_SEARCH=false bash "$CCT" doctor --no-network --json 2>&1 || true)
+assert "doctor: ENABLE_TOOL_SEARCH=false reads ok" "[[ \$(gw_status \"\$GW_FALSE\") == ok ]]"
+
 # ── doctor looks at the cct shim's target (#410) ─────────────
 # A shim on PATH whose baked checkout is gone must FAIL doctor; one whose
 # checkout is present is OK. Both shims are planted first on PATH.

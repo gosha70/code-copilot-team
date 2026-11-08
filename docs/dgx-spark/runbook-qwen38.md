@@ -321,6 +321,8 @@ VLLM_ORIGIN="http://spark-c2e5.local:8001" bash check-transport-wiring.sh
 
 That last command catches the silent cross-wire — pointing Claude Code at vLLM's own origin when you meant the bridge. It also catches a /v1 suffix on the wrong URL and any unpinned model tier.
 
+If a session later fails with `422 … unknown variant tool_definition, expected tool_reference`, the endpoint rejects Claude Code's dynamic tool block; see the setup cookbook, "Gateways that reject dynamic tool blocks" (#399), and start a fresh session with the fallback variables it lists.
+
 Then, in a repo:
 
 ```
