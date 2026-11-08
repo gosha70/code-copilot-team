@@ -112,19 +112,24 @@ policy stays `first_time_contributors`: a maintainer inspects a
 first-time contributor's diff before any workflow runs on it.
 
 Default and advanced setup cannot both be active: while default setup is
-on, GitHub rejects the workflow's uploads with "default setup is
-enabled". The cutover is therefore a repository-settings operation, done
-once, in this order, each step confirmed before the next:
+on, GitHub rejects the workflow's uploads with "CodeQL analyses from
+advanced configurations cannot be processed when the default setup is
+enabled" (seen on PR #431's first run). The workflow's aggregate job is
+named `CodeQL`, so that failure also fails the required `CodeQL` status
+on the PR that adds the workflow: **the ruleset edit comes first**, or
+that PR cannot merge. The cutover is a repository-settings operation,
+done once, in this order, each step confirmed before the next:
 
-1. Merge the PR that adds the workflow and this section. Its first runs
-   fail at upload while default setup is still on; that is expected.
-2. Remove `CodeQL` from the ruleset's required checks, keeping
+1. Remove `CodeQL` from the ruleset's required checks, keeping
    `pi-tests` and `sync-check`:
    ```bash
    gh api repos/gosha70/code-copilot-team/rulesets/19893594 > ruleset.json
-   jq '(.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks) |= map(select(.context != "CodeQL"))' ruleset.json > ruleset-step2.json
-   gh api -X PUT repos/gosha70/code-copilot-team/rulesets/19893594 --input ruleset-step2.json
+   jq '(.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks) |= map(select(.context != "CodeQL"))' ruleset.json > ruleset-step1.json
+   gh api -X PUT repos/gosha70/code-copilot-team/rulesets/19893594 --input ruleset-step1.json
    ```
+2. Merge the PR that adds the workflow and this section (PR #431). Its
+   runs keep failing at upload while default setup is still on; that is
+   expected and no longer blocks the merge.
 3. Turn default setup off:
    ```bash
    gh api -X PATCH repos/gosha70/code-copilot-team/code-scanning/default-setup -f state=not-configured
@@ -144,7 +149,7 @@ once, in this order, each step confirmed before the next:
    first) that the `CodeQL` check appears and passes.
 7. Restore `CodeQL` as a required check:
    ```bash
-   jq '(.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks) += [{"context":"CodeQL"}]' ruleset-step2.json > ruleset-step7.json
+   jq '(.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks) += [{"context":"CodeQL"}]' ruleset-step1.json > ruleset-step7.json
    gh api -X PUT repos/gosha70/code-copilot-team/rulesets/19893594 --input ruleset-step7.json
    ```
 8. Re-trigger the waiting fork PR (close and reopen fires
