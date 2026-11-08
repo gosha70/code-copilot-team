@@ -1,0 +1,78 @@
+name: CodeQL
+
+# CodeQL as an advanced-setup workflow. GitHub's default setup never runs
+# on a pull request from a public fork, so with `CodeQL` a required status
+# a fork PR could never merge (PR #426). This workflow runs on every PR
+# with the read-only token and uploads results under the same `CodeQL`
+# context, which an aggregate job keeps stable across the language matrix.
+#
+# Security posture for fork PRs:
+#   - `pull_request`, never `pull_request_target`: the workflow runs the
+#     PR's own code with a read-only GITHUB_TOKEN and no repository secrets.
+#   - `security-events: write` is the one scope the job needs, to upload
+#     results; GitHub grants it to code-scanning uploads from fork PRs.
+#   - The repository's fork approval policy (`first_time_contributors`)
+#     still holds: a maintainer inspects a first-time contributor's diff
+#     before any workflow runs on it.
+#
+# Cutover from default setup is a repository-settings operation, written
+# up in docs/github-hardening-playbook.md ("CodeQL: default to advanced").
+# Until default setup is turned off there, GitHub rejects this workflow's
+# uploads ("default setup is enabled"); that failure is expected then.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # The four language groups default setup scanned, unchanged.
+        language: [actions, java-kotlin, javascript-typescript, python]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  # One check named exactly `CodeQL`, whatever the matrix does: this is the
+  # context the master ruleset requires, so it must not vary with the set
+  # of languages and must appear on every PR.
+  codeql:
+    name: CodeQL
+    needs: analyze
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every analysis succeeded
+        run: |
+          echo "analyze result: ${{ needs.analyze.result }}"
+          test "${{ needs.analyze.result }}" = "success"

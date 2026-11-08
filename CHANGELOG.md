@@ -55,6 +55,20 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   loaded and says "session not loaded" with the native id on hover when
   it is not (#415).
 
+- **CodeQL runs on pull requests from forks.** `.github/workflows/codeql.yml`
+  replaces GitHub's default CodeQL setup, which never scans a fork PR and
+  so left a required `CodeQL` status no fork PR could satisfy. The
+  workflow runs on `pull_request` with the read-only token, scans the
+  same four language groups with `build-mode: none`, and ends in one job
+  named `CodeQL`. The cutover from default setup is a settings operation
+  written up step by step in `docs/github-hardening-playbook.md`;
+  CONTRIBUTING.md states the fork-PR policy.
+- **The hardening audit reads rulesets.** `scripts/check-github-hardening.sh`
+  inspected classic branch protection only and reported "no branch
+  protection" against this repository's ruleset. It now reads whichever
+  source the branch has, names any ruleset that grants a bypass, and a
+  gh-stub suite pins both readings (`tests/test-github-hardening.sh`).
+
 ### Fixed
 
 - **auto-build lands only when `test.command` passes on the final head.**

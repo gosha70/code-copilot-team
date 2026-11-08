@@ -167,6 +167,11 @@ jobs:
       - name: pre-pr-check tests
         run: bash tests/test-pre-pr-check.sh
 
+      # The hardening audit reads rulesets as well as classic protection;
+      # a gh stub serves both sources so the reading is pinned.
+      - name: GitHub hardening audit tests
+        run: bash tests/test-github-hardening.sh
+
       # shared/capabilities/COMPATIBILITY.md is a deterministic render of the
       # capability registry. Until #214 Phase 2.0 this check ran only on
       # release tags, so a PR could land a stale matrix; it gates PRs now.

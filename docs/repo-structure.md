@@ -61,9 +61,11 @@ code-copilot-team/
 │   ├── test-routing-delegation.sh     180 route-class + packet execution + reconciliation tests (#254 C T3-T5)
 │   ├── test-routing-recovery.sh       375 probe-state + timing + probe + tick-wake tests (#257 D)
 │   ├── test-pre-pr-check.sh           11 close-keyword audit tests (#408)
+│   ├── test-github-hardening.sh       14 hardening audit tests (classic + ruleset sources)
 │   └── test-claude-code-launcher.sh   39 branded-launcher + cct shim + gateway notice tests (#195, #410, #399)
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification
+├── .github/workflows/codeql.yml         CI: CodeQL advanced setup — runs on fork PRs, one `CodeQL` check
 ├── README.md
 ├── CONTRIBUTING.md
 └── LICENSE

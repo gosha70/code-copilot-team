@@ -42,6 +42,24 @@ shared/skills/*/SKILL.md  →  scripts/generate.sh  →  adapters/<tool>/
 5. Commit with a clear message (`git commit -m "Add Go microservice template with gRPC agent team"`)
 6. Open a pull request
 
+## Pull Requests from Forks
+
+Contributions arrive as pull requests from forks, and CI runs on them:
+
+- Workflows run with a **read-only token and no repository secrets**
+  (`pull_request` events only; this repository uses no
+  `pull_request_target` workflow), so your PR's code cannot touch the
+  repository or its secrets.
+- A **first-time contributor's workflow runs wait for a maintainer** to
+  approve them from the PR's Actions tab, after reading the diff. Later
+  PRs from the same account run automatically.
+- **CodeQL runs on every PR** as the `CodeQL` check (`.github/workflows/codeql.yml`)
+  and is required, together with `pi-tests` and `sync-check`, before a
+  merge. GitHub's default CodeQL setup never scanned fork PRs; the
+  workflow replaces it so a fork PR can satisfy the same requirement.
+- Alerts CodeQL raises on your changes show on the PR's Checks tab; fix
+  them or explain in the PR why they are false positives.
+
 ## Guidelines
 
 - Keep rules concise. AI copilots have limited context; every word costs tokens.
