@@ -29,6 +29,7 @@ Between Phase 1 (Plan) and Phase 2 (Build), a spec gate applies:
 - Plan always writes `specs/<feature-id>/plan.md` with `spec_mode` frontmatter.
 - For `full` or `lightweight`: Plan also writes `spec.md`. User approves both before Build.
 - For `none`: User approves `plan.md` only. Build proceeds without a spec gate.
+- **Before approval, the main session asks every entry in the plan's `### Open decisions`** with `AskUserQuestion` (the agent's default first), records each answer in `plan.md` and `spec.md`, and removes the matching `[NEEDS CLARIFICATION]` markers. The plan agent lists; it cannot ask (#407).
 - All `[NEEDS CLARIFICATION]` markers in `spec.md` must be resolved before Build starts.
 
 See `spec-workflow.md` for risk classification and required sections.
