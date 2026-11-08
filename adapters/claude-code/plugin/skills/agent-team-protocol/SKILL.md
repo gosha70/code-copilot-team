@@ -17,7 +17,7 @@ Every non-trivial task follows three phases with distinct behaviors:
 - **Model:** Highest-capability (e.g., Opus) · **Effort:** `xhigh` (Opus 4.7) / `high` (other models)
 - Work alone. Do NOT delegate to sub-agents.
 - Read the full codebase context, understand architecture, identify risks.
-- **Ask clarifying questions** about data model shape, auth strategy, UI layout, and output formats BEFORE producing the plan. (See `clarification-protocol.md` for the full protocol and data model review gate.)
+- **Ask clarifying questions** about data model shape, auth strategy, UI layout, and output formats BEFORE producing the plan. (See `clarification-protocol.md` for the full protocol and data model review gate.) When the plan phase runs as a **subagent** (the `plan` agent, `/shape`'s `pitch-shaper`), it cannot ask: Claude Code removes `AskUserQuestion` from every subagent even when listed in `tools:` (#407). The agent lists the open decisions with defaults in its output (`### Open decisions` / `## Open decisions`), and the main session asks them and records the answers before approval.
 - Produce a concrete plan: files to touch, interfaces to change, test strategy.
 - Get user approval before moving to Phase 2.
 
@@ -28,6 +28,7 @@ Between Phase 1 (Plan) and Phase 2 (Build), a spec gate applies:
 - Plan always writes `specs/<feature-id>/plan.md` with `spec_mode` frontmatter.
 - For `full` or `lightweight`: Plan also writes `spec.md`. User approves both before Build.
 - For `none`: User approves `plan.md` only. Build proceeds without a spec gate.
+- **Before approval, the main session asks every entry in the plan's `### Open decisions`** with `AskUserQuestion` (the agent's default first), records each answer in `plan.md` and `spec.md`, and removes the matching `[NEEDS CLARIFICATION]` markers. The plan agent lists; it cannot ask (#407).
 - All `[NEEDS CLARIFICATION]` markers in `spec.md` must be resolved before Build starts.
 
 See `spec-workflow.md` for risk classification and required sections.

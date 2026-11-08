@@ -20,6 +20,23 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   shim next to the launcher, with the checkout path baked in and
   `CCT_REPO_DIR` as the override. A shim whose checkout has moved exits 2
   and names the remedy, and `cct doctor` checks the shim's target (#410).
+- **A configured Claude Code gateway is diagnosed, not guessed.** When
+  `ANTHROPIC_BASE_URL` is set and neither `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`
+  nor `ENABLE_TOOL_SEARCH` is, the `claude-code` launcher prints a notice
+  when it starts a session (interactive or `-p`, not on `help` or `list`)
+  naming the fallback that avoids the dynamic `tool_definition` block
+  DeepSeek's endpoint rejects (422 before inference) and the fresh-session
+  requirement; `cct doctor` reports the same under **Gateway**, names only.
+  The DGX cookbook documents the failure signature and the fallback (#399).
+
+- **Close-keyword audit for hand-opened PRs.** The `phase-workflow` skill
+  gains "Opening a Pull Request": run `scripts/pre-pr-check.sh` before
+  `gh pr create`, confirm `closingIssuesReferences` after, and put none of
+  GitHub's nine keyword forms before an issue a later PR must close. The
+  script accepts `--closes none` for a PR that closes nothing, so docs and
+  chore PRs can run the audit too. The `copilot-conventions` Git
+  Discipline carries the rule (#408).
+
 - **Three rule gaps from the wiki-studio retrospective of 2026-11-04.**
   `infra-verification`: every command a page shows gets the cheapest real
   check (`pip install --dry-run`, `--help`, a parse); "not executed in CI"
@@ -29,8 +46,44 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   from `gh pr list` / `gh pr view`, never from the session's last action
   (#409).
 
+### Fixed
+
+- **auto-build lands only when `test.command` passes on the final head.**
+  A run landed with phase test logs ending in a coverage FAIL and nothing
+  in the ledger saying what the driver had seen. The driver now records
+  every test attempt's exit code (`phases[n].test_rc`, event
+  `phase_tests`), re-runs `test.command` once at landing before anything
+  is pushed or opened as a PR (`landing.test_rc`, event `landing_tests`),
+  and parks with `test_failure` when that run fails (#403).
+- **auto-build keeps one review record per phase and reports a bypass as a
+  bypass.** Each phase's `build-review.md` is kept as
+  `collaboration/build-review-phase-<n>.md`; the automation summary and the
+  PR body say `bypassed (escalation esc-N)` for a phase accepted through
+  `/review-decide approve` instead of "Review: PASS" (#404).
+
+- **The review runner runs the test a gating finding claims fails before
+  it counts.** A blocking finding naming a pytest node id or a test file
+  under the project is checked by running it; a passing run marks the
+  finding `test_claim.disputed` (kept in the record with the evidence,
+  not counted as blocking), and a FAIL that rested only on disputed
+  claims is recorded as PASS with `verdict_override`.
+  `CCT_REVIEW_CHECK_TEST_CLAIMS=false` turns it off (#406).
+
+- **`/shape` and the plan agent ask the owner from the main session.**
+  Claude Code removes `AskUserQuestion` from every subagent even when it
+  is listed in `tools:`, so the `pitch-shaper` and `plan` agents could
+  never ask the open decisions they were told to ask. They now list each
+  open decision with a default (`## Open decisions` in the pitch,
+  `### Open decisions` in the plan), and `/shape` asks them in the main
+  session and records the answers before reporting (#407).
+
 ### Changed
 
+- **Aider sessions are discovered only under a declared root.** The packaged
+  `sources.aider` default was `~`, which made every load and listing walk
+  the whole home directory. It is now unset; set `sources.aider` in
+  `~/.cct/session-analytics.json` or `CCT_SA_SOURCE_AIDER` to the directory
+  that holds your aider projects (#402).
 - **The Claude Code plugin is named `cct`.** Plugin components are now
   `/cct:shape` and `cct:build`; install with `/plugin install
   cct@code-copilot-team`. Copies installed under the earlier

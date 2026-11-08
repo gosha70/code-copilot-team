@@ -33,12 +33,17 @@
 #
 # Usage:
 #   scripts/pre-pr-check.sh \
-#       --closes <N>[,<N>...] \
+#       --closes <N>[,<N>...] | --closes none \
 #       --title <PR title> \
 #       --body-file <path> \
 #       [--base <branch>]
 #
 # Defaults: --base master.
+#
+# `--closes none` is for a PR that closes nothing (docs, chores, one
+# slice of an issue a later PR closes): every close keyword in the
+# commits, the body or the title then fails the check, and the title
+# must carry no `(Closes #N)` marker.
 #
 # Examples:
 #   # Sub-issue B (closes #49 only):
@@ -80,21 +85,30 @@ if [[ -z "$CLOSES" || -z "$TITLE" || -z "$BODY_FILE" ]]; then
 fi
 
 # Normalize --closes into a list (whitespace + comma tolerant).
-# Each entry must be a positive integer (no `#` prefix).
+# Each entry must be a positive integer (no `#` prefix). `none` is the
+# empty list: the PR closes nothing, so every keyword match fails.
 EXPECTED_IDS=()
-IFS=',' read -ra _RAW <<< "$CLOSES"
-for raw in "${_RAW[@]}"; do
-  trimmed="$(echo "$raw" | tr -d ' #')"
-  if ! [[ "$trimmed" =~ ^[0-9]+$ ]]; then
-    echo "pre-pr-check: --closes value must be integer(s); got '$raw'" >&2
-    exit 2
-  fi
-  EXPECTED_IDS+=("$trimmed")
-done
+NO_CLOSE=0
+if [[ "$(echo "$CLOSES" | tr '[:upper:]' '[:lower:]')" == "none" ]]; then
+  NO_CLOSE=1
+else
+  IFS=',' read -ra _RAW <<< "$CLOSES"
+  for raw in "${_RAW[@]}"; do
+    trimmed="$(echo "$raw" | tr -d ' #')"
+    if ! [[ "$trimmed" =~ ^[0-9]+$ ]]; then
+      echo "pre-pr-check: --closes value must be integer(s) or 'none'; got '$raw'" >&2
+      exit 2
+    fi
+    EXPECTED_IDS+=("$trimmed")
+  done
+fi
 
 # Helper: is an ID in the expected list?
 id_expected() {
   local needle="$1"
+  # bash 3.2 + set -u: expanding an empty array is an error, so answer
+  # first when there is nothing to match against (--closes none).
+  [[ "${#EXPECTED_IDS[@]}" -eq 0 ]] && return 1
   for id in "${EXPECTED_IDS[@]}"; do
     if [[ "$id" == "$needle" ]]; then return 0; fi
   done
@@ -262,6 +276,8 @@ else
     # the "multiple matches per line" case + extracts the ID from
     # each match, not from the whole line).
     scan_line "$TITLE" "title" "title close-id mismatch"
+  elif [[ "$NO_CLOSE" -eq 1 ]]; then
+    echo "  [PASS] title carries no close marker (--closes none: this PR closes nothing)"
   else
     # Per the repo's PR convention: every PR title carries a
     # '(Closes #N)' marker. PR #41 last session opened with the

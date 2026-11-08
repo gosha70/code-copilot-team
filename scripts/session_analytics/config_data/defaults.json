@@ -134,7 +134,7 @@
     "top_k": 5
   },
   "sources": {
-    "aider": "~",
+    "aider": null,
     "claude-code": "~/.claude/projects"
   },
   "team": {
