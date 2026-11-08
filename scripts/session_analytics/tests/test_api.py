@@ -1466,8 +1466,12 @@ class TestApi(RegistryResetTestCase):
     def test_get_config(self) -> None:
         from session_analytics import config as cfgmod
 
-        with packaged_config({cfgmod.ENV_JUDGE_BACKEND: "", cfgmod.ENV_JUDGE_MODEL: ""}):
-            r = self.client.get("/api/config")
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_user_cfg = Path(tmp) / "config.toml"
+            fake_user_cfg.write_text('judge_backend = "anthropic"\n', encoding="utf-8")
+            with mock.patch.object(cfgmod, "_USER_CONFIG", fake_user_cfg):
+                with packaged_config({cfgmod.ENV_JUDGE_BACKEND: "", cfgmod.ENV_JUDGE_MODEL: ""}):
+                    r = self.client.get("/api/config")
         self.assertEqual(r.status_code, 200)
         body = r.json()
         self.assertIn("configured", body)
