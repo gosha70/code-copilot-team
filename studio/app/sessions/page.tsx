@@ -142,7 +142,7 @@ function Sessions() {
           Show excluded ({data.excluded_noise.toLocaleString()})
           <span
             className="text-xs text-slate-500"
-            title="Sessions under the turn or duration minimum, or in a probe/temp directory (sessions.noise in config)"
+            title="Sessions under the turn minimum or the duration minimum (wall clock, first entry to last), or in a probe/temp directory (sessions.noise in config)"
           >
             probe runs, temp dirs, and sessions too short to mean anything
           </span>
