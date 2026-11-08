@@ -1072,6 +1072,9 @@ try {
   else if (rv.phaseSessionLink({ ...rvRun().phases.items[0], session: null }).label !== "") fail("a phase without a result file claims a session");
   else if (rv.phaseSessionLink({ ...rvRun().phases.items[0], session: { copilot: null, session_id: null, store_id: null } }).label !== "no session id recorded") fail("a result without a session id is not named");
   else if (JSON.stringify(rv.phaseSessionLink({ ...rvRun().phases.items[0], session: { copilot: null, session_id: "abc-123", store_id: null } })) !== JSON.stringify({ href: null, label: "session not loaded", title: "abc-123" })) fail("an unloaded session is not said to be unloaded with its native id");
+  // The Runs page fetches, so it is not rendered here; at the source it
+  // must put phaseSessionLink's href on a Link (review of PR #424).
+  else if (!/phaseSessionLink\(p\)[\s\S]{0,600}<Link href=\{link\.href\}/.test(readFileSync(join(STUDIO, "app/runs/page.tsx"), "utf8"))) fail("source: the Runs page does not render the phase session link (#415)");
   else if (rv.phaseSessionLink({ ...rvRun().phases.items[0], session: { copilot: "claude-code", session_id: "abc-123", store_id: 42 } }).href !== "/sessions/42") fail("a loaded session does not link to its page");
   else if (rv.verifierLine(rvTerminated) !== "4 requirements mapped at admission; verifiers not run") fail("verifiers not run is said");
   else if (rv.verifierLine(rvRun({ verifiers: { admission_mapped: null, results: null } })) !== "no admission contract; verifiers not run") fail("no contract is said");

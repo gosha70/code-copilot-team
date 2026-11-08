@@ -228,10 +228,16 @@ LEDGER_REVIEW_SUMMARY = f"{LEDGER_REVIEW_DIR}/loop-summary.json"
 #: driver writes build-result-1.json and, after a max-turns continuation,
 #: build-result-2.json; the launcher's JSON result carries `session_id`.
 LEDGER_BUILD_RESULT_GLOB = "build-result-*.json"
-#: Copilots an auto-build session can have run under, in lookup order.
-#: The ledger does not record the backend (CCT_AUTOBUILD_BACKEND is an
-#: env var), so a native id is matched with each in turn.
+#: Copilots an unrouted auto-build session can have run under, in lookup
+#: order. An unrouted run's ledger does not record the backend
+#: (CCT_AUTOBUILD_BACKEND is an env var), so its native id is matched
+#: with each in turn. A routed run records its backend in state.json
+#: under ``routing_identity``; the lookup uses that copilot only, and
+#: none for codex, which the store does not ingest.
 RUN_SESSION_COPILOTS = (COPILOT_CLAUDE_CODE, COPILOT_PI)
+STATE_ROUTING_IDENTITY_KEY = "routing_identity"
+ROUTING_IDENTITY_BACKEND_KEY = "backend"
+RUN_BACKEND_COPILOTS = {"claude": COPILOT_CLAUDE_CODE, "pi": COPILOT_PI}
 #: codex writes its raw event stream to the result file; the driver's
 #: codex_result_obj takes the session id from the last of these events.
 CODEX_THREAD_STARTED_EVENT = "thread.started"
@@ -432,7 +438,6 @@ VISUAL_VERDICT_UNREACHED = "unreached"
 LEDGER_FROZEN_CONTRACT_FILE = "frozen-contract.json"
 LEDGER_EVENT_INIT = "init"
 LEDGER_EVENT_VERIFIER_GATE = "verifier_gate"
-LEDGER_BUILD_RESULT_GLOB = "build-result-*.json"
 #: Bounds on the text A5 copies out of a ledger so it survives pruning.
 EXPECTATION_STATEMENT_MAX_CHARS = 4000
 EXPECTATION_DETAIL_MAX_CHARS = 4000

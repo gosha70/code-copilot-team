@@ -1470,6 +1470,8 @@ export interface RunPhase {
 }
 
 export interface AutoBuildRun {
+  /** The backend a routed run recorded; null for an unrouted run. */
+  backend: string | null;
   key: string;
   feature_id: string | null;
   profile: string | null;

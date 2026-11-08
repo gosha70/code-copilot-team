@@ -666,6 +666,34 @@ class TestPhaseSessions(_Ledgers):
             {"copilot": None, "session_id": "thr-codex-1", "store_id": None},
         )
 
+    def _routed(self, key: str, backend: str) -> dict:
+        # Review of PR #424: a routed run records its backend in state.json;
+        # the store row for this id is a claude-code session.
+        _write_ledger(
+            self.root, C.AUTO_BUILD_ARCHIVE_DIR, f"routed-{backend}",
+            _state(key, routing_identity={"profile": "p", "backend": backend}),
+            extra={"phase-1/build-result-1.json": [{"type": "result", "session_id": "sess-landed"}]},
+        )
+        return self._phase(key)["session"]
+
+    def test_a_routed_run_resolves_under_its_recorded_backend(self) -> None:
+        self.assertEqual(
+            self._routed("55555-666666666", "claude"),
+            {"copilot": C.COPILOT_CLAUDE_CODE, "session_id": "sess-landed", "store_id": self.landed_store_id},
+        )
+
+    def test_a_routed_run_never_claims_another_copilots_session(self) -> None:
+        self.assertEqual(
+            self._routed("77777-888888888", "pi"),
+            {"copilot": None, "session_id": "sess-landed", "store_id": None},
+        )
+
+    def test_a_codex_routed_run_is_not_looked_up(self) -> None:
+        self.assertEqual(
+            self._routed("99999-000000000", "codex"),
+            {"copilot": None, "session_id": "sess-landed", "store_id": None},
+        )
+
     def test_codex_stream_without_thread_started_names_no_session(self) -> None:
         runs = {r["key"]: r for r in AB.list_runs(self.db, self.cfg, now=NOW)["runs"]}
         phases = {p["n"]: p for p in runs[PARKED_KEY]["phases"]["items"]}

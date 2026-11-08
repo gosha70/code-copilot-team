@@ -170,17 +170,37 @@ def _phase_session(ledger: Path, key: str) -> Optional[dict[str, Any]]:
     return {"copilot": None, "session_id": session_id, "store_id": None}
 
 
+def _routed_backend(state: dict[str, Any]) -> Optional[str]:
+    """The backend a routed run recorded in its state, None when unrouted."""
+    identity = state.get(C.STATE_ROUTING_IDENTITY_KEY)
+    if not isinstance(identity, dict):
+        return None
+    backend = identity.get(C.ROUTING_IDENTITY_BACKEND_KEY)
+    return str(backend) if backend else None
+
+
+def _session_copilots(run: dict[str, Any]) -> tuple[str, ...]:
+    """Which store copilots a run's sessions can be under: for a routed
+    run, the one its recorded backend maps to (none for codex, which the
+    store does not ingest); for an unrouted run, whose backend the ledger
+    does not record, every auto-build copilot in order."""
+    backend = run.get("backend")
+    if backend is None:
+        return C.RUN_SESSION_COPILOTS
+    copilot = C.RUN_BACKEND_COPILOTS.get(backend)
+    return (copilot,) if copilot else ()
+
+
 def _attach_sessions(runs: list[dict[str, Any]], db: Database) -> None:
     """#415: resolve each phase's native session id to a store session
-    when it is loaded. Matched WITH the copilot, never on the id alone;
-    the ledger does not record the backend, so the known auto-build
-    copilots are tried in order."""
+    when it is loaded. Matched WITH the copilot, never on the id alone."""
     for run in runs:
+        copilots = _session_copilots(run)
         for phase in run["phases"]["items"]:
             session = phase.get("session")
             if not session or not session.get("session_id"):
                 continue
-            for copilot in C.RUN_SESSION_COPILOTS:
+            for copilot in copilots:
                 row = db.query_one(
                     "SELECT id FROM copilot_session WHERE copilot = ? AND session_id = ?",
                     (copilot, session["session_id"]),
@@ -392,6 +412,7 @@ def read_run(ledger: Path, root: Path, *, now: datetime, active_window_seconds: 
         "key": str(state["attempt_id"]),
         "feature_id": state.get("feature_id"),
         "profile": state.get("profile"),
+        "backend": _routed_backend(state),
         "branch": state.get("branch"),
         "base_ref": (str(state.get("branch_base_ref") or "")[:12] or None),
         "status": status or None,

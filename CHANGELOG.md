@@ -23,9 +23,11 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 - **The Runs page links each phase of an auto-build run to the session it
   ran.** The run payload carries, per phase, the native session id the
   driver read from the launcher's result (`build-result-*.json`) and the
-  store session it resolves to when loaded, matched with the copilot;
-  the phase line links to the session page when it is loaded and says
-  "session not loaded" with the native id on hover when it is not (#415).
+  store session it resolves to when loaded, matched with the copilot
+  (a routed run's recorded backend; each auto-build copilot in turn for
+  an unrouted run); the phase line links to the session page when it is
+  loaded and says "session not loaded" with the native id on hover when
+  it is not (#415).
 
 ### Changed
 
