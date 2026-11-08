@@ -1260,6 +1260,22 @@ rc=0
 grep -q 'bash -n scripts/harden-github.sh' "$WORKFLOW_FILE" || rc=1
 assert_ok "sync-check validates harden-github syntax" "$rc"
 
+# The review gate runs on pull_request_target with write scopes; it must
+# never check out or run PR code, or a fork PR gets the base token.
+GATE_FILE="$REPO_DIR/.github/workflows/review-gate.yml"
+rc=0
+[[ -f "$GATE_FILE" ]] || rc=1
+assert_ok "review-gate workflow exists" "$rc"
+rc=0
+grep -q '^  pull_request_target:' "$GATE_FILE" || rc=1
+assert_ok "review-gate runs on pull_request_target (master's copy, never the PR's)" "$rc"
+rc=0
+grep -qE 'actions/checkout|git clone|git fetch|pip install|npm (ci|install)' "$GATE_FILE" && rc=1
+assert_ok "review-gate never checks out or installs PR code" "$rc"
+rc=0
+grep -q 'context="\$CONTEXT"' "$GATE_FILE" && grep -q 'CONTEXT: External review on record' "$GATE_FILE" || rc=1
+assert_ok "review-gate sets the 'External review on record' status" "$rc"
+
 # Staged diff, not plain `git diff`: the latter is blind to untracked
 # generator output, which let a missing generated prompt go undetected.
 rc=0

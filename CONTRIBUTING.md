@@ -46,10 +46,11 @@ shared/skills/*/SKILL.md  →  scripts/generate.sh  →  adapters/<tool>/
 
 Contributions arrive as pull requests from forks, and CI runs on them:
 
-- Workflows run with a **read-only token and no repository secrets**
-  (`pull_request` events only; this repository uses no
-  `pull_request_target` workflow), so your PR's code cannot touch the
-  repository or its secrets.
+- Workflows that run your code use a **read-only token and no repository
+  secrets** (`pull_request` events), so your PR's code cannot touch the
+  repository or its secrets. The one `pull_request_target` workflow, the
+  review gate below, never checks out or runs PR code; it only reads
+  labels and sets a commit status.
 - A **first-time contributor's workflow runs wait for a maintainer** to
   approve them from the PR's Actions tab, after reading the diff. Later
   PRs from the same account run automatically.
@@ -59,6 +60,24 @@ Contributions arrive as pull requests from forks, and CI runs on them:
   workflow replaces it so a fork PR can satisfy the same requirement.
 - Alerts CodeQL raises on your changes show on the PR's Checks tab; fix
   them or explain in the PR why they are false positives.
+
+## Review Approval
+
+A pull request merges only after an external review of its **current head
+commit** is on record. The mechanics (`.github/workflows/review-gate.yml`):
+
+- When a reviewer has passed the head, the owner adds the `reviewed` label.
+  The workflow then sets the commit status **External review on record** to
+  success on that head, and the master ruleset requires that status.
+- Any new commit removes the label and sets the status to failure for the
+  new head, so a review never carries over to code it did not see. Push
+  the fix, ask for the review again, and the label comes back.
+- Contributors cannot add the label (it needs triage rights); you will see
+  the status flip when the owner has recorded the review. CI checks
+  (`pi-tests`, `sync-check`, `CodeQL`) are separate and run on every push.
+- Each push shows two red marks for the one condition: the `External
+  review on record` status and the "Review gate" check run that set it.
+  They move together; once the label is back, both are green.
 
 ## Guidelines
 

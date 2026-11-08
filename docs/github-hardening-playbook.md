@@ -90,7 +90,7 @@ UI verification:
 1. Open repository settings.
 2. Navigate to `Settings > Branches`.
 3. Confirm the default-branch rule requires:
-   - status check `sync-check`
+   - status checks `pi-tests`, `sync-check`, `CodeQL`, `External review on record`
    - at least 1 approving review
    - code owner review
    - conversation resolution
@@ -158,6 +158,55 @@ done once, in this order, each step confirmed before the next:
 
 `bash scripts/check-github-hardening.sh --required-checks "pi-tests,sync-check,CodeQL"`
 after step 7 confirms the required set is back.
+
+## Review gate: a PR merges only after its head is reviewed
+
+`.github/workflows/review-gate.yml` (the same mechanics as wiki-studio's)
+turns the owner's `reviewed` label into a commit status, **External review
+on record**, on the PR's head commit. Adding the label sets success;
+pushing a new commit removes the label and sets failure for the new head;
+removing the label sets failure. The master ruleset requires the status,
+so a PR merges only when its current head carries the label.
+
+Safety properties, in case the workflow is edited:
+
+- It runs on `pull_request_target`, so master's copy of the file runs,
+  never the PR's; a PR cannot change its own gate.
+- It never checks out code and never runs anything from the PR; it holds
+  `contents: read`, `pull-requests: write` (labels) and `statuses: write`.
+  Keep it that way: a `pull_request_target` workflow that checked out PR
+  code with those scopes would hand a fork the base repository's token.
+- It has no concurrency group on purpose: a cancelled run could drop the
+  label removal for a new commit.
+- What it does not cover: any Actions workflow in a same-repository PR
+  can declare `statuses: write` and set a status named `External review
+  on record` on its own head, because GitHub Actions is one integration
+  whichever workflow sets it. The gate stops fork contributors and stops
+  a forgotten review; it does not stop a collaborator with write access
+  who adds such a workflow. Today that set is the owner alone, so it
+  costs nothing; grant write access to a collaborator knowing it.
+
+Setup, once, after the workflow is on master:
+
+1. Create the label (done when the workflow landed):
+   ```bash
+   gh label create reviewed --color 0E8A16 --description "External review on record for the current head"
+   ```
+2. Open or update any PR so the status exists at least once, then add
+   `External review on record` to the ruleset's required checks:
+   ```bash
+   gh api repos/gosha70/code-copilot-team/rulesets/19893594 > ruleset.json
+   jq '(.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks) += [{"context":"External review on record"}]' ruleset.json > ruleset-gate.json
+   gh api -X PUT repos/gosha70/code-copilot-team/rulesets/19893594 --input ruleset-gate.json
+   ```
+3. Confirm:
+   ```bash
+   bash scripts/check-github-hardening.sh --required-checks "pi-tests,sync-check,CodeQL,External review on record"
+   ```
+
+Day to day: review the PR at its head, `gh pr edit <n> --add-label reviewed`,
+merge. A PR with `merge.enabled: true` under the auto-build `merge` profile
+arms GitHub auto-merge, which now completes only after the label is added.
 
 ## Security hardening follow-up
 

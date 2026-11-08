@@ -1,0 +1,72 @@
+name: Review gate
+
+# A pull request merges only after the external review of its head commit
+# is on record. The owner adds the `reviewed` label once a reviewer has
+# passed the current head; any new commit removes the label. The job sets
+# the commit status "External review on record" on the PR's head commit,
+# and the master ruleset requires that status (see
+# docs/github-hardening-playbook.md, "Review gate").
+#
+# Same mechanics as gosha70/wiki-studio's review-gate.yml. pull_request_target
+# runs master's copy of this file, so a PR that edits it cannot change its
+# own gate. The job never checks out the PR's code; it reads and edits
+# labels and sets a status through the API, with the base repository's
+# token, so it works for fork PRs too.
+#
+# No concurrency group: a run must never be cancelled, or a new commit's
+# run could be dropped before it removes the label. A label removed with
+# GITHUB_TOKEN starts no new run, so the commit's run sets the failing
+# status itself. The label's run sets success and then reads the label
+# again, so every ordering of the two runs ends with the failing status.
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  review-gate:
+    name: Review gate
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.pull_request.number }}
+      ACTION: ${{ github.event.action }}
+      HEAD: ${{ github.event.pull_request.head.sha }}
+      CONTEXT: External review on record
+    steps:
+      - name: Set the review status on the head commit
+        run: |
+          has_label() {
+            # Capture first, then grep: with pipefail, grep exiting on a
+            # match before gh finishes writing could fail the pipeline
+            # and read as "no label".
+            local labels
+            labels=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name')
+            grep -qx reviewed <<<"$labels"
+          }
+          set_status() {
+            gh api --silent "repos/$GITHUB_REPOSITORY/statuses/$HEAD" \
+              -f state="$1" -f context="$CONTEXT" -f description="$2"
+            echo "$1 on $HEAD: $2"
+          }
+          if [ "$ACTION" = "synchronize" ]; then
+            if has_label; then
+              gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --remove-label reviewed
+            fi
+            set_status failure "New head; add 'reviewed' after its external review"
+            exit 1
+          fi
+          if ! has_label; then
+            set_status failure "No 'reviewed' label on this head"
+            exit 1
+          fi
+          set_status success "Reviewed label on this head"
+          if ! has_label; then
+            set_status failure "The 'reviewed' label was removed"
+            exit 1
+          fi
