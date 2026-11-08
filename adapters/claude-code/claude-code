@@ -1521,16 +1521,21 @@ start_session() {
 # variables belongs to an explicit per-launch selector (#400).
 gateway_compat_notice() {
     [[ -n "${ANTHROPIC_BASE_URL:-}" ]] || return 0
-    [[ -z "${CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS:-}" && -z "${ENABLE_TOOL_SEARCH:-}" ]] || return 0
+    # Value-aware (review of PR #425): only the two settings that remove
+    # the dynamic block count. ENABLE_TOOL_SEARCH=true or auto keeps tool
+    # search on, and tool search is what adds the block.
+    [[ "${CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS:-}" == "1" ]] && return 0
+    [[ "$(printf '%s' "${ENABLE_TOOL_SEARCH:-}" | tr '[:upper:]' '[:lower:]')" == "false" ]] && return 0
     cat >&2 <<'NOTICE'
 [claude-code] ANTHROPIC_BASE_URL is set and no tool-compatibility setting is.
   A gateway that rejects dynamic tool blocks (DeepSeek: 422 "unknown variant
   tool_definition, expected tool_reference") fails the request before the model
   sees it. If that happens, start a FRESH session with
     CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 ENABLE_TOOL_SEARCH=false DISABLE_FEEDBACK_COMMAND=1
-  (a session that already carries the block keeps failing on resume). Setting
-  either variable silences this notice. Details: docs/dgx-spark/setup-cookbook.md,
-  "Gateways that reject dynamic tool blocks".
+  (a session that already carries the block keeps failing on resume).
+  CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 or ENABLE_TOOL_SEARCH=false silences
+  this notice; ENABLE_TOOL_SEARCH=true does not avoid the failure. Details:
+  docs/dgx-spark/setup-cookbook.md, "Gateways that reject dynamic tool blocks".
 NOTICE
 }
 

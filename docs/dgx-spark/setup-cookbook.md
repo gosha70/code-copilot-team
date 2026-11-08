@@ -363,9 +363,10 @@ setting. `ENABLE_TOOL_SEARCH=true` alone does **not** avoid the failure; tool
 search is what adds the block.
 
 The `claude-code` launcher prints a notice at start when `ANTHROPIC_BASE_URL`
-is set and neither `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` nor
-`ENABLE_TOOL_SEARCH` is; `cct doctor` reports the same under **Gateway**
-(names only, never values). Applying the variables per launch belongs to the
+is set and neither `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` nor
+`ENABLE_TOOL_SEARCH=false` is (`ENABLE_TOOL_SEARCH=true` does not count, for
+the reason above); `cct doctor` reports the same under **Gateway**, showing
+which of the two settings is in effect. Applying the variables per launch belongs to the
 explicit LLM selector proposed in #400.
 
 ### The test that decides whether you can drop the bridge

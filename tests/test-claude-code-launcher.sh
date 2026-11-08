@@ -178,6 +178,16 @@ assert_eq "#399: a compat setting silences the notice" "0" "$(grep -c 'tool-comp
 new_logs
 ANTHROPIC_BASE_URL= run_launcher -p "x" --output-format json
 assert_eq "#399: no gateway, no notice" "0" "$(grep -c 'tool-compatibility' <<<"$OUTPUT")"
+# Review of PR #425: the check is value-aware — ENABLE_TOOL_SEARCH=true keeps
+# tool search on, which is what adds the block, so it does not silence.
+new_logs
+ANTHROPIC_BASE_URL="https://gateway.example/anthropic" CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS= ENABLE_TOOL_SEARCH=true \
+    run_launcher -p "x" --output-format json
+assert_contains "#399: ENABLE_TOOL_SEARCH=true does not silence the notice" "$OUTPUT" "tool-compatibility setting"
+new_logs
+ANTHROPIC_BASE_URL="https://gateway.example/anthropic" CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS= ENABLE_TOOL_SEARCH=false \
+    run_launcher -p "x" --output-format json
+assert_eq "#399: ENABLE_TOOL_SEARCH=false does" "0" "$(grep -c 'tool-compatibility' <<<"$OUTPUT")"
 
 # ── cct shim (#410) ──
 # setup.sh installs ~/.local/bin/cct wherever it installs the launcher.

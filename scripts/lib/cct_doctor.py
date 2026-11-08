@@ -145,18 +145,27 @@ def check_gateway(report: Report) -> None:
     if not os.environ.get(GATEWAY_VAR):
         report.add("Gateway", "claude-code", OK, f"{GATEWAY_VAR} not set — native Anthropic endpoint")
         return
+    # Value-aware (review of PR #425): only the two settings that remove the
+    # dynamic block count. ENABLE_TOOL_SEARCH=true or auto keeps tool search
+    # on, and tool search is what adds the block. These are documented
+    # booleans, not secrets, so the deciding values are shown.
+    betas_off = os.environ.get("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS") == "1"
+    tool_search = os.environ.get("ENABLE_TOOL_SEARCH", "")
+    search_off = tool_search.lower() == "false"
     present = [v for v in GATEWAY_COMPAT_VARS if os.environ.get(v)]
     absent = [v for v in GATEWAY_COMPAT_VARS if not os.environ.get(v)]
     detail = f"{GATEWAY_VAR} set; " + (f"set: {', '.join(present)}" if present else "no compatibility variable set")
+    if tool_search:
+        detail += f" (ENABLE_TOOL_SEARCH={tool_search})"
     if absent:
         detail += f"; not set: {', '.join(absent)}"
-    if "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS" in present or "ENABLE_TOOL_SEARCH" in present:
+    if betas_off or search_off:
         report.add("Gateway", "claude-code", OK, detail)
     else:
         report.add("Gateway", "claude-code", WARN,
                    detail + " — a gateway that rejects dynamic tool blocks (DeepSeek 422 tool_definition) needs "
-                   "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 ENABLE_TOOL_SEARCH=false in a fresh session; "
-                   f"see {GATEWAY_GUIDE}")
+                   "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 or ENABLE_TOOL_SEARCH=false in a fresh session "
+                   f"(ENABLE_TOOL_SEARCH=true does not avoid it); see {GATEWAY_GUIDE}")
 
 
 def profile_path() -> Path:
