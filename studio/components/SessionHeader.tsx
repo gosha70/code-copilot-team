@@ -20,6 +20,12 @@ import { MIXED_NOTE, UNSTAMPED_NOTE, harnessFacts, harnessState } from "@/lib/ha
 // the gear beside the title, where a reader looks when they need them.
 
 /** How a session figure compares with its project. Pure. */
+/** What duration_seconds measures (#414): ended_at − started_at with no
+ *  idle cutoff, so a session resumed after a night counts the night. A
+ *  reader of the figure must be told that; an active-time figure with a
+ *  stated idle cutoff is the 2.1 follow-up. */
+export const DURATION_BASIS = "wall clock, first entry to last";
+
 export function versusProject(
   value: number | null | undefined,
   summary: EffortSummary | undefined,
@@ -231,7 +237,7 @@ export default function SessionHeader({
         <Stat
           label="Duration"
           value={formatDuration(data.duration_seconds)}
-          note={duration.note || undefined}
+          note={[DURATION_BASIS, duration.note].filter(Boolean).join(" · ")}
           tone={duration.tone}
         />
         <Stat

@@ -234,7 +234,8 @@ and aggregate in the Studio leaves them out by default, and says so: the
 Overview's Sessions stat, the Sessions page's **Show excluded (n)**
 toggle and the Analysis pipeline funnel all show the same excluded count. A
 session is noise when it has fewer than `min_turns` turns, lasted under
-`min_duration_seconds`, or its path contains one of `path_patterns`.
+`min_duration_seconds` (wall clock, first entry to last — the same figure
+the session header shows), or its path contains one of `path_patterns`.
 Benchmark-linked sessions are never noise. This is decided at query
 time, so changing the thresholds needs no re-ingest. Opening a session
 by id and the judge always see everything; Ask follows the pages —

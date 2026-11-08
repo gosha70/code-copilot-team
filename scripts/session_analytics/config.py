@@ -227,8 +227,9 @@ class NoiseConfig:
     """sessions.noise (#307): what lists and aggregates EXCLUDE by
     default, decided at query time so a threshold change never needs a
     re-ingest. A session is noise when it has fewer than ``min_turns``
-    turns, lasted under ``min_duration_seconds``, or its project path
-    contains any of ``path_patterns`` (probe runs in temp dirs)."""
+    turns, lasted under ``min_duration_seconds`` (wall clock, first entry
+    to last), or its project path contains any of ``path_patterns`` (probe
+    runs in temp dirs)."""
 
     min_turns: int
     min_duration_seconds: int

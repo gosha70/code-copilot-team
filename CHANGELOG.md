@@ -84,6 +84,13 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   the whole home directory. It is now unset; set `sources.aider` in
   `~/.cct/session-analytics.json` or `CCT_SA_SOURCE_AIDER` to the directory
   that holds your aider projects (#402).
+- **Session duration states its definition.** The session header's
+  Duration tile, the Overview's average, the judge's session facts and
+  the noise-threshold documentation say the figure is wall clock, first
+  entry to last, with no idle cutoff. The Overview's "Median agent
+  response" card prints the basis sentence the API already returned. An
+  active-time figure with a stated idle cutoff needs a schema bump and is
+  deferred to 2.1 (#414).
 - **The Claude Code plugin is named `cct`.** Plugin components are now
   `/cct:shape` and `cct:build`; install with `/plugin install
   cct@code-copilot-team`. Copies installed under the earlier
