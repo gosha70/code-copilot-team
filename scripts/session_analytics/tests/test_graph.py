@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import importlib.util
 import unittest
+from pathlib import PurePosixPath, PureWindowsPath
+from unittest import mock
 
 from session_analytics import constants as C
 from session_analytics.adapters import claude_code
@@ -68,6 +70,28 @@ class TestReadonlyGuard(unittest.TestCase):
             "MATCH (i:ToolInvocation) RETURN count(i)",
         ):
             assert_readonly(ok)  # must not raise
+
+
+class TestCopyFromPath(unittest.TestCase):
+    def _statement(self, csv_path: str, path_type: type) -> str:
+        gdb = schema.GraphDatabase(None, None, "unused")
+        with mock.patch.object(gdb, "execute") as execute, \
+             mock.patch.object(schema, "Path", path_type):
+            gdb.copy_from("Copilot", csv_path)
+        return execute.call_args.args[0]
+
+    def test_a_windows_path_reaches_kuzu_with_forward_slashes(self) -> None:
+        statement = self._statement(r"C:\Users\dev\AppData\Local\Temp\g\Copilot.csv", PureWindowsPath)
+        self.assertIn("FROM 'C:/Users/dev/AppData/Local/Temp/g/Copilot.csv'", statement)
+        self.assertNotIn("\\Users", statement)
+
+    def test_a_quote_in_the_path_is_still_doubled(self) -> None:
+        statement = self._statement("/tmp/o'neil/Copilot.csv", PurePosixPath)
+        self.assertIn("FROM '/tmp/o''neil/Copilot.csv'", statement)
+
+    def test_the_escape_clause_is_unchanged(self) -> None:
+        statement = self._statement("/tmp/g/Copilot.csv", PurePosixPath)
+        self.assertEqual(statement, "COPY Copilot FROM '/tmp/g/Copilot.csv' (HEADER=true, ESCAPE='\\\\')")
 
 
 @unittest.skipUnless(_KUZU, "kuzu not installed; live graph build skipped (covered in CI)")
