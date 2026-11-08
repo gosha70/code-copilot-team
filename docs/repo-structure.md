@@ -52,7 +52,7 @@ code-copilot-team/
 │   ├── test-peer-review.sh             94 peer-review runner tests
 │   ├── test-review-loop.sh           237 review loop integration tests
 │   ├── test-setup-reviewer.sh           42 copilot reviewer installer tests
-│   ├── test-auto-build-loop.sh        1251 auto-build driver tests
+│   ├── test-auto-build-loop.sh        1279 auto-build driver tests
 │   ├── test-ui-harness.sh              87 visual-harness contract tests
 │   ├── test-routing-config.sh         365 execution-profile registry + result + cli tests
 │   ├── test-routing-failover.sh       227 circuit + action + selection + supervisor + identity tests (#251 B)
@@ -60,7 +60,7 @@ code-copilot-team/
 │   ├── test-routing-packet.sh          99 immutable delegation-packet tests (#254 C T2)
 │   ├── test-routing-delegation.sh     180 route-class + packet execution + reconciliation tests (#254 C T3-T5)
 │   ├── test-routing-recovery.sh       375 probe-state + timing + probe + tick-wake tests (#257 D)
-│   └── test-claude-code-launcher.sh   33 branded-launcher + cct shim tests (#195, #410)
+│   └── test-claude-code-launcher.sh   39 branded-launcher + cct shim + gateway notice tests (#195, #410, #399)
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification
 ├── README.md

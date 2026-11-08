@@ -35,7 +35,7 @@ All review-loop artifacts live under `.cct/review/` during the active loop.
 | `decision.json` | `/review-decide` | Human's decision: approve, reject, or retry |
 | `loop-summary.json` | Runner (PASS) or agent (bypass) | Final record of all rounds |
 
-On loop completion, the completing actor copies `loop-summary.json` and writes a `build-review.md` artifact to `specs/<feature-id>/collaboration/`.
+On loop completion, the completing actor copies `loop-summary.json` and writes a `build-review.md` artifact to `specs/<feature-id>/collaboration/`. Under `auto-build-loop.sh` each phase's copy is also kept as `build-review-phase-<n>.md`, and a phase accepted through `/review-decide approve` is reported as bypassed, never as PASS (#404).
 
 ## Finding Schema
 
