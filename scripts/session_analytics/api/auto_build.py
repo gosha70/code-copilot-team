@@ -152,10 +152,18 @@ def _phase_session(ledger: Path, key: str) -> Optional[dict[str, Any]]:
         return None
     session_id: Optional[str] = None
     for path in reversed(files):
-        docs = _result_documents(path)
-        results = [d for d in docs if isinstance(d, dict) and d.get("type") == "result"]
-        obj = results[-1] if results else (docs[-1] if docs and isinstance(docs[-1], dict) else {})
-        sid = _str(obj.get("session_id")) if isinstance(obj, dict) else None
+        docs = [d for d in _result_documents(path) if isinstance(d, dict)]
+        # codex writes its raw event stream to the result file and the
+        # driver derives the session id from the last thread.started
+        # event (codex_result_obj); claude and pi write a result element
+        # that carries session_id. Read each the way the driver does.
+        threads = [d for d in docs if d.get("type") == C.CODEX_THREAD_STARTED_EVENT]
+        if threads:
+            sid = _str(threads[-1].get(C.CODEX_THREAD_ID_KEY))
+        else:
+            results = [d for d in docs if d.get("type") == "result"]
+            obj = results[-1] if results else (docs[-1] if docs else {})
+            sid = _str(obj.get("session_id"))
         if sid:
             session_id = sid
             break

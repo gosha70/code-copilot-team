@@ -232,6 +232,10 @@ LEDGER_BUILD_RESULT_GLOB = "build-result-*.json"
 #: The ledger does not record the backend (CCT_AUTOBUILD_BACKEND is an
 #: env var), so a native id is matched with each in turn.
 RUN_SESSION_COPILOTS = (COPILOT_CLAUDE_CODE, COPILOT_PI)
+#: codex writes its raw event stream to the result file; the driver's
+#: codex_result_obj takes the session id from the last of these events.
+CODEX_THREAD_STARTED_EVENT = "thread.started"
+CODEX_THREAD_ID_KEY = "thread_id"
 #: The reviewer readiness probe the driver runs in preflight (#334).
 LEDGER_PROBE_FILE = "reviewer-probe.json"
 #: A termination the driver kept under a dated name because the run was
