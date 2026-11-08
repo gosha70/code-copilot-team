@@ -161,6 +161,12 @@ jobs:
       - name: cct CLI tests
         run: bash tests/test-cct-cli.sh
 
+      # pre-pr-check.sh audits a PR's commits, body and title for close
+      # keywords; `--closes none` is the mode for a PR that closes nothing
+      # (#408). The suite drives it against a throwaway repository.
+      - name: pre-pr-check tests
+        run: bash tests/test-pre-pr-check.sh
+
       # shared/capabilities/COMPATIBILITY.md is a deterministic render of the
       # capability registry. Until #214 Phase 2.0 this check ran only on
       # release tags, so a PR could land a stale matrix; it gates PRs now.

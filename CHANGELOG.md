@@ -29,6 +29,14 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   requirement; `cct doctor` reports the same under **Gateway**, names only.
   The DGX cookbook documents the failure signature and the fallback (#399).
 
+- **Close-keyword audit for hand-opened PRs.** The `phase-workflow` skill
+  gains "Opening a Pull Request": run `scripts/pre-pr-check.sh` before
+  `gh pr create`, confirm `closingIssuesReferences` after, and put none of
+  GitHub's nine keyword forms before an issue a later PR must close. The
+  script accepts `--closes none` for a PR that closes nothing, so docs and
+  chore PRs can run the audit too. The `copilot-conventions` Git
+  Discipline carries the rule (#408).
+
 ### Fixed
 
 - **auto-build lands only when `test.command` passes on the final head.**
@@ -52,7 +60,6 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   claims is recorded as PASS with `verdict_override`.
   `CCT_REVIEW_CHECK_TEST_CLAIMS=false` turns it off (#406).
 
-### Fixed
 
 - **`/shape` and the plan agent ask the owner from the main session.**
   Claude Code removes `AskUserQuestion` from every subagent even when it
