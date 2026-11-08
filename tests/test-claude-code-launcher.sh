@@ -188,6 +188,11 @@ new_logs
 ANTHROPIC_BASE_URL="https://gateway.example/anthropic" CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS= ENABLE_TOOL_SEARCH=false \
     run_launcher -p "x" --output-format json
 assert_eq "#399: ENABLE_TOOL_SEARCH=false does" "0" "$(grep -c 'tool-compatibility' <<<"$OUTPUT")"
+# Review of PR #425: help starts no session, so it gets no notice.
+new_logs
+ANTHROPIC_BASE_URL="https://gateway.example/anthropic" CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS= ENABLE_TOOL_SEARCH= \
+    run_launcher help
+assert_eq "#399: help gets no notice — it starts no session" "0" "$(grep -c 'tool-compatibility' <<<"$OUTPUT")"
 
 # ── cct shim (#410) ──
 # setup.sh installs ~/.local/bin/cct wherever it installs the launcher.

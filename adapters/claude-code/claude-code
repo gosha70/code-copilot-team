@@ -1565,7 +1565,6 @@ for _arg in "$@"; do
     esac
 done
 unset _arg
-gateway_compat_notice
 
 # ── Flag parsing ─────────────────────────────────────────────
 PLAYWRIGHT=0
@@ -1853,6 +1852,9 @@ case "${1:-}" in
         show_help
         ;;
     *)
+        # The notice belongs where a session is about to start, not on
+        # help or list (review of PR #425).
+        gateway_compat_notice
         start_session "${1:-}"
         ;;
 esac

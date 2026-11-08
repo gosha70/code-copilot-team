@@ -23,6 +23,7 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 - **A configured Claude Code gateway is diagnosed, not guessed.** When
   `ANTHROPIC_BASE_URL` is set and neither `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`
   nor `ENABLE_TOOL_SEARCH` is, the `claude-code` launcher prints a notice
+  when it starts a session (interactive or `-p`, not on `help` or `list`)
   naming the fallback that avoids the dynamic `tool_definition` block
   DeepSeek's endpoint rejects (422 before inference) and the fresh-session
   requirement; `cct doctor` reports the same under **Gateway**, names only.
