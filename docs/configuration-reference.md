@@ -209,7 +209,7 @@ stored by name in the environment, never in the config file.
 | `auto_build.active_window_seconds` | `900` |  |
 | `similarity.threshold` | `0.55` | `CCT_SA_SIMILARITY_THRESHOLD` |
 | `similarity.top_k` | `5` | `CCT_SA_SIMILARITY_TOP_K` |
-| `sources.aider` | `"~"` |  |
+| `sources.aider` | *(empty)* |  |
 | `sources.claude-code` | `"~/.claude/projects"` |  |
 | `team.active_window_seconds` | `300` |  |
 | `team.budgets.team_daily_usd` | *(empty)* | `CCT_SA_BUDGET_TEAM_DAILY_USD` |

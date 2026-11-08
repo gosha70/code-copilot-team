@@ -14,17 +14,22 @@ Use the Agent tool with `subagent_type: pitch-shaper`. Pass the topic and any ad
 
 The pitch-shaper will:
 - Pick the next `NNNN-slug` pitch id under `specs/pitches/`
-- Ask clarifying questions (appetite, problem, solution shape, no-gos, circuit breaker)
+- List the genuinely open decisions (appetite, problem, solution shape, no-gos, circuit breaker) in the pitch's `## Open decisions` section, each with a default, and shape the pitch on those defaults. It cannot ask the owner itself: Claude Code removes `AskUserQuestion` from every subagent (#407).
 - Decompose into 3–7 scopes
 - Write `specs/pitches/<id>/pitch.md` from `~/.claude/templates/sdd/pitch-template.md`
 - Set `bet_status: shaped`
 - Validate via `~/.claude/templates/sdd/validate-pitch.sh`
 
-### 3. Report to user
+### 3. Ask the open decisions (main session)
 
-Once pitch-shaper returns, print:
+Read the new pitch's `## Open decisions` section. If it lists any `D<n>` entries, ask them now with `AskUserQuestion` — this command runs in the main session, where the tool exists — offering the agent's default as the first option. Then record each answer in the pitch: replace the default with the decision (`D<n>: <question> — decided: <answer> (<date>)`), update any scope, no-go or circuit-breaker text the answer changes, and re-run `~/.claude/templates/sdd/validate-pitch.sh`. If the section is empty or absent, say so and move on.
+
+### 4. Report to user
+
+Once the decisions are recorded, print:
 - The new pitch path
 - Frontmatter summary (id, appetite, scope count, circuit breaker)
+- The decisions asked and answered in step 3, or "no open decisions"
 - Validator confirmation
 - Next step: "Run `/bet <pitch-id>` to lock this as a bet for the next cycle, or refine via direct edits."
 

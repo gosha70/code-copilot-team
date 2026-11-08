@@ -75,8 +75,8 @@ for the full convention, the three escape hatches (`type: internal`,
 ### Approval Flow by spec_mode
 
 **full or lightweight:**
-1. Plan agent writes `plan.md` and `spec.md` (with required sections populated).
-2. All `[NEEDS CLARIFICATION]` markers in `spec.md` are resolved via user questions before writing.
+1. Plan agent writes `plan.md` and `spec.md` (with required sections populated), listing every `[NEEDS CLARIFICATION]` marker under `### Open decisions` with a default.
+2. The **main session** asks those open decisions with `AskUserQuestion` (the plan agent cannot: Claude Code removes that tool from every subagent, #407), records the answers in `spec.md` and `plan.md`, and removes the markers.
 3. User reviews and approves both `plan.md` and `spec.md`.
 4. Build may not start until both are approved.
 
@@ -94,7 +94,7 @@ for the full convention, the three escape hatches (`type: internal`,
 ## [NEEDS CLARIFICATION] Resolution Rules
 
 - All `[NEEDS CLARIFICATION]` markers in `spec.md` must be resolved before Build starts.
-- The Plan agent is responsible for resolving these via clarifying questions with the user during the Plan phase.
+- The Plan agent lists each marker under `### Open decisions` with a default; the main session asks the user and records the answers during the Plan phase, before approval (#407). A subagent cannot ask: Claude Code removes `AskUserQuestion` from every subagent even when it is listed in `tools:`.
 - Markers may not be carried forward into Build as "TBD" items — they represent missing information that will block implementation.
 - The Build agent refuses to proceed if any `[NEEDS CLARIFICATION]` markers remain in `spec.md`.
 

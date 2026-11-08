@@ -172,7 +172,7 @@ silently folded into "green" and never used to excuse a new regression.
     keyword** (`Closes #<issue>`), in the PR body only — never in commit
     messages;
   - a PR tied to no issue (docs, chores) carries **zero** close keywords
-    anywhere;
+    anywhere — `scripts/pre-pr-check.sh --closes none` checks that;
   - GitHub fires close keywords from *any* commit message or PR-body text
     on merge, across **nine forms** (`close/closes/closed`,
     `fix/fixes/fixed`, `resolve/resolves/resolved`, case-insensitive), and

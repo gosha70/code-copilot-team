@@ -81,6 +81,16 @@ spec has been produced.]
 on what "exhausted" looks like for this pitch and which scopes are core vs.
 trim-able.]
 
+## Open decisions
+
+<!-- Decisions the shaper could not settle from project docs or the pitch
+     input, each with the default the pitch is shaped on. The shaper runs
+     as a subagent and cannot ask the owner; `/shape` asks these in the main
+     session and records the answers here as "decided: <answer> (<date>)".
+     Leave empty (or delete the entries) when nothing is open. -->
+
+- D1: [question] — default: [choice] — why it matters: [one line]
+
 ## Bet log
 
 <!-- Filled in as the pitch progresses through bet_status transitions.

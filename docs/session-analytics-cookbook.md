@@ -86,7 +86,7 @@ Precedence, lowest to highest: packaged defaults → `~/.cct/session-analytics.j
 |---|---|---|
 | `CCT_SA_KUZU_PATH` | Where the Kùzu graph for the Graph tab lives. A directory such as `~/.cct` works: the store file `session-analytics-graph` is created inside it. A file path is used as given. | `~/.cct/session-analytics-graph` |
 | `CCT_SA_REDACTION` | What is stripped before anything is written: `none`, `code` (strip code blocks and tool inputs, keep prose), `metadata-only` (no text at all). | `code` |
-| `CCT_SA_SOURCE_CLAUDE_CODE`, `CCT_SA_SOURCE_AIDER` | Where each assistant keeps its transcripts. | `~/.claude/projects`, `~` |
+| `CCT_SA_SOURCE_CLAUDE_CODE`, `CCT_SA_SOURCE_AIDER` | Where each assistant keeps its transcripts. Aider has no default: it writes `.aider.chat.history.md` into each project, so declare the directory that holds your aider projects (the old default, `~`, scanned the whole home directory on every load). | `~/.claude/projects`, unset |
 | `CCT_SA_JUDGE_BACKEND` / `CCT_SA_JUDGE_MODEL` | The judge for every copilot: `ollama` (local), `claude-code` (the `claude` CLI on your PATH), or `openai` (any OpenAI-compatible endpoint: LM Studio, vLLM, OpenAI, Azure). Empty model = the backend's default. | `ollama`, `` |
 | `CCT_SA_OLLAMA_URL` | Ollama's address. | `http://localhost:11434` |
 | `CCT_SA_JUDGE_BASE_URL`, `CCT_SA_JUDGE_API_KEY` | For the `openai` backend only. | |

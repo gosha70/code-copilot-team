@@ -53,3 +53,22 @@ If you write a manual test plan with executable commands:
 2. Report the output of each command
 3. Fix any failures before declaring done
 4. Do NOT hand an unverified test plan to the user
+
+## Shown Commands Are Checked
+
+Every command a page shows gets the cheapest real check that applies before it
+is committed, whether or not CI runs it. "Not executed in CI" is a label, not an
+exemption: wiki-studio 0.8.1 shipped the quickstart line
+`pip install 'memkernel[wiki]==0.6.0' 'wiki-studio[mcp]==0.8.1'`, which pip
+cannot resolve (memkernel 0.6.0 requires `mcp<2`, the extra needs `mcp>=2.3`);
+`pip install --dry-run` would have said so in seconds (#409).
+
+| Shown line | Cheapest real check |
+|---|---|
+| `pip install …`, `npm install …` | `pip install --dry-run …`, `npm install --dry-run …` — resolves, installs nothing |
+| a CLI invocation | run it with `--help`, or `--dry-run` where the tool has one |
+| a config block (TOML, YAML, JSON) | parse it with the language's parser |
+| a shell snippet | `bash -n`, then run it in a scratch directory if it has no side effects |
+
+Record the check beside the change (PR body or commit message) with the command
+and its result, so a reviewer can see the line was resolved, not merely read.

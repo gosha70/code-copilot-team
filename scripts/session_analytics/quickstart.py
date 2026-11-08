@@ -140,8 +140,8 @@ def detect_sources() -> list[tuple[str, Path]]:
         if not expanded.is_dir():
             continue
         # NO COUNT HERE, deliberately. Counting directory entries is
-        # misleading (aider's root defaults to ~, so it would report the
-        # size of a home directory), and counting real sessions means
+        # misleading (a declared aider root may be a whole tree of
+        # projects), and counting real sessions means
         # calling discover(), which took 97s on this machine — longer
         # than the entire first run is allowed to take. The authoritative
         # count comes from the ingest below, which must walk anyway.

@@ -36,6 +36,7 @@ advisory, not a boundary.
 - Bind review/merge/closure to an exact SHA; re-read state first.
 - Prefer a follow-up commit to an amend on a watched branch.
 - Keep every commit review-ready.
+- Report PR existence and state from `gh pr list` / `gh pr view`, never from the session's last action: a session reported "no PR" for a branch after the owner had opened one (wiki-studio #78).
 
 Evidence, and the guard not adopted: #291.
 

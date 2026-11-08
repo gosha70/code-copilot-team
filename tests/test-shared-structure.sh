@@ -398,6 +398,12 @@ rc=0
 grep -q "tools:.*Edit" "$ADAPTER_DIR/.claude/agents/plan.md" || rc=1
 assert_ok "Plan agent has Edit tool for specs/ artifacts" "$rc"
 
+# #407: Claude Code removes AskUserQuestion from every subagent even when
+# listed, so an agent that lists it is promising a question it cannot ask.
+rc=0
+grep -l '^tools:.*AskUserQuestion' "$ADAPTER_DIR"/.claude/agents/*.md >/dev/null 2>&1 && rc=1
+assert_ok "No agent lists AskUserQuestion in tools (unavailable to subagents, #407)" "$rc"
+
 # Hooks in adapter
 HOOK_FILES=(verify-on-stop.sh verify-after-edit.sh auto-format.sh protect-files.sh protect-git.sh peer-review-on-stop.sh reinject-context.sh notify.sh memkernel-recall.sh memkernel-pre-compact.sh memkernel-post-compact.sh)
 HOOK_HELPERS=(memkernel-recall.py memkernel-pre-compact.py memkernel-post-compact.py)
@@ -1060,7 +1066,7 @@ assert_ok "test-counts has TEST_REVIEW_LOOP_EXPECTED_PASS numeric value" "$rc"
 COUNT_VARS=$(grep -Ec '^TEST_[A-Z_]+_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env")
 # 15 as of #239 C3 T4 (test-ui-harness.sh). Bump deliberately when a
 # suite is added, so a pin cannot go missing unnoticed.
-assert_eq "test-counts has exactly 21 expected-pass variables (routing-recovery arrived with #257 T1)" "21" "$COUNT_VARS"
+assert_eq "test-counts has exactly 22 expected-pass variables (pre-pr-check arrived with #408)" "22" "$COUNT_VARS"
 
 rc=0
 grep -Eq '^TEST_LITELLM_PROXY_DEPS_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env" || rc=1
