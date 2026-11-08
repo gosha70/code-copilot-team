@@ -199,6 +199,23 @@ export function phaseLine(p: AutoBuildRun["phases"]["items"][number]): string {
   );
 }
 
+/** #415: where a phase's build session can be opened, or why it cannot.
+ *  A loaded session links to its page; one not yet loaded says so and
+ *  carries the native id on the title, so the gap is visible, not blank. */
+export function phaseSessionLink(p: AutoBuildRun["phases"]["items"][number]): {
+  href: string | null;
+  label: string;
+  title?: string;
+} {
+  const s = p.session;
+  if (!s) return { href: null, label: "" };
+  if (!s.session_id) return { href: null, label: "no session id recorded" };
+  if (s.store_id === null) {
+    return { href: null, label: "session not loaded", title: s.session_id };
+  }
+  return { href: `/sessions/${s.store_id}`, label: "session", title: s.session_id };
+}
+
 /** "4 requirements mapped at admission; 4 of 4 green" — or the honest
  *  absence: "verifiers not run" / "no admission contract". */
 export function verifierLine(run: AutoBuildRun): string {

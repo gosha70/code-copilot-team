@@ -17,6 +17,7 @@ import {
   outcomeStyle,
   pageState,
   phaseLine,
+  phaseSessionLink,
   phasesLine,
   policyLine,
   probeLine,
@@ -188,9 +189,28 @@ function RunCard({
           <dd>
             {phasesLine(run)}
             <ul className="text-xs text-slate-600 mt-1 space-y-0.5">
-              {run.phases.items.map((p) => (
-                <li key={p.n ?? p.title ?? "?"}>{phaseLine(p)}</li>
-              ))}
+              {run.phases.items.map((p) => {
+                const link = phaseSessionLink(p);
+                return (
+                  <li key={p.n ?? p.title ?? "?"}>
+                    {phaseLine(p)}
+                    {link.label && (
+                      <>
+                        {" · "}
+                        {link.href ? (
+                          <Link href={link.href} title={link.title} className="underline">
+                            {link.label}
+                          </Link>
+                        ) : (
+                          <span title={link.title} className="text-slate-400">
+                            {link.label}
+                          </span>
+                        )}
+                      </>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </dd>
         </div>

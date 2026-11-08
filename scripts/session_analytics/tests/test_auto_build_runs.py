@@ -87,8 +87,24 @@ class _Ledgers(RegistryResetTestCase):
                 "phase-1/review/loop-summary.json": {"verdict": "PASS", "rounds_completed": 1},
                 C.LEDGER_VERIFICATION_FILE: {"schema_version": 1, "frs": {
                     f"FR-{i}": {"green": True, "verifiers": []} for i in range(1, 5)}},
+                # #415: the launcher's JSON result, as `claude -p --output-format
+                # json` writes it — the session id rides on the result element.
+                "phase-1/build-result-1.json": [
+                    {"type": "system", "subtype": "init"},
+                    {"type": "result", "subtype": "success", "session_id": "sess-landed"},
+                ],
             },
         )
+        # #415: a loaded copy of that session in the store.
+        self.db.execute(
+            "INSERT INTO copilot_session (copilot, session_id) VALUES (?, ?)",
+            (C.COPILOT_CLAUDE_CODE, "sess-landed"),
+        )
+        self.db.commit()
+        self.landed_store_id = int(self.db.query_one(
+            "SELECT id FROM copilot_session WHERE copilot = ? AND session_id = ?",
+            (C.COPILOT_CLAUDE_CODE, "sess-landed"),
+        )[0])
         # Run 1: terminated_policy on provider_unavailable, no PR, phase left "building".
         _write_ledger(
             self.root, C.AUTO_BUILD_ARCHIVE_DIR, "team-developer-aliases-run1",
@@ -106,6 +122,12 @@ class _Ledgers(RegistryResetTestCase):
                                             "detail": "reviewer 'codex' failed (exit 1) in phase 1 round 1",
                                             "phase": 1, "created": "2026-09-09T01:55:23Z"},
                 C.LEDGER_TRIAGE_FILE: "# Triage report\n",
+                # #415: codex writes its raw event stream; the session id is
+                # the last thread.started event's thread_id, as the driver reads it.
+                "phase-1/build-result-1.json": [
+                    {"type": "thread.started", "thread_id": "thr-codex-1"},
+                    {"type": "turn.completed", "usage": {"input_tokens": 1}},
+                ],
             },
         )
         # An attended run that parked: outcome stays null, status parked,
@@ -114,11 +136,15 @@ class _Ledgers(RegistryResetTestCase):
         _write_ledger(
             self.root, C.AUTO_BUILD_ARCHIVE_DIR, "other-feature-parked",
             _state(PARKED_KEY, feature_id="other-feature", profile="pr", status="parked", outcome=None,
+                   phases={"1": {"title": "US1", "status": "done", "commits": ["a1b2c3d"], "fix_sessions": 0},
+                           "2": {"title": "US2", "status": "building", "commits": [], "fix_sessions": 2}},
                    escalations=["esc-1", "esc-2"], pr={"number": None, "url": None},
                    totals={"cost_usd": 1.0, "cost_estimated_usd": 0, "started_epoch": 1788900000},
                    updated="2026-09-08T22:00:00Z", preflight={}),
             events=[("2026-09-08T22:00:00Z", "parked", "test_failure")],
             extra={
+                # #415: a codex stream that never reached thread.started names no session.
+                "phase-2/build-result-1.json": [{"type": "turn.failed", "error": "boom"}],
                 f"{C.LEDGER_ESCALATIONS_DIR}/esc-1.json": {"id": "esc-1", "reason": "review_breaker", "detail": "older, resolved",
                                                           "phase": 1, "resolved": True},
                 f"{C.LEDGER_ESCALATIONS_DIR}/esc-2.json": {"id": "esc-2", "reason": "test_failure",
@@ -608,3 +634,88 @@ class TestApi(_Ledgers):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPhaseSessions(_Ledgers):
+    """#415: each phase names the build session it ran, resolved to the
+    store when loaded, with the gap named when not."""
+
+    def _phase(self, key: str) -> dict:
+        runs = {r["key"]: r for r in AB.list_runs(self.db, self.cfg, now=NOW)["runs"]}
+        return runs[key]["phases"]["items"][0]
+
+    def test_loaded_session_resolves_to_the_store_row_with_its_copilot(self) -> None:
+        self.assertEqual(
+            self._phase(LANDED_KEY)["session"],
+            {"copilot": C.COPILOT_CLAUDE_CODE, "session_id": "sess-landed", "store_id": self.landed_store_id},
+        )
+
+    def test_unloaded_session_keeps_its_native_id_and_no_store_id(self) -> None:
+        self.db.execute("DELETE FROM copilot_session WHERE session_id = ?", ("sess-landed",))
+        self.db.commit()
+        self.assertEqual(
+            self._phase(LANDED_KEY)["session"],
+            {"copilot": None, "session_id": "sess-landed", "store_id": None},
+        )
+
+    def test_codex_stream_yields_its_thread_id_and_is_not_loaded(self) -> None:
+        # Review of PR #424: codex result files are raw event streams; the
+        # id lives on thread.started, not on a result element.
+        self.assertEqual(
+            self._phase(TERMINATED_KEY)["session"],
+            {"copilot": None, "session_id": "thr-codex-1", "store_id": None},
+        )
+
+    def _routed(self, key: str, backend: str) -> dict:
+        # Review of PR #424: a routed run records its backend in state.json;
+        # the store row for this id is a claude-code session.
+        _write_ledger(
+            self.root, C.AUTO_BUILD_ARCHIVE_DIR, f"routed-{backend}",
+            _state(key, routing_identity={"profile": "p", "backend": backend}),
+            extra={"phase-1/build-result-1.json": [{"type": "result", "session_id": "sess-landed"}]},
+        )
+        return self._phase(key)["session"]
+
+    def test_a_routed_run_resolves_under_its_recorded_backend(self) -> None:
+        self.assertEqual(
+            self._routed("55555-666666666", "claude"),
+            {"copilot": C.COPILOT_CLAUDE_CODE, "session_id": "sess-landed", "store_id": self.landed_store_id},
+        )
+
+    def test_a_routed_run_never_claims_another_copilots_session(self) -> None:
+        self.assertEqual(
+            self._routed("77777-888888888", "pi"),
+            {"copilot": None, "session_id": "sess-landed", "store_id": None},
+        )
+
+    def test_a_codex_routed_run_is_not_looked_up(self) -> None:
+        self.assertEqual(
+            self._routed("99999-000000000", "codex"),
+            {"copilot": None, "session_id": "sess-landed", "store_id": None},
+        )
+
+    def test_codex_stream_without_thread_started_names_no_session(self) -> None:
+        runs = {r["key"]: r for r in AB.list_runs(self.db, self.cfg, now=NOW)["runs"]}
+        phases = {p["n"]: p for p in runs[PARKED_KEY]["phases"]["items"]}
+        self.assertEqual(phases[2]["session"], {"copilot": None, "session_id": None, "store_id": None})
+
+    def test_phase_without_a_result_file_has_no_session(self) -> None:
+        self.assertIsNone(self._phase(PARKED_KEY)["session"])
+
+    def test_lookup_is_matched_with_the_copilot_never_on_the_id_alone(self) -> None:
+        # Review of PR #424: the same native id under a copilot that never
+        # runs auto-build must not resolve.
+        self.db.execute("DELETE FROM copilot_session WHERE session_id = ?", ("sess-landed",))
+        self.db.execute(
+            "INSERT INTO copilot_session (copilot, session_id) VALUES (?, ?)",
+            (C.COPILOT_AIDER, "sess-landed"),
+        )
+        self.db.commit()
+        self.assertEqual(
+            self._phase(LANDED_KEY)["session"],
+            {"copilot": None, "session_id": "sess-landed", "store_id": None},
+        )
+
+    def test_detail_resolves_sessions_too(self) -> None:
+        run = AB.run_detail(self.db, self.cfg, LANDED_KEY, now=NOW)
+        self.assertEqual(run["phases"]["items"][0]["session"]["store_id"], self.landed_store_id)
