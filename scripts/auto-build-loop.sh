@@ -5755,31 +5755,15 @@ compose_pr_body() {
 open_or_update_pr() {
     # Sets PR_NUMBER, PR_URL, PR_ACTION (opened|updated). pr create runs at
     # most once across a create->kill->resume cycle (idempotency via ledger
-    # then remote lookup).
+    # then remote lookup). Only an OPEN PR is ever updated (#427): the
+    # wiki-studio 0.9.0 run wrote its body onto a PR a human had closed
+    # during the park, journaled pr_updated and landed with no open PR.
     local body="$LEDGER_DIR/pr-body.md"
     compose_pr_body "$body"
 
-    PR_NUMBER=$(state_get '.pr.number')
-    PR_URL=$(state_get '.pr.url')
-    if [[ -z "$PR_NUMBER" || "$PR_NUMBER" == "null" ]]; then
-        local view
-        view=$( ( cd "$PROJECT_DIR" && "$GH_BIN" pr view "$BRANCH_NAME" --json number,url ) 2>/dev/null || true )
-        if [[ -n "$view" ]]; then
-            PR_NUMBER=$(printf '%s' "$view" | jq -r '.number // empty' 2>/dev/null)
-            PR_URL=$(printf '%s' "$view" | jq -r '.url // empty' 2>/dev/null)
-        fi
-    fi
-
-    if [[ -n "$PR_NUMBER" && "$PR_NUMBER" != "null" ]]; then
-        ( cd "$PROJECT_DIR" && "$GH_BIN" pr edit "$PR_NUMBER" --body-file "$body" ) >/dev/null 2>&1 \
-            || dispose "pr_error" "gh pr edit #$PR_NUMBER failed" "null"
-        PR_ACTION="updated"
-        state_set '.pr.number = ($n | tonumber) | .pr.url = $u' --arg n "$PR_NUMBER" --arg u "$PR_URL"
-        journal "pr_updated" "#$PR_NUMBER"
-        return 0
-    fi
-
-    # No existing PR — audit close-keywords, then create exactly once.
+    # Close target and title are needed on both paths: a PR the driver
+    # adopts gets the same title marker and the same audit as one it
+    # creates, so a hand-opened PR does not keep GitHub's default title.
     local closes first_close title
     closes=$(derive_close_ids)
     if [[ -z "$closes" ]]; then
@@ -5789,6 +5773,39 @@ open_or_update_pr() {
     title=$(cfg '.pr.title' "feat($FEATURE_ID): autonomous build")
     title="$title (Closes #$first_close)"
 
+    PR_NUMBER=$(state_get '.pr.number')
+    PR_URL=$(state_get '.pr.url')
+    if [[ -n "$PR_NUMBER" && "$PR_NUMBER" != "null" ]]; then
+        # The ledger's PR may have been closed or merged by hand while the
+        # run was parked. Read its state; never edit a PR that is not open.
+        local pr_state
+        pr_state=$( ( cd "$PROJECT_DIR" && "$GH_BIN" pr view "$PR_NUMBER" --json state ) 2>/dev/null \
+            | jq -r '.state // empty' 2>/dev/null || true )
+        case "$pr_state" in
+            OPEN) ;;
+            MERGED)
+                dispose "pr_error" "PR #$PR_NUMBER recorded in the ledger is already merged — nothing to open or update" "null" ;;
+            "")
+                dispose "pr_error" "could not read the state of PR #$PR_NUMBER (gh pr view failed) — refusing to edit or duplicate it" "null" ;;
+            *)
+                journal "pr_stale" "#$PR_NUMBER is $pr_state, not open — opening a new PR"
+                PR_NUMBER=""; PR_URL="" ;;
+        esac
+    fi
+    if [[ -z "$PR_NUMBER" || "$PR_NUMBER" == "null" ]]; then
+        # Remote lookup, OPEN only: `gh pr view <branch>` also returns a
+        # closed or merged PR for that head, which is what #427 bit on.
+        local listed
+        listed=$( ( cd "$PROJECT_DIR" && "$GH_BIN" pr list --head "$BRANCH_NAME" --state open --json number,url ) 2>/dev/null \
+            | jq -c '.[0] // empty' 2>/dev/null || true )
+        if [[ -n "$listed" ]]; then
+            PR_NUMBER=$(printf '%s' "$listed" | jq -r '.number // empty' 2>/dev/null)
+            PR_URL=$(printf '%s' "$listed" | jq -r '.url // empty' 2>/dev/null)
+        fi
+    fi
+
+    # The close-keyword + body/title audit runs before an update as before
+    # a create: an adopted PR's branch and body are audited the same way.
     if ! ( cd "$PROJECT_DIR" && bash "$SCRIPT_DIR/pre-pr-check.sh" \
             --closes "$closes" --title "$title" --body-file "$body" --base "$BRANCH_BASE" ) \
             >"$LEDGER_DIR/pre-pr-check.log" 2>&1; then
@@ -5796,6 +5813,16 @@ open_or_update_pr() {
             "$(jq -n --arg f "$LEDGER_DIR/pre-pr-check.log" '{precheck_log: $f}')"
     fi
 
+    if [[ -n "$PR_NUMBER" && "$PR_NUMBER" != "null" ]]; then
+        ( cd "$PROJECT_DIR" && "$GH_BIN" pr edit "$PR_NUMBER" --title "$title" --body-file "$body" ) >/dev/null 2>&1 \
+            || dispose "pr_error" "gh pr edit #$PR_NUMBER failed" "null"
+        PR_ACTION="updated"
+        state_set '.pr.number = ($n | tonumber) | .pr.url = $u' --arg n "$PR_NUMBER" --arg u "$PR_URL"
+        journal "pr_updated" "#$PR_NUMBER"
+        return 0
+    fi
+
+    # No open PR — create exactly once.
     local out
     out=$( ( cd "$PROJECT_DIR" && "$GH_BIN" pr create --base "$BRANCH_BASE" \
              --title "$title" --body-file "$body" ) 2>&1 ) \

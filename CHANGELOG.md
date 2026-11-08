@@ -71,6 +71,15 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Fixed
 
+- **auto-build finalize never writes onto a closed PR.** The driver looked
+  the branch's PR up with `gh pr view <branch>`, which also returns closed
+  and merged PRs, and updated it without reading its state; a run landed
+  with "PR #88 updated" while #88 was closed. Only an open PR is adopted
+  now (`gh pr list --head --state open`, or the ledger's PR if still
+  open); a closed ledger PR is journaled `pr_stale` and a new PR is
+  opened, a merged one parks. An adopted PR gets the configured title and
+  close marker after the same `pre-pr-check.sh` audit as a created one
+  (#427).
 - **auto-build lands only when `test.command` passes on the final head.**
   A run landed with phase test logs ending in a coverage FAIL and nothing
   in the ledger saying what the driver had seen. The driver now records

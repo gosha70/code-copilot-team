@@ -76,9 +76,13 @@ auto-merge at finalize (the driver never merges locally):
 - **PR create/update**: at finalize the driver composes a deterministic PR
   body, runs `pre-pr-check.sh` (close-keyword + body/title audit), then
   `gh pr create` exactly once — recording `pr.number`/`pr.url` in the ledger.
-  Re-runs and `--resume` detect the existing PR (ledger, else
-  `gh pr view <branch>`) and `gh pr edit --body-file` instead of duplicating.
-  The driver never merges.
+  Re-runs and `--resume` adopt an existing **open** PR (the ledger's, if it
+  is still open; else `gh pr list --head <branch> --state open`) and
+  `gh pr edit --title --body-file` it after the same audit, so a
+  hand-opened PR gets the configured title and close marker. A ledger PR
+  that was closed by hand is journaled `pr_stale` and a new PR is created;
+  a merged one parks `pr_error`. A closed PR on the branch is never
+  adopted. The driver never merges.
 - **Close target**: the PR title's `(Closes #N)` marker comes from config
   `pr.closes` (a list), else the spec's `origin:` issue number; missing →
   parks `pr_config`. Optional `pr.title` overrides the title prefix.

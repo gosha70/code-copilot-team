@@ -201,6 +201,7 @@ case "${1:-} ${2:-}" in
         echo "$n" > "$STATE.n"
         url="https://github.com/mock/repo/pull/$n"
         echo "$url" > "$STATE.url"
+        echo OPEN > "$STATE.state"
         echo "$url"
         exit 0 ;;
     "pr view")
@@ -209,11 +210,25 @@ case "${1:-} ${2:-}" in
             [[ -f "$STATE.armed" ]] && echo '{"enabledAt":"now"}' || echo "null"
             exit 0
         fi
+        # state query (#427): OPEN unless a test wrote $STATE.state.
+        if [[ "$*" == *"--json state"* ]]; then
+            [[ -f "$STATE.url" ]] || exit 1
+            printf '{"state":"%s"}\n' "$(cat "$STATE.state" 2>/dev/null || echo OPEN)"
+            exit 0
+        fi
         if [[ -f "$STATE.url" ]]; then
             printf '{"number":%s,"url":"%s"}\n' "$(cat "$STATE.n")" "$(cat "$STATE.url")"
             exit 0
         fi
         exit 1 ;;
+    "pr list")
+        # Only an OPEN PR for the head is listed, as `--state open` asks (#427).
+        if [[ -f "$STATE.url" && "$(cat "$STATE.state" 2>/dev/null || echo OPEN)" == "OPEN" ]]; then
+            printf '[{"number":%s,"url":"%s"}]\n' "$(cat "$STATE.n")" "$(cat "$STATE.url")"
+        else
+            echo "[]"
+        fi
+        exit 0 ;;
     "pr edit") exit 0 ;;
     "pr merge")
         [[ "${GH_MERGE_FAIL:-}" == "1" ]] && exit 1
@@ -1235,6 +1250,59 @@ assert_exit "resume after PR create completes" 0 "$RC"
 assert_eq "pr create still invoked only once across resume" "1" "$(grep -c '^pr create' "$GH_LOG")"
 assert_eq "resume used pr edit" "1" "$(grep -c '^pr edit' "$GH_LOG")"
 assert_eq "ledger PR number restored via remote lookup" "1" "$(jq -r '.pr.number' "$LEDGER")"
+rm -rf "$P" "$BARE" "$GH_LOG"
+
+# B2 (#427): the ledger's PR was closed by hand during a park → on resume
+#     the driver opens a new PR instead of writing onto the closed one.
+P=$(setup_project)
+cfg_set "$P" '.profile="pr" | .phases.milestone_every=0 | .pr={closes:[99],title:""}'
+BARE=$(add_remote "$P")
+GH_LOG=$(mktemp); GH_PR_STATE=$(mktemp -u); export GH_LOG GH_PR_STATE
+run_driver "$P"
+assert_exit "#427: pr run completes before the stale-PR resume" 0 "$RC"
+LEDGER="$P/.cct/auto-build/demo-feat/state.json"
+CB=$(mktemp); jq '.status="finalizing"' "$LEDGER" > "$CB" && mv "$CB" "$LEDGER"
+echo CLOSED > "$GH_PR_STATE.state"
+run_driver "$P" --resume
+assert_exit "#427: resume with a closed ledger PR completes" 0 "$RC"
+assert_eq "#427: a new PR is created, the closed one is not edited" "2" "$(jq -r '.pr.number' "$LEDGER")"
+assert_eq "#427: pr edit never touched the closed PR" "0" "$(grep -c '^pr edit' "$GH_LOG")"
+assert_contains "#427: the stale PR is journaled" "$(cat "$P/.cct/auto-build/demo-feat/events.jsonl")" "pr_stale"
+assert_contains "#427: the final line says opened" "$OUTPUT" "PR #2 opened"
+rm -rf "$P" "$BARE" "$GH_LOG"
+
+# B3 (#427): a closed hand-opened PR exists for the branch, no ledger PR
+#     → it is not adopted; the driver creates its own and reports opened.
+P=$(setup_project)
+cfg_set "$P" '.profile="pr" | .phases.milestone_every=0 | .pr={closes:[99],title:""}'
+BARE=$(add_remote "$P")
+GH_LOG=$(mktemp); GH_PR_STATE=$(mktemp -u); export GH_LOG GH_PR_STATE
+echo 88 > "$GH_PR_STATE.n"; echo "https://github.com/mock/repo/pull/88" > "$GH_PR_STATE.url"; echo CLOSED > "$GH_PR_STATE.state"
+run_driver "$P"
+assert_exit "#427: a closed hand PR on the branch does not block the run" 0 "$RC"
+LEDGER="$P/.cct/auto-build/demo-feat/state.json"
+assert_eq "#427: the driver opened its own PR" "89" "$(jq -r '.pr.number' "$LEDGER")"
+assert_eq "#427: the closed PR was not edited" "0" "$(grep -c '^pr edit' "$GH_LOG")"
+assert_eq "#427: pr create invoked once" "1" "$(grep -c '^pr create' "$GH_LOG")"
+assert_contains "#427: reported as opened, not updated" "$OUTPUT" "PR #89 opened"
+rm -rf "$P" "$BARE" "$GH_LOG"
+
+# B4 (#427): an OPEN hand-opened PR is adopted with the configured title,
+#     its close marker and the same audit as the create path.
+P=$(setup_project)
+cfg_set "$P" '.profile="pr" | .phases.milestone_every=0 | .pr={closes:[99],title:""}'
+BARE=$(add_remote "$P")
+GH_LOG=$(mktemp); GH_PR_STATE=$(mktemp -u); export GH_LOG GH_PR_STATE
+echo 88 > "$GH_PR_STATE.n"; echo "https://github.com/mock/repo/pull/88" > "$GH_PR_STATE.url"; echo OPEN > "$GH_PR_STATE.state"
+run_driver "$P"
+assert_exit "#427: an open hand PR is adopted" 0 "$RC"
+LEDGER="$P/.cct/auto-build/demo-feat/state.json"
+assert_eq "#427: the ledger records the adopted PR" "88" "$(jq -r '.pr.number' "$LEDGER")"
+assert_eq "#427: no second PR is created" "0" "$(grep -c '^pr create' "$GH_LOG")"
+assert_contains "#427: the adopted PR gets the title with its close marker" "$(grep '^pr edit' "$GH_LOG")" "--title"
+assert_contains "#427: ...naming the close target" "$(grep '^pr edit' "$GH_LOG")" "(Closes #99)"
+assert_eq "#427: pre-pr-check ran on the update path" "1" "$([[ -f "$P/.cct/auto-build/demo-feat/pre-pr-check.log" ]] && echo 1 || echo 0)"
+assert_contains "#427: reported as updated" "$OUTPUT" "PR #88 updated"
 rm -rf "$P" "$BARE" "$GH_LOG"
 
 # C: advisory never invokes gh, never pushes (even on park)
