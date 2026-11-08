@@ -14,6 +14,7 @@ import {
   useApi,
 } from "@/components/ui";
 import DevelopersPanel from "@/components/DevelopersPanel";
+import { DURATION_BASIS } from "@/components/SessionHeader";
 import HarnessPanel from "@/components/HarnessPanel";
 import {
   CostByOutcomeCard,
@@ -127,7 +128,7 @@ export default function DashboardPage() {
         <Stat
           label="Avg duration"
           value={formatDuration(data.totals.avg_duration_seconds)}
-          note="wall clock, first entry to last, averaged over the sessions shown"
+          note={`${DURATION_BASIS}, averaged over the sessions shown that record one`}
         />
         <LatencyStat data={latency.data} error={latency.error} />
       </div>

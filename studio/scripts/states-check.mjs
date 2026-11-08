@@ -776,6 +776,16 @@ try {
   else if (!/<dt[^>]*>Started<\/dt>/.test(head) || !/<dt[^>]*>Session id<\/dt>/.test(head) || !/>abc</.test(head)) fail("labelled facts (Started, Session id) missing");
   else if (!/wall clock, first entry to last/.test(head)) fail("the Duration tile does not state what it measures (#414)");
   else console.log("  ok  header: project title, badges, five tiles with comparisons, duration defined");
+  // The Overview's "Avg duration" tile and the Benchmark column live on
+  // pages that fetch, which this check does not render; their notes are
+  // checked at the source: the Overview builds its note from
+  // DURATION_BASIS and the Benchmark header carries the definition
+  // (review of PR #423).
+  const overviewSrc = readFileSync(join(STUDIO, "app/page.tsx"), "utf8");
+  const benchSrc = readFileSync(join(STUDIO, "app/benchmark/page.tsx"), "utf8");
+  if (!/label="Avg duration"[\s\S]{0,300}\$\{DURATION_BASIS\}/.test(overviewSrc)) fail("source: the Overview's Avg duration note is not built from DURATION_BASIS (#414)");
+  else if (!/title="wall clock, first entry to last[^"]*"[\s\S]{0,120}Avg session duration/.test(benchSrc)) fail("source: the Benchmark duration column does not state what it measures (#414)");
+  else console.log("  ok  source: the Overview and Benchmark duration notes carry the definition");
   const bare = render(sh.default, { data: { ...detail, project_path: null, model: null, started_at: null, duration_seconds: null }, baseline: null });
   if (!/no project path/.test(bare) || !/too few sessions of this project/.test(bare) || /×/.test(bare)) fail("header without a project/baseline still claims a comparison");
   else console.log("  ok  no project path / no baseline: nothing compared, nothing invented");
