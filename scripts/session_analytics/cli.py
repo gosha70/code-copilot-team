@@ -263,6 +263,16 @@ def _build_parser() -> argparse.ArgumentParser:
     p_kpi.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB).")
     p_kpi.add_argument("--session-id", type=int, default=None, help="Limit to one session id.")
 
+    p_gaps = sub.add_parser(
+        "gaps",
+        help="Inter-turn gap distribution by the kind of turn that ends each gap, and "
+             "active hours at several idle cutoffs (#422). Read-only.",
+    )
+    p_gaps.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB).")
+    p_gaps.add_argument("--cutoffs", default="2,5,10,15,30",
+                        help="Comma-separated idle cutoffs in minutes (default 2,5,10,15,30).")
+    p_gaps.add_argument("--json", action="store_true", help="Print the report as JSON.")
+
     sub.add_parser(
         "calibrate",
         help=(
@@ -1468,6 +1478,35 @@ def _cmd_kpis(args: argparse.Namespace) -> int:
     return C.EXIT_OK
 
 
+def _cmd_gaps(args: argparse.Namespace) -> int:
+    from .activity import gap_report, render_markdown
+    from .relational.db import SQLITE_MODE_RO, Database
+
+    try:
+        cutoffs = [float(m) for m in args.cutoffs.split(",") if m.strip()]
+    except ValueError:
+        cutoffs = []
+    if not cutoffs or any(m <= 0 for m in cutoffs):
+        print("error: --cutoffs must be positive minutes, e.g. 2,5,10,15,30.", file=sys.stderr)
+        return C.EXIT_USAGE
+    cfg = load_config(dsn=args.dsn)
+    if not cfg.dsn:
+        print("error: no database configured (see --db or run setup).", file=sys.stderr)
+        return C.EXIT_USAGE
+    try:
+        db = Database.connect(cfg.dsn, sqlite_mode=SQLITE_MODE_RO)
+        try:
+            report = gap_report(db, cutoffs)
+        finally:
+            db.close()
+    except Exception as exc:
+        _log.exception("gaps failed")
+        print(f"error: gaps failed: {exc}", file=sys.stderr)
+        return C.EXIT_RUNTIME
+    print(json.dumps(report, indent=2) if args.json else render_markdown(report))
+    return C.EXIT_OK
+
+
 def _cmd_calibrate(args: argparse.Namespace) -> int:
     """Produce the held-out evaluation report the calibration gates
     read. Shadow-only, like everything in this arc: it writes ONE
@@ -1558,6 +1597,7 @@ _HANDLERS = {
     "similar": _cmd_similar,
     "clusters": _cmd_clusters,
     "kpis": _cmd_kpis,
+    "gaps": _cmd_gaps,
     "calibrate": _cmd_calibrate,
     "mcp": _cmd_mcp,
     "serve": _cmd_serve,

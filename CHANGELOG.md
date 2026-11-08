@@ -69,6 +69,15 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   source the branch has, names any ruleset that grants a bypass, and a
   gh-stub suite pins both readings (`tests/test-github-hardening.sh`).
 
+- **`session-analytics gaps` shows where an idle cutoff falls on your
+  store.** It prints the inter-turn gap percentiles split by the turn that
+  ends each gap (human message, tool result, assistant, harness-written)
+  and the active hours at 2, 5, 10, 15 and 30 minutes (`--cutoffs`,
+  `--json`), so the active-time default can be checked against more than
+  one store. Read-only; a SQLite store is opened read-only. The capped sum
+  lives in `session_analytics/activity.py`, which the stored active-time
+  figure will reuse (#422).
+
 ### Fixed
 
 - **auto-build finalize never writes onto a closed PR.** The driver looked
