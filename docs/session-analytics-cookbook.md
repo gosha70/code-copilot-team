@@ -256,6 +256,38 @@ Archived text goes through the same redaction as ingest, under the
 stricter of the configured mode and the mode the session was ingested
 with.
 
+### 5.4 Idle gaps and the active-time cutoff
+
+Session duration is wall clock. Active time (#422) sums the gaps between
+consecutive turns, each gap capped at an idle cutoff. To see where a
+cutoff falls on your own store:
+
+```bash
+./scripts/session-analytics gaps                             # both tables, as markdown
+./scripts/session-analytics gaps --cutoff 7.5 --cutoff 15    # other cutoffs, in minutes
+./scripts/session-analytics gaps --exclude-noise --json
+```
+
+It reads the store and writes nothing; a SQLite store is opened
+read-only. Like `graph`, it counts every session; `--exclude-noise`
+leaves out the sessions §5.2 calls noise and says how many. The first table
+splits the gaps by the turn that ends them: a human message (a slash
+command or `!` command you typed counts), a tool result (a user turn
+whose timestamp matches a tool result's `completed_at` in the same
+session), an assistant turn, or a user turn the harness wrote itself
+(task notifications, system reminders, command output, the compaction
+summary). The second gives the active hours at each cutoff and how many
+human gaps run past it. Gaps, the stamps they read and the percentiles
+follow the same rules as the response-time card (`mcp.tools`): a gap
+that touches a turn without a timestamp, or that runs backwards, is
+skipped and counted.
+
+The split is a diagnostic only: active time caps every gap, whatever
+ends it. A store ingested with no preview (`metadata-only` redaction)
+cannot spot harness-written turns, so they count as human. A store whose
+adapter records no `completed_at` cannot spot tool-result turns either,
+so those count as human too; the active hours are unaffected.
+
 ---
 
 ## 6. Read a session
@@ -667,6 +699,7 @@ runs); the default is this repository's own `.cct`.
 ./scripts/session-analytics export --table all --format parquet --out ./export/
 ./scripts/session-analytics correlate --runs-root runs             # same as Analysis pipeline → Link benchmark runs
 ./scripts/session-analytics runs                                   # auto-build runs and their verdicts (§8.6)
+./scripts/session-analytics gaps                                   # inter-turn gaps and active hours by cutoff (§5.4)
 ./scripts/session-analytics mcp                                    # MCP server over the store
 ./scripts/session-analytics list                                   # adapters + judges registered
 ```

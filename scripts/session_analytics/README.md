@@ -64,6 +64,7 @@ The zero-install path still works without `setup` — just pass `--db`:
 | `clusters`| Group the stored `SIMILAR_TO` edges into clusters, read-only (E2 slice 3, #289). |
 | `team`    | The team store's status and alerts (#174). |
 | `runs`    | Auto-build runs from their ledgers, and the human verdict on each run's PR (#190 §12). |
+| `gaps`    | Inter-turn gaps by the kind of turn that ends them, and active hours at several idle cutoffs, read-only (#422). |
 
 The Studio renders both read-only (E2 slice 4, #293) — see *Studio:
 clusters view + similar panel* below.
