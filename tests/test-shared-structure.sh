@@ -398,6 +398,12 @@ rc=0
 grep -q "tools:.*Edit" "$ADAPTER_DIR/.claude/agents/plan.md" || rc=1
 assert_ok "Plan agent has Edit tool for specs/ artifacts" "$rc"
 
+# #407: Claude Code removes AskUserQuestion from every subagent even when
+# listed, so an agent that lists it is promising a question it cannot ask.
+rc=0
+grep -l '^tools:.*AskUserQuestion' "$ADAPTER_DIR"/.claude/agents/*.md >/dev/null 2>&1 && rc=1
+assert_ok "No agent lists AskUserQuestion in tools (unavailable to subagents, #407)" "$rc"
+
 # Hooks in adapter
 HOOK_FILES=(verify-on-stop.sh verify-after-edit.sh auto-format.sh protect-files.sh protect-git.sh peer-review-on-stop.sh reinject-context.sh notify.sh memkernel-recall.sh memkernel-pre-compact.sh memkernel-post-compact.sh)
 HOOK_HELPERS=(memkernel-recall.py memkernel-pre-compact.py memkernel-post-compact.py)

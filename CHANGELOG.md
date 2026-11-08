@@ -52,6 +52,16 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   claims is recorded as PASS with `verdict_override`.
   `CCT_REVIEW_CHECK_TEST_CLAIMS=false` turns it off (#406).
 
+### Fixed
+
+- **`/shape` and the plan agent ask the owner from the main session.**
+  Claude Code removes `AskUserQuestion` from every subagent even when it
+  is listed in `tools:`, so the `pitch-shaper` and `plan` agents could
+  never ask the open decisions they were told to ask. They now list each
+  open decision with a default (`## Open decisions` in the pitch,
+  `### Open decisions` in the plan), and `/shape` asks them in the main
+  session and records the answers before reporting (#407).
+
 ### Changed
 
 - **Aider sessions are discovered only under a declared root.** The packaged
