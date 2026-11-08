@@ -75,6 +75,9 @@ commit** is on record. The mechanics (`.github/workflows/review-gate.yml`):
 - Contributors cannot add the label (it needs triage rights); you will see
   the status flip when the owner has recorded the review. CI checks
   (`pi-tests`, `sync-check`, `CodeQL`) are separate and run on every push.
+- Each push shows two red marks for the one condition: the `External
+  review on record` status and the "Review gate" check run that set it.
+  They move together; once the label is back, both are green.
 
 ## Guidelines
 

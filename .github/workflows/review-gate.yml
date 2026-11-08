@@ -42,7 +42,12 @@ jobs:
       - name: Set the review status on the head commit
         run: |
           has_label() {
-            gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name' | grep -qx reviewed
+            # Capture first, then grep: with pipefail, grep exiting on a
+            # match before gh finishes writing could fail the pipeline
+            # and read as "no label".
+            local labels
+            labels=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name')
+            grep -qx reviewed <<<"$labels"
           }
           set_status() {
             gh api --silent "repos/$GITHUB_REPOSITORY/statuses/$HEAD" \

@@ -178,6 +178,13 @@ Safety properties, in case the workflow is edited:
   code with those scopes would hand a fork the base repository's token.
 - It has no concurrency group on purpose: a cancelled run could drop the
   label removal for a new commit.
+- What it does not cover: any Actions workflow in a same-repository PR
+  can declare `statuses: write` and set a status named `External review
+  on record` on its own head, because GitHub Actions is one integration
+  whichever workflow sets it. The gate stops fork contributors and stops
+  a forgotten review; it does not stop a collaborator with write access
+  who adds such a workflow. Today that set is the owner alone, so it
+  costs nothing; grant write access to a collaborator knowing it.
 
 Setup, once, after the workflow is on master:
 
