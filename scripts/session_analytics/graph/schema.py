@@ -61,7 +61,7 @@ class GraphDatabase:
         reader refuses quoted newlines — captured on 0.11.3). COPY
         appends, and a duplicate primary key aborts the whole statement,
         so callers dedupe keys before writing."""
-        path = str(csv_path).replace("'", "''")
+        path = Path(csv_path).as_posix().replace("'", "''")
         # The Cypher literal must read ESCAPE='\\' (two characters).
         self.execute(f"COPY {table} FROM '{path}' (HEADER=true, ESCAPE='\\\\')")
 

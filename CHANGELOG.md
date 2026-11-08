@@ -90,6 +90,12 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Fixed
 
+- **The graph builds on Windows.** `GraphDatabase.copy_from` put the CSV
+  path into Kùzu's `COPY ... FROM '<path>'` literal as `str(path)`, so a
+  Windows path's backslashes failed the Cypher parser and
+  `session-analytics graph` exited 3 on every Windows machine. The path
+  now goes in as `as_posix()`, which Kùzu reads on every platform, and a
+  test pins the statement for a Windows path on any OS (#434).
 - **auto-build finalize never writes onto a closed PR.** The driver looked
   the branch's PR up with `gh pr view <branch>`, which also returns closed
   and merged PRs, and updated it without reading its state; a run landed
