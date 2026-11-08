@@ -22,9 +22,11 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   and names the remedy, and `cct doctor` checks the shim's target (#410).
 - **Close-keyword audit for hand-opened PRs.** The `phase-workflow` skill
   gains "Opening a Pull Request": run `scripts/pre-pr-check.sh` before
-  `gh pr create`, confirm `closingIssuesReferences` after, and never put a
-  closing verb before an issue a later PR must close. The
-  `copilot-conventions` Git Discipline carries the rule (#408).
+  `gh pr create`, confirm `closingIssuesReferences` after, and put none of
+  GitHub's nine keyword forms before an issue a later PR must close. The
+  script accepts `--closes none` for a PR that closes nothing, so docs and
+  chore PRs can run the audit too. The `copilot-conventions` Git
+  Discipline carries the rule (#408).
 
 ### Changed
 

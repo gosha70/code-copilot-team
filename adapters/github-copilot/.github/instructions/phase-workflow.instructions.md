@@ -82,24 +82,33 @@ When existing functionality is removed or replaced during a phase (e.g., replaci
 ## Opening a Pull Request (hand-opened PRs)
 
 The driver audits its own PRs with `scripts/pre-pr-check.sh`; nothing ran it
-for a PR opened from a session, and a closing verb in prose closes an issue
-on merge (wiki-studio #68 said "S5 closing #10 by restatement" in its body;
-merging it closed #10 three seconds later, though #10 was meant to close
-with build PR #74). For every PR opened from a session:
+for a PR opened from a session, and a close keyword in prose closes an issue
+on merge. GitHub fires on nine forms, case-insensitive — `close`, `closes`,
+`closed`, `fix`, `fixes`, `fixed`, `resolve`, `resolves`, `resolved` — each
+followed by `#N`; the script and the developer cookbook check exactly that
+set. A wiki-studio PR whose body discussed an issue in prose auto-closed it
+on merge, three seconds after the merge, though the issue was meant to stay
+open for a later build PR: whatever the writer meant, the parser read a
+keyword. For every PR opened from a session:
 
 1. **Before `gh pr create`**, run
    `scripts/pre-pr-check.sh --closes <N>[,<N>] --title "<title>" --body-file <path>`
    and run the exact `gh pr create` command it prints. It audits the body
    and every commit message on the branch for close keywords that would
-   close an issue other than the ones named in `--closes`.
+   close an issue other than the ones named in `--closes`. A PR that
+   closes nothing (docs, chores, one slice of a larger issue) runs it with
+   `--closes none`: every keyword match then fails, and the title carries
+   no `(Closes #N)` marker.
 2. **After opening**, run `gh pr view <n> --json closingIssuesReferences`
    and confirm the list is exactly the issues this PR is meant to close.
    Anything else means a stray keyword: edit the body (`gh api -X PATCH
    repos/<owner>/<repo>/issues/<n> -F body=@<file>`) and re-check.
-3. **Writing about an issue a later PR must close**: no closing verb in
-   front of its number. Write "issue #10 is closed by a later PR" or
-   "leaves #10 open", never "closing #10", "fixes #10 by restatement" or
-   "does NOT close #10" — GitHub reads the verb, not the sentence.
+3. **Writing about an issue a later PR must close**: none of the nine
+   forms in front of its number, in a commit message or in the body. Write
+   "leaves #N open" or "#N is closed by a later PR" (the number first),
+   never "fixes #N by restatement" or "does NOT close #N" — negation does
+   not help, and neither do backticks. Do not lean on a verb form being
+   outside the set; rephrase so no verb precedes `#N`.
 
 ## Autonomy Profiles (auto-build-loop)
 
