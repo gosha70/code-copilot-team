@@ -208,21 +208,18 @@ class TestSingleFlight(unittest.TestCase):
     def test_benchmark_runs_root_states(self) -> None:
         import tempfile
         from pathlib import Path
-        from unittest import mock
 
         from session_analytics import config as cfgmod
+        from session_analytics.tests.support import packaged_config
 
-        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
-             mock.patch.dict("os.environ", {cfgmod.ENV_BENCHMARK_RUNS_ROOT: ""}):
+        with packaged_config({cfgmod.ENV_BENCHMARK_RUNS_ROOT: ""}):
             self.assertEqual(pj.benchmark_runs_root(), {"path": "", "configured": False, "is_dir": False})
         d = tempfile.mkdtemp(prefix="cct-sa-runs-")
-        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
-             mock.patch.dict("os.environ", {cfgmod.ENV_BENCHMARK_RUNS_ROOT: d}):
+        with packaged_config({cfgmod.ENV_BENCHMARK_RUNS_ROOT: d}):
             self.assertEqual(pj.benchmark_runs_root(), {"path": d, "configured": True, "is_dir": True})
         f = Path(d) / "a-file"
         f.write_text("x")
-        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
-             mock.patch.dict("os.environ", {cfgmod.ENV_BENCHMARK_RUNS_ROOT: str(f)}):
+        with packaged_config({cfgmod.ENV_BENCHMARK_RUNS_ROOT: str(f)}):
             self.assertEqual(pj.benchmark_runs_root()["is_dir"], False)
 
 

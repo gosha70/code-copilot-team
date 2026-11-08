@@ -20,6 +20,7 @@ from session_analytics.tests.support import (
     CLAUDE_CODE_ROOT,
     FIXTURES,
     RegistryResetTestCase,
+    packaged_config,
 )
 
 _FASTAPI = (
@@ -1052,8 +1053,7 @@ class TestApi(RegistryResetTestCase):
 
         pj._jobs.clear()
         self.addCleanup(pj._jobs.clear)
-        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
-             mock.patch.dict("os.environ", {cfgmod.ENV_BENCHMARK_RUNS_ROOT: ""}):
+        with packaged_config({cfgmod.ENV_BENCHMARK_RUNS_ROOT: ""}):
             body = self.client.get("/api/dashboard/benchmark").json()
             self.assertEqual(body["runs_root"], {"path": "", "configured": False, "is_dir": False})
             self.assertEqual(body["link_job"]["state"], "idle")
@@ -1085,8 +1085,7 @@ class TestApi(RegistryResetTestCase):
             "derived": {"elapsed_seconds": 1.0, "files_changed": 1, "lines_added": 1, "lines_removed": 0},
         }))
         pj._jobs.clear()
-        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
-             mock.patch.dict("os.environ", {cfgmod.ENV_BENCHMARK_RUNS_ROOT: str(root)}):
+        with packaged_config({cfgmod.ENV_BENCHMARK_RUNS_ROOT: str(root)}):
             self.assertEqual(self.client.post("/api/pipeline/run/correlate", json={}).status_code, 200)
             for _ in range(200):
                 if pj.job_state(pj.STEP_CORRELATE)["state"] != "running":
@@ -1135,8 +1134,7 @@ class TestApi(RegistryResetTestCase):
                 return _Resp(json.dumps({"capabilities": caps[model]}).encode())
             raise AssertionError(url)
 
-        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
-             mock.patch.dict("os.environ", {cfgmod.ENV_EMBED_BACKEND: "ollama", cfgmod.ENV_EMBED_MODEL: ""}), \
+        with packaged_config({cfgmod.ENV_EMBED_BACKEND: "ollama", cfgmod.ENV_EMBED_MODEL: ""}), \
              mock.patch.object(urllib.request, "urlopen", fake_urlopen):
             m = self.client.get("/api/embed/models").json()
         self.assertTrue(m["reachable"])
@@ -1156,8 +1154,7 @@ class TestApi(RegistryResetTestCase):
                 return _Resp(json.dumps({"modelfile": "FROM x"}).encode())
             raise AssertionError(url)
 
-        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
-             mock.patch.dict("os.environ", {cfgmod.ENV_EMBED_BACKEND: "ollama", cfgmod.ENV_EMBED_MODEL: ""}), \
+        with packaged_config({cfgmod.ENV_EMBED_BACKEND: "ollama", cfgmod.ENV_EMBED_MODEL: ""}), \
              mock.patch.object(urllib.request, "urlopen", fake_urlopen_old):
             m = self.client.get("/api/embed/models").json()
         self.assertEqual(m["models"], ["llama3.2:latest", "nomic-embed-text:latest", "qwen3.6:27b"])
@@ -1166,14 +1163,14 @@ class TestApi(RegistryResetTestCase):
     def test_team_alerts_route_and_alerts_in_status(self) -> None:
         from session_analytics import config as cfgmod
 
-        body = self.client.get("/api/team/alerts").json()
+        with packaged_config({cfgmod.ENV_BUDGET_TEAM_DAILY: ""}):
+            body = self.client.get("/api/team/alerts").json()
         self.assertEqual((body["alerts"], body["breaches"], body["derived"]), ([], 0, True))
         self.assertIsNone(body["budgets"]["team_daily_usd"])
         self.assertIn("alerts", self.client.get("/api/team/status").json())
         # A tiny team budget: the fixture session's cost breaches it —
         # unless nothing is priced, in which case no alert (honesty).
-        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
-             mock.patch.dict("os.environ", {cfgmod.ENV_BUDGET_TEAM_MONTHLY: "0.000001"}):
+        with packaged_config({cfgmod.ENV_BUDGET_TEAM_MONTHLY: "0.000001"}):
             body = self.client.get("/api/team/alerts").json()
         self.assertEqual(body["budgets"]["team_monthly_usd"], 0.000001)
         status = self.client.get("/api/team/status").json()
@@ -1221,9 +1218,8 @@ class TestApi(RegistryResetTestCase):
 
         register_judge("asker", _Asker)
         absent = str(Path(tempfile.mkdtemp()) / "no-graph")
-        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
-             mock.patch.dict("os.environ", {cfgmod.ENV_JUDGE_BACKEND: "asker",
-                                            cfgmod.ENV_KUZU_PATH: absent}):
+        with packaged_config({cfgmod.ENV_JUDGE_BACKEND: "asker", cfgmod.ENV_KUZU_PATH: absent,
+                              ENV_NOISE_MIN_DURATION: "0"}):
             info = self.client.get("/api/ask").json()
             self.assertEqual(info["judge"]["spec"], "asker:a")
             self.assertEqual(info["facts"]["sessions"], 1)
@@ -1247,9 +1243,7 @@ class TestApi(RegistryResetTestCase):
     def test_ask_without_a_judge_base_url_is_an_error_event(self) -> None:
         from session_analytics import config as cfgmod
 
-        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
-             mock.patch.dict("os.environ", {cfgmod.ENV_JUDGE_BACKEND: "openai",
-                                            cfgmod.ENV_JUDGE_BASE_URL: ""}):
+        with packaged_config({cfgmod.ENV_JUDGE_BACKEND: "openai", cfgmod.ENV_JUDGE_BASE_URL: ""}):
             r = self.client.post("/api/ask", json={"question": "anything"})
             events = [json.loads(line) for line in r.text.splitlines() if line.strip()]
             self.assertEqual(events[-1]["event"], "error")
@@ -1279,8 +1273,7 @@ class TestApi(RegistryResetTestCase):
                 return '{"ok": true}'
 
         register_judge("probe", _Probe)
-        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
-             mock.patch.dict("os.environ", {cfgmod.ENV_JUDGE_BACKEND: "probe"}):
+        with packaged_config({cfgmod.ENV_JUDGE_BACKEND: "probe"}):
             r = self.client.post("/api/judge/test").json()
             self.assertTrue(r["ok"], r)
             self.assertEqual((r["judge"], r["answer"]), ("probe:p", '{"ok": true}'))
@@ -1471,15 +1464,9 @@ class TestApi(RegistryResetTestCase):
             self.assertIn("Settings → Embeddings", job["message"])
 
     def test_get_config(self) -> None:
-        # Read the packaged default, not this machine's judge: no user config
-        # file, no worktree .env, and the judge keys cleared in the real
-        # environment (#401).
         from session_analytics import config as cfgmod
 
-        with mock.patch.object(cfgmod, "_USER_CONFIG", Path("/nonexistent/session-analytics.json")), \
-             mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
-             mock.patch.dict("os.environ", {cfgmod.ENV_JUDGE_BACKEND: "",
-                                            cfgmod.ENV_JUDGE_MODEL: ""}):
+        with packaged_config({cfgmod.ENV_JUDGE_BACKEND: "", cfgmod.ENV_JUDGE_MODEL: ""}):
             r = self.client.get("/api/config")
         self.assertEqual(r.status_code, 200)
         body = r.json()
