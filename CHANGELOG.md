@@ -44,6 +44,14 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   PR body say `bypassed (escalation esc-N)` for a phase accepted through
   `/review-decide approve` instead of "Review: PASS" (#404).
 
+- **The review runner runs the test a gating finding claims fails before
+  it counts.** A blocking finding naming a pytest node id or a test file
+  under the project is checked by running it; a passing run marks the
+  finding `test_claim.disputed` (kept in the record with the evidence,
+  not counted as blocking), and a FAIL that rested only on disputed
+  claims is recorded as PASS with `verdict_override`.
+  `CCT_REVIEW_CHECK_TEST_CLAIMS=false` turns it off (#406).
+
 ### Changed
 
 - **Aider sessions are discovered only under a declared root.** The packaged
