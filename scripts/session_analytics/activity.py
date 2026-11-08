@@ -3,10 +3,10 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, Iterable, Optional, Sequence
 
 from . import constants as C
+from .mcp.tools import _parse_ts, _percentile, turn_latency
 
 GAP_HUMAN = "human"
 GAP_TOOL_RESULT = "tool_result"
@@ -40,15 +40,6 @@ class SessionGaps:
     skipped_negative: int = 0
 
 
-def parse_timestamp(value: Optional[str]) -> Optional[datetime]:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-
 def gap_kind(turn: Turn) -> str:
     if turn.role == C.ROLE_ASSISTANT:
         return GAP_ASSISTANT
@@ -62,12 +53,12 @@ def gap_kind(turn: Turn) -> str:
 def session_gaps(turns: Sequence[Turn]) -> SessionGaps:
     out = SessionGaps()
     for prev, cur in zip(turns, turns[1:]):
-        start, end = parse_timestamp(prev.timestamp), parse_timestamp(cur.timestamp)
+        start, end = _parse_ts(prev.timestamp), _parse_ts(cur.timestamp)
         if start is None or end is None:
             out.skipped_unstamped += 1
             continue
-        seconds = (end - start).total_seconds()
-        if seconds < 0:
+        seconds = turn_latency(start, end)
+        if seconds is None:
             out.skipped_negative += 1
             continue
         out.gaps.append((gap_kind(cur), seconds))
@@ -79,9 +70,7 @@ def active_seconds(gaps: Iterable[float], cutoff_seconds: float) -> float:
 
 
 def percentile(values: Sequence[float], p: float) -> float:
-    ordered = sorted(values)
-    index = min(len(ordered) - 1, max(0, round(p / 100 * (len(ordered) - 1))))
-    return ordered[index]
+    return _percentile(sorted(values), p / 100)
 
 
 def load_session_turns(db: Any) -> dict[int, list[Turn]]:

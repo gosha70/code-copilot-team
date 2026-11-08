@@ -88,8 +88,11 @@ class TestActiveSeconds(unittest.TestCase):
     def test_percentile_is_nearest_rank(self) -> None:
         values = [float(v) for v in range(1, 101)]
         self.assertEqual(
-            (A.percentile(values, 50), A.percentile(values, 90), A.percentile(values, 99)), (51.0, 90.0, 99.0)
+            (A.percentile(values, 50), A.percentile(values, 90), A.percentile(values, 99)), (50.0, 90.0, 99.0)
         )
+
+    def test_percentile_follows_the_repository_rule(self) -> None:
+        self.assertEqual(A.percentile([6.0, 1.0, 5.0, 2.0, 4.0, 3.0], 90), 6.0)
 
 
 class _FixtureStore(RegistryResetTestCase):
