@@ -37,6 +37,15 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   chore PRs can run the audit too. The `copilot-conventions` Git
   Discipline carries the rule (#408).
 
+- **Three rule gaps from the wiki-studio retrospective of 2026-11-04.**
+  `infra-verification`: every command a page shows gets the cheapest real
+  check (`pip install --dry-run`, `--help`, a parse); "not executed in CI"
+  is a label, not an exemption. `coding-standards` Self-Audit: precedent
+  claims about earlier releases, tags or PRs are checked against the
+  source before they are written. `safety`: PR existence and state come
+  from `gh pr list` / `gh pr view`, never from the session's last action
+  (#409).
+
 ### Fixed
 
 - **auto-build lands only when `test.command` passes on the final head.**
@@ -59,7 +68,6 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   not counted as blocking), and a FAIL that rested only on disputed
   claims is recorded as PASS with `verdict_override`.
   `CCT_REVIEW_CHECK_TEST_CLAIMS=false` turns it off (#406).
-
 
 - **`/shape` and the plan agent ask the owner from the main session.**
   Claude Code removes `AskUserQuestion` from every subagent even when it

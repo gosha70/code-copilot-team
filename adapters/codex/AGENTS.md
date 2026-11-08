@@ -33,6 +33,7 @@ Applied to all code generation and review sessions.
 - **Never suggest skipping a failing verification step.** When a test, build, lint check, Docker build, or script execution fails, diagnose and fix the issue. Do not suggest workarounds that bypass the deliverable.
 - **Execute your own test plan.** If you write test commands (curl, bash, docker, etc.) as part of a build summary, run every command yourself and report results before declaring done.
 - **Build it, run it.** Any executable artifact you create (Dockerfile, shell script, CI workflow, launcher flag) must be executed at least once before committing. Syntax validity alone is not sufficient.
+- **Check every command a page shows.** A command in documentation gets the cheapest real check that applies before it is committed (`pip install --dry-run` / `npm install --dry-run` for install lines, `--help` or `--dry-run` for CLI lines, a parse for config blocks); "not executed in CI" is a label, not an exemption. The table of checks is in `infra-verification`, "Shown Commands Are Checked".
 - **Re-review after fix.** After applying a fix for a bug flagged in code review or a reviewer note, run the review process again (e.g., `/team-review` or the equivalent specialist agent) before declaring done. Do not just apply the fix and move on — the re-review may catch secondary issues exposed by the fix itself.
 - **Confirm against origin before declaring done.** Run `scripts/check-origin-alignment.sh <feature-id>` before presenting any feature for review. Exit ≥ 2 means the working artifact has drifted from the user's origin and you must surface the three-resolution escalation (rescope / restart / document divergence) — do not proceed. See `shared/skills/origin-confirmation/SKILL.md` for the full protocol.
 
@@ -43,6 +44,7 @@ Before declaring a change ready for review, do the homework yourself — do not 
 - **Trace every code path.** If you changed `execute()`, also change `execute_async()`. If you changed the child side, also change the parent side. If you changed one caller, grep every caller. Shotgun surgery is a bug, not a style choice — run a final grep for related occurrences before declaring done.
 - **Trace the execution, not just the line.** Read the code path from entry to return. Many bugs — wrong fallback, missing guard, incompatible defaults — are visible without running the code. "Execute your own test plan" is necessary but not sufficient; it won't catch what the tests don't cover.
 - **Apply corrections globally.** When the user corrects a pattern (magic strings, hardcoded defaults, etc.), fix every instance in the codebase, not just the one they pointed at. Being corrected more than once for the same rule is a sign you applied the fix too narrowly the first time.
+- **Check precedent claims against the source.** A claim about what an earlier release, tag, PR or commit did ("the CHANGELOG has always carried dates", "that pitch was never built", "the release was cut from this commit") is checked against git, the tag, the PR or the package index before it is written. Four such claims were retracted after review in one stretch (wiki-studio #60, #61, #63, #66) and an external reviewer made the same error three times: memory of a repository is not a source.
 - **Do not ask for information you can find.** Before asking the user for a log, a line number, a stack trace, or "which file?" — search the code yourself with grep and file reads. The user's time is more valuable than yours. Ask only for information that cannot be derived from the repo.
 
 ## Never Fix Bugs by Regressing Features
@@ -488,6 +490,7 @@ advisory, not a boundary.
 - Bind review/merge/closure to an exact SHA; re-read state first.
 - Prefer a follow-up commit to an amend on a watched branch.
 - Keep every commit review-ready.
+- Report PR existence and state from `gh pr list` / `gh pr view`, never from the session's last action: a session reported "no PR" for a branch after the owner had opened one (wiki-studio #78).
 
 Evidence, and the guard not adopted: #291.
 
