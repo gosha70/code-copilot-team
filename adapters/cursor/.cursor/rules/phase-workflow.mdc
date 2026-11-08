@@ -80,6 +80,28 @@ When existing functionality is removed or replaced during a phase (e.g., replaci
 
 11. **Peer review (if active).** If `CCT_PEER_REVIEW_ENABLED` is `true`, the Build agent must complete the review loop via `/review-submit` before running `/phase-complete`. The stop hook validates that `loop-summary.json` exists with PASS or approved bypass — it does not initiate review. Plan-phase review is advisory and single-round. See `review-loop.md` for the full protocol.
 
+## Opening a Pull Request (hand-opened PRs)
+
+The driver audits its own PRs with `scripts/pre-pr-check.sh`; nothing ran it
+for a PR opened from a session, and a closing verb in prose closes an issue
+on merge (wiki-studio #68 said "S5 closing #10 by restatement" in its body;
+merging it closed #10 three seconds later, though #10 was meant to close
+with build PR #74). For every PR opened from a session:
+
+1. **Before `gh pr create`**, run
+   `scripts/pre-pr-check.sh --closes <N>[,<N>] --title "<title>" --body-file <path>`
+   and run the exact `gh pr create` command it prints. It audits the body
+   and every commit message on the branch for close keywords that would
+   close an issue other than the ones named in `--closes`.
+2. **After opening**, run `gh pr view <n> --json closingIssuesReferences`
+   and confirm the list is exactly the issues this PR is meant to close.
+   Anything else means a stray keyword: edit the body (`gh api -X PATCH
+   repos/<owner>/<repo>/issues/<n> -F body=@<file>`) and re-check.
+3. **Writing about an issue a later PR must close**: no closing verb in
+   front of its number. Write "issue #10 is closed by a later PR" or
+   "leaves #10 open", never "closing #10", "fixes #10 by restatement" or
+   "does NOT close #10" — GitHub reads the verb, not the sentence.
+
 ## Autonomy Profiles (auto-build-loop)
 
 When a feature runs under `scripts/auto-build-loop.sh` (see

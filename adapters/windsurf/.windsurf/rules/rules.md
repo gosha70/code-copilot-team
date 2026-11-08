@@ -93,6 +93,7 @@ For a handoff from Claude Code or any other agent, explicitly classify the chang
 - Commit messages: imperative mood, concise summary, optional body explaining "why".
 - One logical change per commit — do not mix refactors with features.
 - Branch naming: feature/, fix/, chore/, docs/ prefixes.
+- **Close keywords close issues on merge, wherever they appear.** A closing verb before an issue number in a commit message or PR body (`closes`, `fixes`, `resolves` and their forms) closes that issue when the PR merges, in prose as much as in a footer, and negation does not help. Name only the issues the PR is meant to close with a closing verb; refer to any other as "issue #N" or "leaves #N open". Before opening a PR from a session, run `scripts/pre-pr-check.sh`; after opening, confirm `gh pr view <n> --json closingIssuesReferences` lists exactly the intended issues (see `phase-workflow`, "Opening a Pull Request").
 
 ## Project Structure Convention
 
