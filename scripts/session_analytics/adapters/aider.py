@@ -32,10 +32,12 @@ _log = logging.getLogger(__name__)
 COPILOT_ID = C.COPILOT_AIDER
 _HISTORY_NAME = ".aider.chat.history.md"
 #: Directories the history walk never descends into. The packaged root
-#: is the HOME directory, and an unpruned walk of it (dot-caches, every
-#: node_modules, ~/Library) took 88 s on the owner's laptop for one
-#: file — on every load and every listing. A project root, where aider
-#: writes its history, is never inside one of these.
+#: used to be the HOME directory, and an unpruned walk of it (dot-caches,
+#: every node_modules, ~/Library) took 88 s on the owner's laptop for one
+#: file — on every load and every listing. Since #402 the packaged
+#: default is no root at all: aider is scanned only under a declared
+#: root (`sources.aider` or CCT_SA_SOURCE_AIDER). The pruning stays for
+#: a declared root that is wider than one project.
 _SKIP_DIRS = frozenset({"node_modules", "Library"})
 _SESSION_RE = re.compile(r"^#\s*aider chat started at\s*(.*)$")
 _USER_PREFIX = "#### "

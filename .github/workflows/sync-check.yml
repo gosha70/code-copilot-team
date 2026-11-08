@@ -61,6 +61,13 @@ jobs:
       - name: Run peer-review runner tests
         run: bash tests/test-peer-review.sh
 
+      # The review runner checks a reviewer's test claim by running the
+      # test it names, and the node-id case needs pytest, which the runner
+      # does not ship. Without it that case would be skipped, and a skip
+      # counted as a pass is a number asserted, not observed (#406 review).
+      - name: Install pytest for the review runner's test-claim check
+        run: python3 -m pip install --quiet pytest
+
       - name: Run review loop integration tests
         run: bash tests/test-review-loop.sh
 

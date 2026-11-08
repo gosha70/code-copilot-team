@@ -174,7 +174,7 @@ Validation rules (see `scripts/validate-pitch.sh`):
 
 | Agent | Triggered by | What it does |
 |---|---|---|
-| `pitch-shaper` | `/shape` | Asks clarifying questions, produces a 3–7-scope pitch with appetite and circuit breaker. Sets `bet_status: shaped`. |
+| `pitch-shaper` | `/shape` | Lists open decisions for `/shape` to ask, produces a 3–7-scope pitch with appetite and circuit breaker. Sets `bet_status: shaped`. |
 | `scope-executor` | (manual or `/cycle-start` follow-up) | Reads pitch + hill.json, transitions a scope `uphill → downhill`, delegates implementation to the existing `build` agent. Thin adapter — no inlined build logic. |
 | `cycle-retro` | end of cycle | Parses `pitch.md`, `hill.json`, and `git log` to produce `specs/retros/cycle-NN.md`. Empty-case stub if no bets ran. |
 | `cooldown-report` | `/cooldown` | Summarizes bug fixes from `git log` + lists pitches shaped during cooldown. Recommends candidates for the next betting table. Writes `specs/retros/cooldown-after-NN.md`. |

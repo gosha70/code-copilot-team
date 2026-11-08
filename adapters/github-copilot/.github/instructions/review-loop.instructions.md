@@ -34,7 +34,7 @@ All review-loop artifacts live under `.cct/review/` during the active loop.
 | `decision.json` | `/review-decide` | Human's decision: approve, reject, or retry |
 | `loop-summary.json` | Runner (PASS) or agent (bypass) | Final record of all rounds |
 
-On loop completion, the completing actor copies `loop-summary.json` and writes a `build-review.md` artifact to `specs/<feature-id>/collaboration/`.
+On loop completion, the completing actor copies `loop-summary.json` and writes a `build-review.md` artifact to `specs/<feature-id>/collaboration/`. Under `auto-build-loop.sh` each phase's copy is also kept as `build-review-phase-<n>.md`, and a phase accepted through `/review-decide approve` is reported as bypassed, never as PASS (#404).
 
 ## Finding Schema
 
@@ -61,6 +61,10 @@ Each finding has a stable ID computed from `SHA-256(file + category + normalized
 | `blocking` | Yes | Yes — must set disposition |
 | `warning` | No | Optional |
 | `note` | No | No — informational |
+
+### Disputed Test Claims
+
+A `blocking` finding that **claims a failure** ("fails", "broken", "does not pass", …) and names a test — a pytest node id such as `tests/test_x.py::test_y`, or a test file under `tests/` or `test/`, or named `test_*`, `*_test`, `*.test.*`, `*.spec.*` — is checked by the runner before it counts: the runner runs that test in the project directory. A finding that names a test without claiming it fails ("lacks a case for …", "has no error handling") is not checked, and a script that merely starts with `test` outside a test directory is never run. A test that **passes** gets `test_claim: {reference, command, exit_code: 0, disputed: true}` on the finding; it stays in the record with the evidence but does not count toward the blocking total, and a FAIL verdict that rested only on disputed claims is recorded as PASS with `verdict_override: disputed_test_claims`. A test that fails, cannot be run, or is not a test file under the project leaves the finding as the reviewer wrote it. The next round's request shows the disputed claim and its result, and the auto-build fix prompt tells the fixer that a disputed finding does not block and is disposed `disputed` with that run as the evidence. `CCT_REVIEW_CHECK_TEST_CLAIMS=false` turns the check off; `CCT_REVIEW_CLAIM_TIMEOUT_SEC` (default 120) bounds one run.
 
 ## Disposition Values
 
