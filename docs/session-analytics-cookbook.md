@@ -265,12 +265,12 @@ cutoff falls on your own store:
 ```bash
 ./scripts/session-analytics gaps                             # both tables, as markdown
 ./scripts/session-analytics gaps --cutoff 7.5 --cutoff 15    # other cutoffs, in minutes
-./scripts/session-analytics gaps --include-noise --json
+./scripts/session-analytics gaps --exclude-noise --json
 ```
 
 It reads the store and writes nothing; a SQLite store is opened
-read-only. Like the dashboard, it leaves out the sessions §5.2 calls
-noise and says how many; `--include-noise` counts them. The first table
+read-only. Like `graph`, it counts every session; `--exclude-noise`
+leaves out the sessions §5.2 calls noise and says how many. The first table
 splits the gaps by the turn that ends them: a human message (a slash
 command or `!` command you typed counts), a tool result (a user turn
 whose timestamp matches a tool result's `completed_at` in the same
@@ -284,7 +284,9 @@ skipped and counted.
 
 The split is a diagnostic only: active time caps every gap, whatever
 ends it. A store ingested with no preview (`metadata-only` redaction)
-cannot spot harness-written turns, so they count as human.
+cannot spot harness-written turns, so they count as human. A store whose
+adapter records no `completed_at` cannot spot tool-result turns either,
+so those count as human too; the active hours are unaffected.
 
 ---
 

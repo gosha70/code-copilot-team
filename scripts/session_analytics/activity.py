@@ -120,19 +120,19 @@ def gap_report(
             by_kind[kind].append(seconds)
             every.append(seconds)
     keep_sql, keep_params = keep_clause(noise, "s") if noise else ("1=1", ())
-    row = db.query_one(
-        f"SELECT SUM(s.duration_seconds) FROM copilot_session s WHERE s.duration_seconds IS NOT NULL AND {keep_sql}",
+    session_count, wall_clock = db.query_one(
+        f"SELECT COUNT(*), SUM(s.duration_seconds) FROM copilot_session s WHERE {keep_sql}",
         keep_params,
-    )
+    ) or (0, None)
     human = by_kind[GAP_HUMAN]
     return {
-        "sessions": len(sessions),
+        "sessions": int(session_count or 0),
         "excluded_noise": count_noise_sessions(db, noise) if noise is not None else 0,
         "turns": turns,
         "gaps": len(every),
         "skipped_unstamped": unstamped,
         "skipped_negative": negative,
-        "wall_clock_seconds": float(row[0] or 0) if row else 0.0,
+        "wall_clock_seconds": float(wall_clock or 0),
         "kinds": {
             kind: {
                 "gaps": len(by_kind[kind]),
@@ -144,7 +144,7 @@ def gap_report(
         },
         "cutoffs": [
             {
-                "minutes": minutes,
+                "minutes": int(minutes) if float(minutes).is_integer() else minutes,
                 "active_seconds": active_seconds(every, minutes * 60),
                 "human_gaps_over": sum(1 for g in human if g > minutes * 60),
                 "human_gaps": len(human),
@@ -162,7 +162,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"Sample: {report['sessions']} sessions, {report['turns']:,} turns, {report['gaps']:,} gaps "
         f"({report['skipped_unstamped']} skipped for a missing stamp, {report['skipped_negative']} negative). "
         f"Wall clock: {report['wall_clock_seconds'] / 3600:,.1f} h."
-        + (f" Noise sessions left out: {excluded} (--include-noise counts them)." if excluded else ""),
+        + (f" Noise sessions left out: {excluded} (drop --exclude-noise to count them)." if excluded else ""),
         "",
     ]
     if not report["gaps"]:

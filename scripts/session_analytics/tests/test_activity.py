@@ -140,6 +140,22 @@ class TestGapReportOnAStore(_FixtureStore):
         self.assertLessEqual(report["cutoffs"][0]["active_seconds"], loose)
         self.assertLessEqual(loose, report["wall_clock_seconds"])
 
+    def test_a_session_with_no_turns_counts_in_the_sample_and_the_wall_clock_alike(self) -> None:
+        before = self._report()
+        db = Database.connect(self.dsn)
+        try:
+            db.execute(
+                "INSERT INTO copilot_session (copilot, session_id, duration_seconds) VALUES (?, ?, ?)",
+                (C.COPILOT_CLAUDE_CODE, "no-turns", 100),
+            )
+            db.commit()
+        finally:
+            db.close()
+        after = self._report()
+        self.assertEqual(after["sessions"], before["sessions"] + 1)
+        self.assertEqual(after["wall_clock_seconds"], before["wall_clock_seconds"] + 100)
+        self.assertEqual(after["gaps"], before["gaps"])
+
     def test_the_report_renders_both_tables(self) -> None:
         text = A.render_markdown(self._report([15]))
         self.assertIn("| gap ends at | gaps | p50 | p90 | p99 | max |", text)
@@ -154,25 +170,31 @@ class TestGapsCli(_FixtureStore):
         return code, out.getvalue()
 
     def test_prints_the_tables(self) -> None:
-        code, out = self._run(["gaps", "--db", self.dsn, "--cutoff", "5", "--cutoff", "15", "--include-noise"])
+        code, out = self._run(["gaps", "--db", self.dsn, "--cutoff", "5", "--cutoff", "15"])
         self.assertEqual(code, C.EXIT_OK)
         self.assertIn("| 5 min |", out)
         self.assertIn("| 15 min |", out)
 
     def test_json(self) -> None:
-        code, out = self._run(["gaps", "--db", self.dsn, "--json", "--include-noise"])
+        code, out = self._run(["gaps", "--db", self.dsn, "--json"])
         self.assertEqual(code, C.EXIT_OK)
         report = json.loads(out)
         self.assertEqual([c["minutes"] for c in report["cutoffs"]], [2, 5, 10, 15, 30])
         self.assertEqual((report["sessions"], report["excluded_noise"]), (1, 0))
 
-    def test_noise_is_left_out_by_default_and_says_so(self) -> None:
-        code, out = self._run(["gaps", "--db", self.dsn, "--json"])
+    def test_whole_minute_cutoffs_print_as_integers(self) -> None:
+        code, out = self._run(["gaps", "--db", self.dsn, "--json", "--cutoff", "5", "--cutoff", "7.5"])
+        self.assertEqual(code, C.EXIT_OK)
+        minutes = [c["minutes"] for c in json.loads(out)["cutoffs"]]
+        self.assertEqual([(m, type(m)) for m in minutes], [(5, int), (7.5, float)])
+
+    def test_exclude_noise_leaves_noise_out_and_says_so(self) -> None:
+        code, out = self._run(["gaps", "--db", self.dsn, "--json", "--exclude-noise"])
         self.assertEqual(code, C.EXIT_OK)
         report = json.loads(out)
         self.assertEqual((report["sessions"], report["gaps"], report["excluded_noise"]), (0, 0, 1))
-        code, out = self._run(["gaps", "--db", self.dsn])
-        self.assertIn("Noise sessions left out: 1 (--include-noise counts them).", out)
+        code, out = self._run(["gaps", "--db", self.dsn, "--exclude-noise"])
+        self.assertIn("Noise sessions left out: 1 (drop --exclude-noise to count them).", out)
 
     def test_a_cutoff_that_is_not_positive_is_a_usage_error(self) -> None:
         for value in ("0", "-5"):

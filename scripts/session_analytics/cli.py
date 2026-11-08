@@ -271,9 +271,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_gaps.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB).")
     p_gaps.add_argument("--cutoff", dest="cutoffs", type=float, action="append", default=None, metavar="MINUTES",
                         help="An idle cutoff in minutes (repeatable). Default: 2, 5, 10, 15 and 30.")
-    p_gaps.add_argument("--include-noise", action="store_true",
-                        help="Count the sessions the sessions.noise rule leaves out of the Studio "
-                             "(probe runs, temp dirs, too-short). Default: left out, like the dashboard.")
+    p_gaps.add_argument("--exclude-noise", action="store_true",
+                        help="Leave out sessions the sessions.noise rule excludes from the Studio "
+                             "(probe runs, temp dirs, too-short). Default: every session, like graph.")
     p_gaps.add_argument("--json", action="store_true", help="Print the report as JSON.")
 
     sub.add_parser(
@@ -1496,7 +1496,7 @@ def _cmd_gaps(args: argparse.Namespace) -> int:
     try:
         db = Database.connect(cfg.dsn, sqlite_mode=SQLITE_MODE_RO)
         try:
-            report = gap_report(db, cutoffs, noise=None if args.include_noise else cfg.noise)
+            report = gap_report(db, cutoffs, noise=cfg.noise if args.exclude_noise else None)
         finally:
             db.close()
     except Exception as exc:
