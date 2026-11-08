@@ -671,7 +671,7 @@ if [[ "$CURRENT_ROUND" -gt 0 ]]; then
     if [[ -f "$PREV_FINDINGS" ]]; then
         PRIOR_CONTEXT="## Prior Round Findings (Round $CURRENT_ROUND)
 
-$(jq -r '.findings[] | "- [\(.severity)] \(.id): \(.description) (file: \(.file))"' "$PREV_FINDINGS" 2>/dev/null || echo "(could not parse prior findings)")
+$(jq -r '.findings[] | "- [\(.severity)] \(.id): \(.description) (file: \(.file))" + (if .test_claim.disputed == true then " — DISPUTED: \(.test_claim.reference) passed (exit 0) when the runner ran it" else "" end)' "$PREV_FINDINGS" 2>/dev/null || echo "(could not parse prior findings)")
 "
     fi
     if [[ -f "$PREV_RESOLUTION" ]]; then
@@ -1047,11 +1047,95 @@ if [[ "$ROUND_VALID" == "true" ]]; then
     done < <(echo "$REVIEW_OUTPUT" | grep '^FINDING|')
 fi
 
-BLOCKING_COUNT=$(echo "$FINDINGS_JSON" | jq '[.[] | select(.severity == "blocking")] | length')
+# ── Test-claim check (#406) ──────────────────────────────────
+# A blocking finding that names a test as failing is checked by RUNNING
+# that test before it counts. wiki-studio 0.8.1 phase 2 parked on a
+# reviewer's claim that a page test failed against memkernel 0.6.0; the
+# test passed (6 passed) and the human bypass cost 45 minutes. A test
+# that passes marks the finding `test_claim.disputed = true`: it stays in
+# the record with the evidence but does not block. Anything else — the
+# test fails, cannot be run, or the reference is not a test file under
+# the project — leaves the finding exactly as the reviewer wrote it.
+# CCT_REVIEW_CHECK_TEST_CLAIMS=false turns the check off.
+check_test_claim() {
+    # check_test_claim <file> <line_hint> <description>
+    # Prints {reference, command, exit_code, disputed, output_tail} or nothing.
+    local text="$1 $2 $3" ref="" cmd=()
+    # Only a finding that CLAIMS a failure is checked. "tests/x.sh lacks a
+    # case for Y" names a test and claims nothing a run could contradict;
+    # neither does "has no error handling" — "error" counts only as a
+    # verb or an outcome ("errors out", "raises an error").
+    printf '%s' "$text" | grep -qiE '\b(fail(s|ed|ing|ure)?|broken|red|regress(es|ed|ion)?|errors? out|errored|(raises|throws|hits) (an? )?(error|exception)|does not pass|doesn.t pass|no longer pass(es)?)\b' \
+        || return 0
+    # A pytest node id first: path.py::name (brackets allowed for parametrized ids).
+    ref=$(printf '%s' "$text" | grep -oE '[A-Za-z0-9_./-]+\.py::[][A-Za-z0-9_:.-]+' | head -1 || true)
+    if [[ -n "$ref" ]]; then
+        cmd=(python3 -m pytest -q -p no:cacheprovider "$ref")
+    else
+        ref=$(printf '%s' "$text" | grep -oE '[A-Za-z0-9_./-]*(test[A-Za-z0-9_-]*\.(py|sh|mjs)|[A-Za-z0-9_-]+\.(test|spec)\.(mjs|js))' | head -1 || true)
+        [[ -n "$ref" ]] || return 0
+        case "$ref" in
+            *.py) cmd=(python3 -m pytest -q -p no:cacheprovider "$ref") ;;
+            *.sh) cmd=(bash "$ref") ;;
+            *)    cmd=(node --test "$ref") ;;
+        esac
+    fi
+    local path="${ref%%::*}"
+    # Inside the project only: no absolute paths, no parent escapes. And
+    # only a TEST file: under a test(s)/ directory, or named test_*, *_test
+    # or *.test/*.spec — never any script that happens to start with "test".
+    case "$path" in /*|*..*) return 0 ;; esac
+    case "/$path" in
+        */tests/*|*/test/*|*/test_*|*_test.*|*.test.*|*.spec.*) ;;
+        *) return 0 ;;
+    esac
+    [[ -f "$PROJECT_DIR/$path" ]] || return 0
+    local rc=0 out
+    if command -v timeout >/dev/null 2>&1; then
+        out=$(cd "$PROJECT_DIR" && timeout "${CCT_REVIEW_CLAIM_TIMEOUT_SEC:-120}" "${cmd[@]}" 2>&1) || rc=$?
+    else
+        out=$(cd "$PROJECT_DIR" && "${cmd[@]}" 2>&1) || rc=$?
+    fi
+    jq -n --arg ref "$ref" --arg cmd "${cmd[*]}" --argjson rc "$rc" \
+        --arg tail "$(printf '%s' "$out" | tail -5)" \
+        '{reference: $ref, command: $cmd, exit_code: $rc, disputed: ($rc == 0), output_tail: $tail}'
+}
+
+VERDICT_OVERRIDE=""
+if [[ "${CCT_REVIEW_CHECK_TEST_CLAIMS:-true}" != "false" && "$FINDINGS_JSON" != "[]" ]]; then
+    CHECKED_JSON="[]"
+    while IFS= read -r _finding; do
+        [[ -n "$_finding" ]] || continue
+        _claim=""
+        if [[ "$(jq -r '.severity' <<<"$_finding")" == "blocking" ]]; then
+            _claim=$(check_test_claim "$(jq -r '.file' <<<"$_finding")" \
+                                      "$(jq -r '.line_hint' <<<"$_finding")" \
+                                      "$(jq -r '.description' <<<"$_finding")")
+        fi
+        if [[ -n "$_claim" ]]; then
+            _finding=$(jq --argjson c "$_claim" '. + {test_claim: $c}' <<<"$_finding")
+            if [[ "$(jq -r '.disputed' <<<"$_claim")" == "true" ]]; then
+                echo "[review-round-runner] finding $(jq -r '.id' <<<"$_finding") claims $(jq -r '.reference' <<<"$_claim") fails; it passed when run — marked disputed, not blocking (#406)" >&2
+            fi
+        fi
+        CHECKED_JSON=$(jq --argjson f "$_finding" '. + [$f]' <<<"$CHECKED_JSON")
+    done < <(jq -c '.[]' <<<"$FINDINGS_JSON")
+    FINDINGS_JSON="$CHECKED_JSON"
+fi
+
+BLOCKING_COUNT=$(echo "$FINDINGS_JSON" | jq '[.[] | select(.severity == "blocking" and ((.test_claim.disputed // false) | not))] | length')
+DISPUTED_COUNT=$(echo "$FINDINGS_JSON" | jq '[.[] | select(.test_claim.disputed == true)] | length')
 
 # If there are blocking findings and verdict was PASS, override to FAIL
 if [[ "$BLOCKING_COUNT" -gt 0 && "$VERDICT" == "PASS" ]]; then
     VERDICT="FAIL"
+fi
+# A FAIL that rested only on disputed test claims has no open blocking
+# finding; it is recorded as PASS with the evidence beside it (#406).
+if [[ "$VERDICT" == "FAIL" && "$BLOCKING_COUNT" -eq 0 && "$DISPUTED_COUNT" -gt 0 ]]; then
+    echo "[review-round-runner] verdict FAIL rested on $DISPUTED_COUNT disputed test claim(s) and nothing else — recorded as PASS (#406)" >&2
+    VERDICT_OVERRIDE="disputed_test_claims"
+    VERDICT="PASS"
 fi
 
 # ── Write findings-round-N.json ──────────────────────────────
@@ -1083,9 +1167,11 @@ if ! jq -n \
     --arg perr "${PROVIDER_ERROR:-}" \
     --argjson pexit "${REVIEW_EXIT:-0}" \
     --arg fb_from "${FALLBACK_FROM:-}" --arg fb_err "${FALLBACK_ERROR:-}" --arg fb_cost "${FALLBACK_COST:-}" \
+    --arg vo "${VERDICT_OVERRIDE:-}" \
     '{round: $round, verdict: $verdict, reviewer_provider: $provider,
       invocation_cost_usd: (if ($cost | length) > 0 then ($cost | tonumber) else null end),
       findings: $findings, raw_output: $raw_output}
+     + (if ($vo | length) > 0 then {verdict_override: $vo} else {} end)
      + (if ($perr | length) > 0
         then {provider_error: {exit_code: $pexit, message: $perr}}
         else {} end)

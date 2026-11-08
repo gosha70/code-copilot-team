@@ -374,6 +374,16 @@ try {
   } else {
     console.log("  ok  median agent response carries measured-n and p90");
   }
+  // #414: the basis sentence the API returns is printed, not swallowed.
+  const latBasis = render(cards.LatencyStat, {
+    data: { measured_turns: 12, p50: 3, p90: 11.5, max: 54, sessions: 4, by_copilot: [], basis: "seconds from the previous turn to each assistant turn" },
+    error: null,
+  });
+  if (!/seconds from the previous turn to each assistant turn/.test(latBasis)) {
+    fail("latency stat drops the basis sentence the API returned");
+  } else {
+    console.log("  ok  median agent response prints its basis");
+  }
   const latEmpty = render(cards.LatencyStat, {
     data: { measured_turns: 0, p50: null, p90: null, max: null, sessions: 0, by_copilot: [], basis: "" },
     error: null,
@@ -764,7 +774,18 @@ try {
   else if (!/2\.2× the project median/.test(head) || !/1\.0 per 100 turns/.test(head) || !/above its p90/.test(head)) fail("tile notes missing");
   else if (!/14 other sessions of this project/.test(head) || !/no priced turns/.test(head)) fail("baseline fact or cost note missing");
   else if (!/<dt[^>]*>Started<\/dt>/.test(head) || !/<dt[^>]*>Session id<\/dt>/.test(head) || !/>abc</.test(head)) fail("labelled facts (Started, Session id) missing");
-  else console.log("  ok  header: project title, badges, five tiles with comparisons");
+  else if (!/wall clock, first entry to last/.test(head)) fail("the Duration tile does not state what it measures (#414)");
+  else console.log("  ok  header: project title, badges, five tiles with comparisons, duration defined");
+  // The Overview's "Avg duration" tile and the Benchmark column live on
+  // pages that fetch, which this check does not render; their notes are
+  // checked at the source: the Overview builds its note from
+  // DURATION_BASIS and the Benchmark header carries the definition
+  // (review of PR #423).
+  const overviewSrc = readFileSync(join(STUDIO, "app/page.tsx"), "utf8");
+  const benchSrc = readFileSync(join(STUDIO, "app/benchmark/page.tsx"), "utf8");
+  if (!/label="Avg duration"[\s\S]{0,300}\$\{DURATION_BASIS\}/.test(overviewSrc)) fail("source: the Overview's Avg duration note is not built from DURATION_BASIS (#414)");
+  else if (!/title="wall clock, first entry to last[^"]*"[\s\S]{0,120}Avg session duration/.test(benchSrc)) fail("source: the Benchmark duration column does not state what it measures (#414)");
+  else console.log("  ok  source: the Overview and Benchmark duration notes carry the definition");
   const bare = render(sh.default, { data: { ...detail, project_path: null, model: null, started_at: null, duration_seconds: null }, baseline: null });
   if (!/no project path/.test(bare) || !/too few sessions of this project/.test(bare) || /×/.test(bare)) fail("header without a project/baseline still claims a comparison");
   else console.log("  ok  no project path / no baseline: nothing compared, nothing invented");

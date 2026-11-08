@@ -61,6 +61,13 @@ jobs:
       - name: Run peer-review runner tests
         run: bash tests/test-peer-review.sh
 
+      # The review runner checks a reviewer's test claim by running the
+      # test it names, and the node-id case needs pytest, which the runner
+      # does not ship. Without it that case would be skipped, and a skip
+      # counted as a pass is a number asserted, not observed (#406 review).
+      - name: Install pytest for the review runner's test-claim check
+        run: python3 -m pip install --quiet pytest
+
       - name: Run review loop integration tests
         run: bash tests/test-review-loop.sh
 
@@ -153,6 +160,12 @@ jobs:
       # real parser field for field (#214 Phase 5.1).
       - name: cct CLI tests
         run: bash tests/test-cct-cli.sh
+
+      # pre-pr-check.sh audits a PR's commits, body and title for close
+      # keywords; `--closes none` is the mode for a PR that closes nothing
+      # (#408). The suite drives it against a throwaway repository.
+      - name: pre-pr-check tests
+        run: bash tests/test-pre-pr-check.sh
 
       # shared/capabilities/COMPATIBILITY.md is a deterministic render of the
       # capability registry. Until #214 Phase 2.0 this check ran only on

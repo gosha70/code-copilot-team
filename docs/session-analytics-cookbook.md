@@ -86,7 +86,7 @@ Precedence, lowest to highest: packaged defaults → `~/.cct/session-analytics.j
 |---|---|---|
 | `CCT_SA_KUZU_PATH` | Where the Kùzu graph for the Graph tab lives. A directory such as `~/.cct` works: the store file `session-analytics-graph` is created inside it. A file path is used as given. | `~/.cct/session-analytics-graph` |
 | `CCT_SA_REDACTION` | What is stripped before anything is written: `none`, `code` (strip code blocks and tool inputs, keep prose), `metadata-only` (no text at all). | `code` |
-| `CCT_SA_SOURCE_CLAUDE_CODE`, `CCT_SA_SOURCE_AIDER` | Where each assistant keeps its transcripts. | `~/.claude/projects`, `~` |
+| `CCT_SA_SOURCE_CLAUDE_CODE`, `CCT_SA_SOURCE_AIDER` | Where each assistant keeps its transcripts. Aider has no default: it writes `.aider.chat.history.md` into each project, so declare the directory that holds your aider projects (the old default, `~`, scanned the whole home directory on every load). | `~/.claude/projects`, unset |
 | `CCT_SA_JUDGE_BACKEND` / `CCT_SA_JUDGE_MODEL` | The judge for every copilot: `ollama` (local), `claude-code` (the `claude` CLI on your PATH), or `openai` (any OpenAI-compatible endpoint: LM Studio, vLLM, OpenAI, Azure). Empty model = the backend's default. | `ollama`, `` |
 | `CCT_SA_OLLAMA_URL` | Ollama's address. | `http://localhost:11434` |
 | `CCT_SA_JUDGE_BASE_URL`, `CCT_SA_JUDGE_API_KEY` | For the `openai` backend only. | |
@@ -234,7 +234,8 @@ and aggregate in the Studio leaves them out by default, and says so: the
 Overview's Sessions stat, the Sessions page's **Show excluded (n)**
 toggle and the Analysis pipeline funnel all show the same excluded count. A
 session is noise when it has fewer than `min_turns` turns, lasted under
-`min_duration_seconds`, or its path contains one of `path_patterns`.
+`min_duration_seconds` (wall clock, first entry to last — the same figure
+the session header shows), or its path contains one of `path_patterns`.
 Benchmark-linked sessions are never noise. This is decided at query
 time, so changing the thresholds needs no re-ingest. Opening a session
 by id and the judge always see everything; Ask follows the pages —

@@ -429,7 +429,7 @@ def session_facts(db: Database, session_id: int, transcript: Transcript) -> str:
     lines = [
         f"copilot: {copilot}; model: {model or 'unknown'}; project: {project}",
         f"turns: {turns}; tool calls: {tools}; errors: {errors}; "
-        f"duration: {_fmt_duration(duration)}; cost: "
+        f"duration (wall clock, first entry to last): {_fmt_duration(duration)}; cost: "
         + (f"${float(cost):.2f}" if cost is not None else "not priced"),
     ]
     # The harness the session ran under (#371 A4): stamped by the copilot

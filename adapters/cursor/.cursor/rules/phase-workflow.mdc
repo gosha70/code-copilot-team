@@ -80,6 +80,37 @@ When existing functionality is removed or replaced during a phase (e.g., replaci
 
 11. **Peer review (if active).** If `CCT_PEER_REVIEW_ENABLED` is `true`, the Build agent must complete the review loop via `/review-submit` before running `/phase-complete`. The stop hook validates that `loop-summary.json` exists with PASS or approved bypass — it does not initiate review. Plan-phase review is advisory and single-round. See `review-loop.md` for the full protocol.
 
+## Opening a Pull Request (hand-opened PRs)
+
+The driver audits its own PRs with `scripts/pre-pr-check.sh`; nothing ran it
+for a PR opened from a session, and a close keyword in prose closes an issue
+on merge. GitHub fires on nine forms, case-insensitive — `close`, `closes`,
+`closed`, `fix`, `fixes`, `fixed`, `resolve`, `resolves`, `resolved` — each
+followed by `#N`; the script and the developer cookbook check exactly that
+set. A wiki-studio PR whose body discussed an issue in prose auto-closed it
+on merge, three seconds after the merge, though the issue was meant to stay
+open for a later build PR: whatever the writer meant, the parser read a
+keyword. For every PR opened from a session:
+
+1. **Before `gh pr create`**, run
+   `scripts/pre-pr-check.sh --closes <N>[,<N>] --title "<title>" --body-file <path>`
+   and run the exact `gh pr create` command it prints. It audits the body
+   and every commit message on the branch for close keywords that would
+   close an issue other than the ones named in `--closes`. A PR that
+   closes nothing (docs, chores, one slice of a larger issue) runs it with
+   `--closes none`: every keyword match then fails, and the title carries
+   no `(Closes #N)` marker.
+2. **After opening**, run `gh pr view <n> --json closingIssuesReferences`
+   and confirm the list is exactly the issues this PR is meant to close.
+   Anything else means a stray keyword: edit the body (`gh api -X PATCH
+   repos/<owner>/<repo>/issues/<n> -F body=@<file>`) and re-check.
+3. **Writing about an issue a later PR must close**: none of the nine
+   forms in front of its number, in a commit message or in the body. Write
+   "leaves #N open" or "#N is closed by a later PR" (the number first),
+   never "fixes #N by restatement" or "does NOT close #N" — negation does
+   not help, and neither do backticks. Do not lean on a verb form being
+   outside the set; rephrase so no verb precedes `#N`.
+
 ## Autonomy Profiles (auto-build-loop)
 
 When a feature runs under `scripts/auto-build-loop.sh` (see

@@ -32,7 +32,8 @@
     "'sessions.noise': what the Studio and the dashboard EXCLUDE by default at",
     "query time (never at ingest, so the thresholds can change without a",
     "re-ingest): sessions shorter than min_turns, shorter than",
-    "min_duration_seconds, or whose project path contains one of path_patterns",
+    "min_duration_seconds (wall clock, first entry to last), or whose project",
+    "path contains one of path_patterns",
     "(probe runs in temp dirs). Session-by-id, trace search and the judge",
     "always see every session."
   ],
@@ -134,7 +135,7 @@
     "top_k": 5
   },
   "sources": {
-    "aider": "~",
+    "aider": null,
     "claude-code": "~/.claude/projects"
   },
   "team": {

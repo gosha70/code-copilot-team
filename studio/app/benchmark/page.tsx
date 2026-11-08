@@ -163,7 +163,12 @@ export default function BenchmarkPage() {
                   <th className="py-2 pr-4 font-medium text-right">Attempts</th>
                   <th className="py-2 pr-4 font-medium text-right">Linked sessions</th>
                   <th className="py-2 pr-4 font-medium text-right">Total linked cost</th>
-                  <th className="py-2 font-medium text-right">Avg session duration</th>
+                  <th
+                    className="py-2 font-medium text-right"
+                    title="wall clock, first entry to last, averaged over the linked sessions"
+                  >
+                    Avg session duration
+                  </th>
                 </tr>
               </thead>
               <tbody>

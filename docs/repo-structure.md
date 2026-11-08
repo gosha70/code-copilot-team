@@ -44,15 +44,15 @@ code-copilot-team/
 ├── tests/
 │   ├── test-hooks.sh                    196 hook tests
 │   ├── test-generate.sh                 322 generation + adapter tests
-│   ├── test-shared-structure.sh         838 structure + content tests
+│   ├── test-shared-structure.sh         839 structure + content tests
 │   ├── test-sync.sh                     126 sync + init metadata tests
 │   ├── test-litellm-proxy-deps.sh       13 benchmark proxy pin tests (+11 with --online)
 │   ├── test-coverage-parse.sh           46 coverage parser + safety tests
 │   ├── test-verification-preset.sh      43 preset resolution tests
 │   ├── test-peer-review.sh             94 peer-review runner tests
-│   ├── test-review-loop.sh           213 review loop integration tests
+│   ├── test-review-loop.sh           237 review loop integration tests
 │   ├── test-setup-reviewer.sh           42 copilot reviewer installer tests
-│   ├── test-auto-build-loop.sh        1250 auto-build driver tests
+│   ├── test-auto-build-loop.sh        1279 auto-build driver tests
 │   ├── test-ui-harness.sh              87 visual-harness contract tests
 │   ├── test-routing-config.sh         365 execution-profile registry + result + cli tests
 │   ├── test-routing-failover.sh       227 circuit + action + selection + supervisor + identity tests (#251 B)
@@ -60,7 +60,8 @@ code-copilot-team/
 │   ├── test-routing-packet.sh          99 immutable delegation-packet tests (#254 C T2)
 │   ├── test-routing-delegation.sh     180 route-class + packet execution + reconciliation tests (#254 C T3-T5)
 │   ├── test-routing-recovery.sh       375 probe-state + timing + probe + tick-wake tests (#257 D)
-│   └── test-claude-code-launcher.sh   33 branded-launcher + cct shim tests (#195, #410)
+│   ├── test-pre-pr-check.sh           11 close-keyword audit tests (#408)
+│   └── test-claude-code-launcher.sh   39 branded-launcher + cct shim + gateway notice tests (#195, #410, #399)
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification
 ├── README.md
