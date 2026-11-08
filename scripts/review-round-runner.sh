@@ -1062,8 +1062,10 @@ check_test_claim() {
     # Prints {reference, command, exit_code, disputed, output_tail} or nothing.
     local text="$1 $2 $3" ref="" cmd=()
     # Only a finding that CLAIMS a failure is checked. "tests/x.sh lacks a
-    # case for Y" names a test and claims nothing a run could contradict.
-    printf '%s' "$text" | grep -qiE '\b(fail(s|ed|ing|ure)?|broken|red|regress(es|ed|ion)?|error(s|ed)?|does not pass|doesn.t pass|no longer pass(es)?)\b' \
+    # case for Y" names a test and claims nothing a run could contradict;
+    # neither does "has no error handling" — "error" counts only as a
+    # verb or an outcome ("errors out", "raises an error").
+    printf '%s' "$text" | grep -qiE '\b(fail(s|ed|ing|ure)?|broken|red|regress(es|ed|ion)?|errors? out|errored|(raises|throws|hits) (an? )?(error|exception)|does not pass|doesn.t pass|no longer pass(es)?)\b' \
         || return 0
     # A pytest node id first: path.py::name (brackets allowed for parametrized ids).
     ref=$(printf '%s' "$text" | grep -oE '[A-Za-z0-9_./-]+\.py::[][A-Za-z0-9_:.-]+' | head -1 || true)

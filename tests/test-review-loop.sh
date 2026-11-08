@@ -1833,12 +1833,32 @@ assert_eq "#406: ...recording the node id it ran" "tests/test_claim.py::test_ok"
     "$(jq -r '.findings[0].test_claim.reference' "$P/.cct/review/findings-round-1.json")"
 rm -rf "$P"; rm -f "$NODE_PROFILE"
 else
-    # CI has python3 but no pytest. The two assertions above are counted
-    # as passes so the suite's pinned total holds, as the hooks suite does
-    # for its detached-HEAD skip; the case runs wherever pytest exists.
-    echo "  SKIP: pytest not available — node-id claim case not run (counting its 2 assertions as pass)"
-    PASS=$((PASS + 2))
+    # pytest is required: the node-id path is proven only by running it.
+    # CI installs pytest (sync-check.yml); a host without it fails here
+    # instead of counting assertions it never ran (review of PR #418).
+    echo "  FAIL: pytest not available — the node-id claim case cannot run (python3 -m pip install pytest)"
+    FAIL=$((FAIL + 1))
 fi
+
+# (h) "error" alone is not a failure claim (review of PR #418: "has no
+#     error handling" names a test and claims nothing a run contradicts)
+NOERR_PROFILE=$(mktemp)
+cat > "$NOERR_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "printf '### Summary\nGap.\n\n### Findings\nFINDING|blocking|testing|tests/test_claim.sh|whole file|tests/test_claim.sh has no error handling for a missing fixture|Add it\n\n### Verdict\nFAIL\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); write_state "$P" 0
+add_claim_test "$P" 0
+RC=0; OUTPUT=$(CCT_PROVIDER_PROFILE="$NOERR_PROFILE" bash "$RUNNER" "$P" 2>&1) || RC=$?
+assert_exit "#406: 'has no error handling' is not a failure claim — the finding blocks (exit 1)" 1 "$RC"
+assert_eq "#406: ...and nothing is run for it" "null" \
+    "$(jq -r '.findings[0].test_claim' "$P/.cct/review/findings-round-1.json")"
+rm -rf "$P"; rm -f "$NOERR_PROFILE"
 rm -f "$CLAIM_PROFILE"
 
 # Summary

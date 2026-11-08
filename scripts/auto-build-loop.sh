@@ -4370,6 +4370,10 @@ compose_fix_prompt() {
         echo "- Write .cct/review/resolution-round-$round.json listing each finding id"
         echo "  with a disposition: fixed | disputed | deferred | not-applicable and a"
         echo "  short rationale. Leave commit_ref fields empty — the driver fills them."
+        echo "- A finding with test_claim.disputed = true names a test the runner RAN;"
+        echo "  it passed (exit 0; see test_claim.command). It does not block. Do not"
+        echo "  change code to satisfy it — dispose it 'disputed' citing that run,"
+        echo "  unless you find a real defect behind the claim."
         echo
         echo "## Findings (JSON)"
         # raw_output — the reviewer's full transcript, routinely >1MB — is already

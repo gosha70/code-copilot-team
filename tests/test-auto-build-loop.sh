@@ -4356,6 +4356,8 @@ assert_eq "#234: the fix prompt keeps the finding id" "present" \
     "$(grep -q '"F1"' "$P/fix-prompt.txt" && echo present || echo absent)"
 assert_eq "#234: the fix prompt keeps the suggested fix" "present" \
     "$(grep -q 'Clean them' "$P/fix-prompt.txt" && echo present || echo absent)"
+assert_eq "#406: the fix prompt tells the fixer what a disputed test claim means" "present" \
+    "$(grep -q 'test_claim.disputed = true' "$P/fix-prompt.txt" && echo present || echo absent)"
 assert_eq "#234: findings-round-N.json still retains the transcript" "retained" \
     "$([[ "$(jq -r '.raw_output | length' "$P/findings.json")" -gt 1000000 ]] && echo retained || echo truncated)"
 assert_eq "#234: the fix prompt is far smaller than the findings file" "smaller" \
