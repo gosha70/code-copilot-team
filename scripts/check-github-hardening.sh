@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # check-github-hardening.sh — Verify baseline GitHub repository hardening.
 #
+# Reads whichever protection source the branch has: classic branch
+# protection, or the rulesets that apply to it (GET /rules/branches/<b>).
+# This repository protects master with a ruleset, and the classic-only
+# version of this audit reported "no branch protection" against it.
+#
 # Checks:
-#   - Branch protection exists on target branch
+#   - Branch protection exists on target branch (classic or ruleset)
 #   - Required status checks include the expected CI check
 #   - Code owner review is required
 #   - At least one approving review is required
@@ -130,6 +135,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 require_cmd gh
+require_cmd jq
 
 if [[ -z "$REPO" ]]; then
   REPO="$(gh repo view --json nameWithOwner --jq '.nameWithOwner')"
@@ -169,26 +175,66 @@ echo "Branch: $BRANCH"
 echo "Checks: $REQUIRED_CHECKS_CSV"
 echo ""
 
+# Protection source: classic branch protection first; else the rules that
+# apply to the branch through rulesets. A branch can have both; classic
+# is read when present because it is the stricter, older contract.
+SOURCE=""
+RULES_JSON="[]"
 if gh api "/repos/$REPO/branches/$BRANCH/protection" >/dev/null 2>&1; then
-  pass_check "branch protection exists"
+  SOURCE="classic"
 else
-  fail_check "branch protection exists"
+  RULES_JSON="$(gh api "/repos/$REPO/rules/branches/$BRANCH" 2>/dev/null || echo '[]')"
+  if [[ "$(jq 'length' <<<"$RULES_JSON" 2>/dev/null || echo 0)" -gt 0 ]]; then
+    SOURCE="ruleset"
+  fi
+fi
+
+if [[ -z "$SOURCE" ]]; then
+  fail_check "branch protection exists (no classic protection and no ruleset applies to '$BRANCH')"
   echo ""
   echo "========================================="
   printf "  Results: %d passed, %d failed\n" "$pass" "$fail"
   echo "========================================="
   exit 1
 fi
+pass_check "branch protection exists (source: $SOURCE)"
 
-strict_checks="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq '.required_status_checks.strict')"
-checks_csv="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq '.required_status_checks.contexts | join(",")')"
-require_code_owner_reviews="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq '.required_pull_request_reviews.require_code_owner_reviews')"
-required_approvals="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq '.required_pull_request_reviews.required_approving_review_count')"
-require_conversation_resolution="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq '.required_conversation_resolution.enabled')"
-require_linear_history="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq '.required_linear_history.enabled')"
-enforce_admins="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq '.enforce_admins.enabled')"
-allow_force_pushes="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq '.allow_force_pushes.enabled')"
-allow_deletions="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq '.allow_deletions.enabled')"
+if [[ "$SOURCE" == "classic" ]]; then
+  strict_checks="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq '.required_status_checks.strict')"
+  checks_csv="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq '.required_status_checks.contexts | join(",")')"
+  require_code_owner_reviews="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq '.required_pull_request_reviews.require_code_owner_reviews')"
+  required_approvals="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq '.required_pull_request_reviews.required_approving_review_count')"
+  require_conversation_resolution="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq '.required_conversation_resolution.enabled')"
+  require_linear_history="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq '.required_linear_history.enabled')"
+  enforce_admins="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq '.enforce_admins.enabled')"
+  allow_force_pushes="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq '.allow_force_pushes.enabled')"
+  allow_deletions="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq '.allow_deletions.enabled')"
+else
+  # Ruleset rules: one object per rule type. The pull_request and
+  # required_status_checks rules carry parameters; non_fast_forward,
+  # deletion and required_linear_history are present-or-absent.
+  pr_rule="$(jq -c '[.[] | select(.type == "pull_request")][0] // {}' <<<"$RULES_JSON")"
+  sc_rule="$(jq -c '[.[] | select(.type == "required_status_checks")][0] // {}' <<<"$RULES_JSON")"
+  strict_checks="$(jq -r '.parameters.strict_required_status_checks_policy // false' <<<"$sc_rule")"
+  checks_csv="$(jq -r '[.parameters.required_status_checks[]?.context] | join(",")' <<<"$sc_rule")"
+  require_code_owner_reviews="$(jq -r '.parameters.require_code_owner_review // false' <<<"$pr_rule")"
+  required_approvals="$(jq -r '.parameters.required_approving_review_count // 0' <<<"$pr_rule")"
+  require_conversation_resolution="$(jq -r '.parameters.required_review_thread_resolution // false' <<<"$pr_rule")"
+  require_linear_history="$(jq -r 'any(.[]; .type == "required_linear_history")' <<<"$RULES_JSON")"
+  allow_force_pushes="$(jq -r 'any(.[]; .type == "non_fast_forward") | not' <<<"$RULES_JSON")"
+  allow_deletions="$(jq -r 'any(.[]; .type == "deletion") | not' <<<"$RULES_JSON")"
+  # "Admins are subject": no ruleset that contributes a rule to this
+  # branch grants a bypass. Each is named so the owner can see which.
+  enforce_admins="true"
+  for ruleset_id in $(jq -r '[.[].ruleset_id] | unique | .[]' <<<"$RULES_JSON"); do
+    bypass_count="$(gh api "/repos/$REPO/rulesets/$ruleset_id" --jq '.bypass_actors | length' 2>/dev/null || echo "?")"
+    ruleset_name="$(gh api "/repos/$REPO/rulesets/$ruleset_id" --jq '.name' 2>/dev/null || echo "?")"
+    if [[ "$bypass_count" != "0" ]]; then
+      enforce_admins="false"
+      echo "  INFO: ruleset $ruleset_id ($ruleset_name) has $bypass_count bypass actor(s)"
+    fi
+  done
+fi
 
 assert_true "strict status checks enabled" "$strict_checks"
 assert_true "code owner reviews required" "$require_code_owner_reviews"
@@ -200,7 +246,7 @@ assert_false "force pushes blocked" "$allow_force_pushes"
 assert_false "branch deletions blocked" "$allow_deletions"
 
 for required_check in "${REQUIRED_CHECKS[@]}"; do
-  has_required_check="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq ".required_status_checks.contexts | index(\"$required_check\") != null")"
+  has_required_check="$(jq -rn --arg csv "$checks_csv" --arg c "$required_check" '$csv | split(",") | index($c) != null')"
   assert_true "required check '$required_check' configured" "$has_required_check"
 done
 
