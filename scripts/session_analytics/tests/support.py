@@ -7,12 +7,26 @@
 from __future__ import annotations
 
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator, Mapping, Optional
+from unittest import mock
 
 from session_analytics._register import unregister_all_for_tests
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 CLAUDE_CODE_ROOT = FIXTURES / "claude_code"
+NO_USER_CONFIG = Path("/nonexistent/session-analytics.json")
+
+
+@contextmanager
+def packaged_config(env: Optional[Mapping[str, str]] = None) -> Iterator[None]:
+    from session_analytics import config as cfgmod
+
+    with mock.patch.object(cfgmod, "_USER_CONFIG", NO_USER_CONFIG), \
+         mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+         mock.patch.dict("os.environ", dict(env or {})):
+        yield
 
 
 class RegistryResetTestCase(unittest.TestCase):
