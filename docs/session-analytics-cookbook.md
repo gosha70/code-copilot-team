@@ -263,18 +263,22 @@ consecutive turns, each gap capped at an idle cutoff. To see where a
 cutoff falls on your own store:
 
 ```bash
-./scripts/session-analytics gaps                      # both tables, as markdown
-./scripts/session-analytics gaps --cutoffs 5,10,15    # other cutoffs, in minutes
-./scripts/session-analytics gaps --json
+./scripts/session-analytics gaps                             # both tables, as markdown
+./scripts/session-analytics gaps --cutoff 7.5 --cutoff 15    # other cutoffs, in minutes
+./scripts/session-analytics gaps --include-noise --json
 ```
 
 It reads the store and writes nothing; a SQLite store is opened
-read-only. The first table splits the gaps by the turn that ends them: a
-human message, a tool result (a user turn whose timestamp matches a tool
-result's `completed_at` in the same session), an assistant turn, or a
-user turn the harness wrote itself (task notifications, system
-reminders, command output, the compaction summary). The second gives the
-active hours at each cutoff and how many human gaps run past it. A gap
+read-only. Like the dashboard, it leaves out the sessions §5.2 calls
+noise and says how many; `--include-noise` counts them. The first table
+splits the gaps by the turn that ends them: a human message (a slash
+command or `!` command you typed counts), a tool result (a user turn
+whose timestamp matches a tool result's `completed_at` in the same
+session), an assistant turn, or a user turn the harness wrote itself
+(task notifications, system reminders, command output, the compaction
+summary). The second gives the active hours at each cutoff and how many
+human gaps run past it. Gaps, the stamps they read and the percentiles
+follow the same rules as the response-time card (`mcp.tools`): a gap
 that touches a turn without a timestamp, or that runs backwards, is
 skipped and counted.
 

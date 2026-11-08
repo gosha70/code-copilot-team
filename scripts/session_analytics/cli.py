@@ -269,8 +269,11 @@ def _build_parser() -> argparse.ArgumentParser:
              "active hours at several idle cutoffs (#422). Read-only.",
     )
     p_gaps.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB).")
-    p_gaps.add_argument("--cutoffs", default="2,5,10,15,30",
-                        help="Comma-separated idle cutoffs in minutes (default 2,5,10,15,30).")
+    p_gaps.add_argument("--cutoff", dest="cutoffs", type=float, action="append", default=None, metavar="MINUTES",
+                        help="An idle cutoff in minutes (repeatable). Default: 2, 5, 10, 15 and 30.")
+    p_gaps.add_argument("--include-noise", action="store_true",
+                        help="Count the sessions the sessions.noise rule leaves out of the Studio "
+                             "(probe runs, temp dirs, too-short). Default: left out, like the dashboard.")
     p_gaps.add_argument("--json", action="store_true", help="Print the report as JSON.")
 
     sub.add_parser(
@@ -1479,15 +1482,12 @@ def _cmd_kpis(args: argparse.Namespace) -> int:
 
 
 def _cmd_gaps(args: argparse.Namespace) -> int:
-    from .activity import gap_report, render_markdown
+    from .activity import DEFAULT_CUTOFFS_MINUTES, gap_report, render_markdown
     from .relational.db import SQLITE_MODE_RO, Database
 
-    try:
-        cutoffs = [float(m) for m in args.cutoffs.split(",") if m.strip()]
-    except ValueError:
-        cutoffs = []
-    if not cutoffs or any(m <= 0 for m in cutoffs):
-        print("error: --cutoffs must be positive minutes, e.g. 2,5,10,15,30.", file=sys.stderr)
+    cutoffs = args.cutoffs or list(DEFAULT_CUTOFFS_MINUTES)
+    if any(m <= 0 for m in cutoffs):
+        print("error: --cutoff must be a positive number of minutes.", file=sys.stderr)
         return C.EXIT_USAGE
     cfg = load_config(dsn=args.dsn)
     if not cfg.dsn:
@@ -1496,7 +1496,7 @@ def _cmd_gaps(args: argparse.Namespace) -> int:
     try:
         db = Database.connect(cfg.dsn, sqlite_mode=SQLITE_MODE_RO)
         try:
-            report = gap_report(db, cutoffs)
+            report = gap_report(db, cutoffs, noise=None if args.include_noise else cfg.noise)
         finally:
             db.close()
     except Exception as exc:

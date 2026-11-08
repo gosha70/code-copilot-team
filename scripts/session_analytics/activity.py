@@ -6,7 +6,9 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional, Sequence
 
 from . import constants as C
-from .mcp.tools import _parse_ts, _percentile, turn_latency
+from .config import NoiseConfig
+from .mcp.tools import _parse_ts, _percentile, count_noise_sessions, turn_latency
+from .session_filter import keep_clause
 
 GAP_HUMAN = "human"
 GAP_TOOL_RESULT = "tool_result"
@@ -18,9 +20,8 @@ DEFAULT_CUTOFFS_MINUTES = (2, 5, 10, 15, 30)
 PERCENTILES = (50, 90, 99)
 
 _INJECTED = re.compile(
-    r"^\s*(<task-notification>|<system-reminder>|<command-name>|<command-message>|"
-    r"<local-command-stdout>|<local-command-caveat>|<bash-input>|<bash-stdout>|"
-    r"This session is being continued)"
+    r"^\s*(<task-notification>|<system-reminder>|<local-command-stdout>|"
+    r"<local-command-caveat>|<bash-stdout>|This session is being continued)"
 )
 
 
@@ -73,7 +74,7 @@ def percentile(values: Sequence[float], p: float) -> float:
     return _percentile(sorted(values), p / 100)
 
 
-def load_session_turns(db: Any) -> dict[int, list[Turn]]:
+def load_session_turns(db: Any, noise: Optional[NoiseConfig] = None) -> dict[int, list[Turn]]:
     tool_results = {
         (session_id, completed_at)
         for session_id, completed_at in db.query(
@@ -83,10 +84,13 @@ def load_session_turns(db: Any) -> dict[int, list[Turn]]:
             "WHERE r.completed_at IS NOT NULL"
         )
     }
+    keep_sql, keep_params = keep_clause(noise, "s") if noise else ("1=1", ())
     sessions: dict[int, list[Turn]] = defaultdict(list)
     for session_id, role, length, preview, ts in db.execute(
-        "SELECT session_id, role, content_length, substr(content_preview, 1, 64), timestamp "
-        "FROM copilot_turn ORDER BY session_id, sequence_num"
+        "SELECT t.session_id, t.role, t.content_length, substr(t.content_preview, 1, 64), t.timestamp "
+        "FROM copilot_turn t JOIN copilot_session s ON s.id = t.session_id "
+        f"WHERE {keep_sql} ORDER BY t.session_id, t.sequence_num",
+        keep_params,
     ):
         sessions[session_id].append(Turn(
             role=role,
@@ -98,8 +102,12 @@ def load_session_turns(db: Any) -> dict[int, list[Turn]]:
     return sessions
 
 
-def gap_report(db: Any, cutoffs_minutes: Sequence[float] = DEFAULT_CUTOFFS_MINUTES) -> dict[str, Any]:
-    sessions = load_session_turns(db)
+def gap_report(
+    db: Any,
+    cutoffs_minutes: Sequence[float] = DEFAULT_CUTOFFS_MINUTES,
+    noise: Optional[NoiseConfig] = None,
+) -> dict[str, Any]:
+    sessions = load_session_turns(db, noise)
     by_kind: dict[str, list[float]] = defaultdict(list)
     every: list[float] = []
     unstamped = negative = turns = 0
@@ -111,10 +119,15 @@ def gap_report(db: Any, cutoffs_minutes: Sequence[float] = DEFAULT_CUTOFFS_MINUT
         for kind, seconds in result.gaps:
             by_kind[kind].append(seconds)
             every.append(seconds)
-    row = db.query_one("SELECT SUM(duration_seconds) FROM copilot_session WHERE duration_seconds IS NOT NULL")
+    keep_sql, keep_params = keep_clause(noise, "s") if noise else ("1=1", ())
+    row = db.query_one(
+        f"SELECT SUM(s.duration_seconds) FROM copilot_session s WHERE s.duration_seconds IS NOT NULL AND {keep_sql}",
+        keep_params,
+    )
     human = by_kind[GAP_HUMAN]
     return {
         "sessions": len(sessions),
+        "excluded_noise": count_noise_sessions(db, noise) if noise is not None else 0,
         "turns": turns,
         "gaps": len(every),
         "skipped_unstamped": unstamped,
@@ -141,19 +154,15 @@ def gap_report(db: Any, cutoffs_minutes: Sequence[float] = DEFAULT_CUTOFFS_MINUT
     }
 
 
-def _duration(seconds: float) -> str:
-    if seconds < 60:
-        return f"{seconds:.0f} s"
-    if seconds < 3600:
-        return f"{seconds / 60:.1f} min"
-    return f"{seconds / 3600:.1f} h"
-
-
 def render_markdown(report: dict[str, Any]) -> str:
+    from .judge.session_analysis import _fmt_duration
+
+    excluded = report.get("excluded_noise", 0)
     lines = [
         f"Sample: {report['sessions']} sessions, {report['turns']:,} turns, {report['gaps']:,} gaps "
         f"({report['skipped_unstamped']} skipped for a missing stamp, {report['skipped_negative']} negative). "
-        f"Wall clock: {report['wall_clock_seconds'] / 3600:,.1f} h.",
+        f"Wall clock: {report['wall_clock_seconds'] / 3600:,.1f} h."
+        + (f" Noise sessions left out: {excluded} (--include-noise counts them)." if excluded else ""),
         "",
     ]
     if not report["gaps"]:
@@ -163,8 +172,8 @@ def render_markdown(report: dict[str, Any]) -> str:
     for kind, row in report["kinds"].items():
         lines.append(
             f"| {kind} | {row['gaps']:,} | "
-            + " | ".join(_duration(row[f"p{p}"]) for p in PERCENTILES)
-            + f" | {_duration(row['max'])} |"
+            + " | ".join(_fmt_duration(row[f"p{p}"]) for p in PERCENTILES)
+            + f" | {_fmt_duration(row['max'])} |"
         )
     lines += ["", "| cutoff | active h | human gaps over the cutoff |", "|---|---|---|"]
     for row in report["cutoffs"]:

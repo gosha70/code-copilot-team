@@ -46,12 +46,17 @@ class TestGapKind(unittest.TestCase):
         for text in (
             "<task-notification>\n<task-id>b1</task-id>",
             "<system-reminder>The working directory changed",
-            "<command-name>/compact</command-name>",
             "<local-command-stdout>done</local-command-stdout>",
+            "<bash-stdout>ok</bash-stdout>",
             "This session is being continued from a previous conversation",
         ):
             with self.subTest(text=text):
                 self.assertEqual(A.gap_kind(user(0, text)), A.GAP_INJECTED)
+
+    def test_a_command_the_person_typed_is_human(self) -> None:
+        for text in ("<command-name>/compact</command-name>", "<bash-input>git status</bash-input>"):
+            with self.subTest(text=text):
+                self.assertEqual(A.gap_kind(user(0, text)), A.GAP_HUMAN)
 
 
 class TestSessionGaps(unittest.TestCase):
@@ -149,21 +154,35 @@ class TestGapsCli(_FixtureStore):
         return code, out.getvalue()
 
     def test_prints_the_tables(self) -> None:
-        code, out = self._run(["gaps", "--db", self.dsn, "--cutoffs", "5,15"])
+        code, out = self._run(["gaps", "--db", self.dsn, "--cutoff", "5", "--cutoff", "15", "--include-noise"])
         self.assertEqual(code, C.EXIT_OK)
         self.assertIn("| 5 min |", out)
         self.assertIn("| 15 min |", out)
 
     def test_json(self) -> None:
-        code, out = self._run(["gaps", "--db", self.dsn, "--json"])
+        code, out = self._run(["gaps", "--db", self.dsn, "--json", "--include-noise"])
         self.assertEqual(code, C.EXIT_OK)
         report = json.loads(out)
         self.assertEqual([c["minutes"] for c in report["cutoffs"]], [2, 5, 10, 15, 30])
+        self.assertEqual((report["sessions"], report["excluded_noise"]), (1, 0))
 
-    def test_bad_cutoffs_are_a_usage_error(self) -> None:
-        for value in ("0", "x", "-5", ""):
+    def test_noise_is_left_out_by_default_and_says_so(self) -> None:
+        code, out = self._run(["gaps", "--db", self.dsn, "--json"])
+        self.assertEqual(code, C.EXIT_OK)
+        report = json.loads(out)
+        self.assertEqual((report["sessions"], report["gaps"], report["excluded_noise"]), (0, 0, 1))
+        code, out = self._run(["gaps", "--db", self.dsn])
+        self.assertIn("Noise sessions left out: 1 (--include-noise counts them).", out)
+
+    def test_a_cutoff_that_is_not_positive_is_a_usage_error(self) -> None:
+        for value in ("0", "-5"):
             with self.subTest(value=value):
-                self.assertEqual(self._run(["gaps", "--db", self.dsn, "--cutoffs", value])[0], C.EXIT_USAGE)
+                self.assertEqual(self._run(["gaps", "--db", self.dsn, f"--cutoff={value}"])[0], C.EXIT_USAGE)
+
+    def test_a_cutoff_that_is_not_a_number_is_refused_by_the_parser(self) -> None:
+        with self.assertRaises(SystemExit) as raised:
+            self._run(["gaps", "--db", self.dsn, "--cutoff", "x"])
+        self.assertEqual(raised.exception.code, C.EXIT_USAGE)
 
     def test_no_store_configured_is_a_usage_error(self) -> None:
         self.assertEqual(self._run(["gaps"])[0], C.EXIT_USAGE)
