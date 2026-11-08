@@ -55,6 +55,14 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   loaded and says "session not loaded" with the native id on hover when
   it is not (#415).
 
+- **A PR merges only after its head is reviewed.** `.github/workflows/review-gate.yml`
+  (the mechanics of wiki-studio's review gate) turns the owner's `reviewed`
+  label into the commit status `External review on record` on the PR's
+  head; a new commit drops the label and fails the status for the new head.
+  The master ruleset requires the status once the owner adds it (playbook
+  "Review gate"). The workflow runs on `pull_request_target` and never
+  checks out or runs PR code, which the structure suite pins.
+  CONTRIBUTING.md explains what contributors see.
 - **CodeQL runs on pull requests from forks.** `.github/workflows/codeql.yml`
   replaces GitHub's default CodeQL setup, which never scans a fork PR and
   so left a required `CodeQL` status no fork PR could satisfy. The

@@ -56,7 +56,10 @@ auto-merge at finalize (the driver never merges locally):
   (`merge_blocked`) if it is not.
 - It then runs `gh pr merge <n> --auto --<merge.method>` (default `squash`);
   GitHub performs the merge only once the branch-protection required checks
-  pass — CI is enforced by branch protection, not by this driver, which
+  pass — including the review gate's `External review on record`, which
+  the owner sets by labelling the PR `reviewed` after reading its head
+  (`.github/workflows/review-gate.yml`), so an armed auto-merge still waits
+  for a human — CI is enforced by branch protection, not by this driver, which
   never polls CI and never force-merges. (`merge.require_green_ci` used to
   appear in the template; it was never read by anything and was removed in
   the merge-profile cleanup, 2026-10-29. A legacy config still carrying it validates unchanged.)

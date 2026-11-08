@@ -44,7 +44,7 @@ code-copilot-team/
 ├── tests/
 │   ├── test-hooks.sh                    196 hook tests
 │   ├── test-generate.sh                 322 generation + adapter tests
-│   ├── test-shared-structure.sh         839 structure + content tests
+│   ├── test-shared-structure.sh         843 structure + content tests
 │   ├── test-sync.sh                     126 sync + init metadata tests
 │   ├── test-litellm-proxy-deps.sh       13 benchmark proxy pin tests (+11 with --online)
 │   ├── test-coverage-parse.sh           46 coverage parser + safety tests
@@ -66,6 +66,7 @@ code-copilot-team/
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification
 ├── .github/workflows/codeql.yml         CI: CodeQL advanced setup — runs on fork PRs, one `CodeQL` check
+├── .github/workflows/review-gate.yml    `reviewed` label → required status `External review on record` on the PR head
 ├── README.md
 ├── CONTRIBUTING.md
 └── LICENSE
