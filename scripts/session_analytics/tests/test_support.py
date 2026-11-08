@@ -48,6 +48,14 @@ class TestPackagedConfig(unittest.TestCase):
             with packaged_config(JUDGE_KEYS_CLEARED):
                 self.assertEqual(self._judge(), PACKAGED_JUDGE)
 
+    def test_packaged_config_blanks_cct_sa_variables_it_was_not_given(self) -> None:
+        leaked = "http://leak.example:9/v1"
+        with mock.patch.dict(os.environ, {cfgmod.ENV_JUDGE_BASE_URL: leaked}):
+            self.assertEqual(cfgmod.load_config().judge.base_url, leaked)
+            with packaged_config(JUDGE_KEYS_CLEARED):
+                self.assertEqual(cfgmod.load_config().judge.base_url, "")
+            self.assertEqual(os.environ[cfgmod.ENV_JUDGE_BASE_URL], leaked)
+
     def test_packaged_config_restores_what_it_patched(self) -> None:
         before = (cfgmod._USER_CONFIG, cfgmod.parse_env_file, os.environ.get(cfgmod.ENV_JUDGE_BACKEND))
         with packaged_config({cfgmod.ENV_JUDGE_BACKEND: "openai"}):

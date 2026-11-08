@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
@@ -23,9 +24,11 @@ NO_USER_CONFIG = Path("/nonexistent/session-analytics.json")
 def packaged_config(env: Optional[Mapping[str, str]] = None) -> Iterator[None]:
     from session_analytics import config as cfgmod
 
+    cleared = {k: "" for k in os.environ if k.startswith("CCT_SA_")}
+    cleared.update(env or {})
     with mock.patch.object(cfgmod, "_USER_CONFIG", NO_USER_CONFIG), \
          mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
-         mock.patch.dict("os.environ", dict(env or {})):
+         mock.patch.dict("os.environ", cleared):
         yield
 
 

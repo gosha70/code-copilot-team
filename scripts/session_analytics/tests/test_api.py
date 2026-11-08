@@ -1218,7 +1218,8 @@ class TestApi(RegistryResetTestCase):
 
         register_judge("asker", _Asker)
         absent = str(Path(tempfile.mkdtemp()) / "no-graph")
-        with packaged_config({cfgmod.ENV_JUDGE_BACKEND: "asker", cfgmod.ENV_KUZU_PATH: absent}):
+        with packaged_config({cfgmod.ENV_JUDGE_BACKEND: "asker", cfgmod.ENV_KUZU_PATH: absent,
+                              ENV_NOISE_MIN_DURATION: "0"}):
             info = self.client.get("/api/ask").json()
             self.assertEqual(info["judge"]["spec"], "asker:a")
             self.assertEqual(info["facts"]["sessions"], 1)
