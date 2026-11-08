@@ -179,7 +179,7 @@ def _setup_functions() -> str:
     """The pieces of setup.sh a settings merge runs: HOOKS_CONFIG (the
     fresh-install file) and ensure_hook_command (the merge into an
     existing file), extracted verbatim so the test runs the real code."""
-    text = _SETUP.read_text()
+    text = _SETUP.read_text(encoding="utf-8")
     out = []
     for start, end in (("HOOKS_CONFIG='{", "}'"), ("ensure_hook_command() {", "}")):
         i = text.index(start)
@@ -197,14 +197,14 @@ def _count_session_start(settings: dict) -> int:
 
 class TestInstallSurface(unittest.TestCase):
     def test_registered_for_setup_and_excluded_from_the_plugin(self) -> None:
-        settings = json.loads(_SETTINGS.read_text())
+        settings = json.loads(_SETTINGS.read_text(encoding="utf-8"))
         self.assertEqual(_count_session_start(settings), 1, "the repo's settings.json")
-        self.assertEqual(_SETUP.read_text().count("harness-stamp.sh \\"), 2, "both hook copy lists in setup.sh")
-        self.assertIn("write_harness_json", _SETUP.read_text())
+        self.assertEqual(_SETUP.read_text(encoding="utf-8").count("harness-stamp.sh \\"), 2, "both hook copy lists in setup.sh")
+        self.assertIn("write_harness_json", _SETUP.read_text(encoding="utf-8"))
         # A plugin-only session loads its instructions from CLAUDE_PLUGIN_ROOT:
         # the hook would hash the wrong tree, so it is not shipped there.
-        self.assertNotIn("harness-stamp", _PLUGIN_HOOKS.read_text())
-        plugin_hooks = next(l for l in _GENERATE.read_text().splitlines() if l.startswith("CC_PLUGIN_HOOKS="))
+        self.assertNotIn("harness-stamp", _PLUGIN_HOOKS.read_text(encoding="utf-8"))
+        plugin_hooks = next(l for l in _GENERATE.read_text(encoding="utf-8").splitlines() if l.startswith("CC_PLUGIN_HOOKS="))
         self.assertNotIn("harness-stamp", plugin_hooks)
         self.assertTrue(os.access(_HOOK, os.X_OK))
 

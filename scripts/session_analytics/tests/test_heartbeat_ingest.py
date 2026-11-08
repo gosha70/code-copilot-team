@@ -305,7 +305,10 @@ class TestPrivacyAndRobustness(RegistryResetTestCase):
         proj = base / "proj-link"
         _write_heartbeat(proj)
         link = Path(tempfile.mkdtemp(prefix="cct-hb-linkdir-")) / "alias"
-        os.symlink(proj, link)
+        try:
+            os.symlink(proj, link)
+        except OSError:
+            self.skipTest("symlinks unavailable")
         dsn = self.sqlite_dsn()
         stats = self._ingest(base, dsn, heartbeat_cwd=link)
         self.assertEqual(stats.heartbeats_ingested, 1)
