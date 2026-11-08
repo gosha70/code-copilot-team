@@ -1471,11 +1471,13 @@ class TestApi(RegistryResetTestCase):
             self.assertIn("Settings → Embeddings", job["message"])
 
     def test_get_config(self) -> None:
-        # Read the packaged default, not this machine's judge: no worktree
-        # .env, and the judge keys cleared in the real environment (#401).
+        # Read the packaged default, not this machine's judge: no user config
+        # file, no worktree .env, and the judge keys cleared in the real
+        # environment (#401).
         from session_analytics import config as cfgmod
 
-        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+        with mock.patch.object(cfgmod, "_USER_CONFIG", Path("/nonexistent/session-analytics.json")), \
+             mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
              mock.patch.dict("os.environ", {cfgmod.ENV_JUDGE_BACKEND: "",
                                             cfgmod.ENV_JUDGE_MODEL: ""}):
             r = self.client.get("/api/config")
