@@ -101,6 +101,15 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Fixed
 
+- **The home-path scrub catches every spelling of the home directory.**
+  `scrub_text` collapsed only the exact `str(Path.home())` spelling to
+  `~`, so on Windows a username shipped in published routing evidence
+  when a path appeared with a lowercase drive letter, with doubled
+  backslashes inside JSON text, with forward slashes, or in the Git Bash
+  `/c/Users/...` or WSL `/mnt/c/Users/...` form. One pattern now covers
+  them all, case-insensitively for a drive path, and stops at a name
+  boundary so a sibling such as `/home/gosha_old` is left alone.
+  Reported privately by a Windows contributor.
 - **The graph builds on Windows.** `GraphDatabase.copy_from` put the CSV
   path into Kùzu's `COPY ... FROM '<path>'` literal as `str(path)`, so a
   Windows path's backslashes failed the Cypher parser and

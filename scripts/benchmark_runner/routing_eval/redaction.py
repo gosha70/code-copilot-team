@@ -153,6 +153,36 @@ def _scrub_literals(text: str, secret_values: Sequence[str]) -> str:
     return text
 
 
+def _home_pattern(home_prefix: str) -> "re.Pattern[str] | None":
+    """Every spelling of the home directory a log can carry, as one
+    pattern: native separators, forward slashes, doubled backslashes
+    (a path inside JSON text), and for a drive path the lowercase or
+    uppercase drive letter plus the Git Bash (``/c/Users/x``) and WSL
+    (``/mnt/c/Users/x``) forms. A literal replace of ``str(Path.home())``
+    caught the native spelling only, so on Windows a username shipped
+    in published evidence in the other five (reported 2026-11-09).
+
+    A drive path is matched case-insensitively (Windows file systems
+    are); a POSIX home keeps exact case. The match must end at a name
+    boundary, so ``/home/gosha_old`` is not ``~_old``."""
+    drive = re.match(r"^([A-Za-z]):(.*)$", home_prefix)
+    sep = r"(?:\\|/)+"
+    if drive:
+        letter = drive.group(1)
+        rest = drive.group(2)
+        lead = rf"(?:[{letter.upper()}{letter.lower()}]:|/(?:mnt/)?[{letter.upper()}{letter.lower()}])"
+        flags = re.IGNORECASE
+    else:
+        rest = home_prefix
+        lead = ""
+        flags = 0
+    parts = [p for p in re.split(r"[\\/]+", rest) if p]
+    if not parts:
+        return None
+    body = "".join(sep + re.escape(p) for p in parts)
+    return re.compile(rf"{lead}{body}(?![A-Za-z0-9_.-])", flags)
+
+
 def scrub_text(
     text: str,
     *,
@@ -162,15 +192,18 @@ def scrub_text(
     """Scrub one string: known credential VALUES first (literally —
     the guarantee that a boring, unlabeled secret still never ships),
     then the closed secret patterns, then sensitive absolute paths
-    (the user home prefix collapses to ``~`` so no username ships in
-    an artifact). Idempotent: the replacement token matches no pattern
-    and no credential value."""
+    (the user home prefix, in every spelling ``_home_pattern`` names,
+    collapses to ``~`` so no username ships in an artifact).
+    Idempotent: the replacement token matches no pattern and no
+    credential value."""
     text = _scrub_literals(text, secret_values)
     for pattern, replacement in _SECRET_PATTERNS:
         text = pattern.sub(replacement, text)
-    home_prefix = str(home if home is not None else Path.home()).rstrip("/")
+    home_prefix = str(home if home is not None else Path.home()).rstrip("/\\")
     if home_prefix and home_prefix != "/":
-        text = text.replace(home_prefix, "~")
+        pattern = _home_pattern(home_prefix)
+        if pattern is not None:
+            text = pattern.sub("~", text)
     return text
 
 

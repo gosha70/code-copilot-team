@@ -159,6 +159,74 @@ class TestSecretPatterns(unittest.TestCase):
                          home="/home/gosha")
         self.assertEqual(out, "wrote ~/dev/wt/file.py")
 
+    def test_every_windows_spelling_of_home_collapses_to_tilde(self) -> None:
+        # Reported privately by a Windows contributor (2026-11-09): only
+        # the native spelling collapsed, so the username shipped in
+        # published evidence in the other forms. On Windows
+        # ``str(Path.home())`` is the native spelling.
+        home = r"C:\Users\dev"
+        cases = {
+            r"C:\Users\dev\proj\a.py": r"~\proj\a.py",
+            r"c:\users\dev\proj\a.py": r"~\proj\a.py",
+            r"C:\\Users\\dev\\proj\\a.py": r"~\\proj\\a.py",
+            "C:/Users/dev/proj/a.py": "~/proj/a.py",
+            "/c/Users/dev/proj/a.py": "~/proj/a.py",
+            "/mnt/c/Users/dev/proj/a.py": "~/proj/a.py",
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(scrub_text(f"saw {text} here", home=home),
+                                 f"saw {expected} here")
+        # A trailing separator on the home value changes nothing.
+        self.assertEqual(scrub_text("C:/Users/dev/x", home="C:\\Users\\dev\\"), "~/x")
+
+    def test_home_collapse_stops_at_a_name_boundary(self) -> None:
+        # Another user's directory, or a sibling with the home as a
+        # prefix, is not the home.
+        self.assertEqual(scrub_text(r"C:\Users\devon\x", home=r"C:\Users\dev"),
+                         r"C:\Users\devon\x")
+        self.assertEqual(
+            scrub_text("/home/gosha_old/x and /home/gosha/y", home="/home/gosha"),
+            "/home/gosha_old/x and ~/y",
+        )
+        # Idempotent: a second pass changes nothing.
+        once = scrub_text("C:/Users/dev/x", home=r"C:\Users\dev")
+        self.assertEqual(scrub_text(once, home=r"C:\Users\dev"), once)
+
+    def test_every_windows_spelling_of_home_collapses_to_tilde(self) -> None:
+        # Reported privately by a Windows contributor (2026-11-09): only
+        # the native spelling collapsed, so the username shipped in
+        # published evidence in the other forms. On Windows
+        # ``str(Path.home())`` is the native spelling.
+        home = r"C:\Users\dev"
+        cases = {
+            r"C:\Users\dev\proj\a.py": r"~\proj\a.py",
+            r"c:\users\dev\proj\a.py": r"~\proj\a.py",
+            r"C:\\Users\\dev\\proj\\a.py": r"~\\proj\\a.py",
+            "C:/Users/dev/proj/a.py": "~/proj/a.py",
+            "/c/Users/dev/proj/a.py": "~/proj/a.py",
+            "/mnt/c/Users/dev/proj/a.py": "~/proj/a.py",
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(scrub_text(f"saw {text} here", home=home),
+                                 f"saw {expected} here")
+        # A trailing separator on the home value changes nothing.
+        self.assertEqual(scrub_text("C:/Users/dev/x", home="C:\\Users\\dev\\"), "~/x")
+
+    def test_home_collapse_stops_at_a_name_boundary(self) -> None:
+        # Another user's directory, or a sibling with the home as a
+        # prefix, is not the home.
+        self.assertEqual(scrub_text(r"C:\Users\devon\x", home=r"C:\Users\dev"),
+                         r"C:\Users\devon\x")
+        self.assertEqual(
+            scrub_text("/home/gosha_old/x and /home/gosha/y", home="/home/gosha"),
+            "/home/gosha_old/x and ~/y",
+        )
+        # Idempotent: a second pass changes nothing.
+        once = scrub_text("C:/Users/dev/x", home=r"C:\Users\dev")
+        self.assertEqual(scrub_text(once, home=r"C:\Users\dev"), once)
+
     def test_deep_scrub_touches_string_values_only(self) -> None:
         payload = {"a": [1, True, None, f"key={_SECRET}"],
                    "b": {"n": 0.5, "s": "clean"}}
