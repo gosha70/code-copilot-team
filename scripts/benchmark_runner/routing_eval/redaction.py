@@ -153,6 +153,56 @@ def _scrub_literals(text: str, secret_values: Sequence[str]) -> str:
     return text
 
 
+def _home_pattern(home_prefix: str) -> "re.Pattern[str] | None":
+    r"""Every spelling of the home directory a log can carry, as one
+    pattern: native separators, forward slashes, doubled backslashes
+    (a path inside JSON text), and for a drive path the lowercase or
+    uppercase drive letter plus the Git Bash (``/c/Users/x``) and WSL
+    (``/mnt/c/Users/x``) forms. A literal replace of ``str(Path.home())``
+    caught the native spelling only, so on Windows a username shipped
+    in published evidence in the other five (reported 2026-11-09).
+
+    A drive path is matched case-insensitively (Windows file systems
+    are); a POSIX home keeps exact case. The match must end at a name
+    boundary (``\w`` is Unicode-aware), so ``/home/gosha_old`` is not
+    ``~_old`` and ``C:\Users\devé`` is not ``~é``. The tail after the
+    home is rewritten with ``/`` separators, so ``C:\Users\dev\p\q``
+    reads ``~/p/q`` on every operating system; a tail containing a
+    space or a quote is normalised up to that character only. Not covered: the
+    8.3 short form some Windows tools print (``C:\Users\DEVELO~1``),
+    which keeps the first six characters of a long username; add it if
+    a published artifact ever shows one."""
+    drive = re.match(r"^([A-Za-z]):(.*)$", home_prefix)
+    sep = r"(?:\\|/)+"
+    if drive:
+        letter = drive.group(1)
+        rest = drive.group(2)
+        lead = rf"(?:[{letter.upper()}{letter.lower()}]:|/(?:mnt/)?[{letter.upper()}{letter.lower()}])"
+        flags = re.IGNORECASE
+    else:
+        rest = home_prefix
+        lead = ""
+        flags = 0
+    parts = [p for p in re.split(r"[\\/]+", rest) if p]
+    if not parts:
+        return None
+    body = "".join(sep + re.escape(p) for p in parts)
+    # The path TAIL after the home is captured too, so its separators
+    # can be normalised to "/": published evidence is hashed, and the
+    # same session must produce the same bytes on every operating
+    # system (owner's ruling on PR #440). A tail segment stops at
+    # whitespace, a quote, or a character Windows forbids in a name.
+    tail = r"""(?P<tail>(?:(?:\\|/)+[^\s<>:"|?*'\\/]+)*(?:\\|/)*)"""
+    # Left boundary too: ``abc:\Users\dev`` is not ``ab~`` (review of
+    # PR #442). The home must not continue a preceding word.
+    return re.compile(rf"(?<!\w){lead}{body}{tail}(?![\w.-])", flags)
+
+
+def _collapse_home(match: "re.Match[str]") -> str:
+    """``~`` plus the path tail with every separator run as one ``/``."""
+    return "~" + re.sub(r"[\\/]+", "/", match.group("tail"))
+
+
 def scrub_text(
     text: str,
     *,
@@ -162,15 +212,18 @@ def scrub_text(
     """Scrub one string: known credential VALUES first (literally —
     the guarantee that a boring, unlabeled secret still never ships),
     then the closed secret patterns, then sensitive absolute paths
-    (the user home prefix collapses to ``~`` so no username ships in
-    an artifact). Idempotent: the replacement token matches no pattern
-    and no credential value."""
+    (the user home prefix, in every spelling ``_home_pattern`` names,
+    collapses to ``~`` so no username ships in an artifact).
+    Idempotent: the replacement token matches no pattern and no
+    credential value."""
     text = _scrub_literals(text, secret_values)
     for pattern, replacement in _SECRET_PATTERNS:
         text = pattern.sub(replacement, text)
-    home_prefix = str(home if home is not None else Path.home()).rstrip("/")
+    home_prefix = str(home if home is not None else Path.home()).rstrip("/\\")
     if home_prefix and home_prefix != "/":
-        text = text.replace(home_prefix, "~")
+        pattern = _home_pattern(home_prefix)
+        if pattern is not None:
+            text = pattern.sub(_collapse_home, text)
     return text
 
 
