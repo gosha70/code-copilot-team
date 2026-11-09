@@ -217,6 +217,7 @@ class TestCliDerivation(unittest.TestCase):
             noise=NoiseConfig(min_turns=0, min_duration_seconds=0, path_patterns=()),
             pricing=PricingConfig(models={}),
             auto_build=AutoBuildConfig(ledger_root="", active_window_seconds=900),
+            idle_cutoff_seconds=900,
             developer_id_env=env_value,
             developer_id_cfg=cfg_value,
         )

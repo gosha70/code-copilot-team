@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import logging
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
+from itertools import groupby
 from typing import Any, Iterable, Optional, Sequence
 
 from . import constants as C
-from .config import NoiseConfig
+from .config import NoiseConfig, load_config
 from .mcp.tools import _parse_ts, _percentile, count_noise_sessions, turn_latency
 from .session_filter import keep_clause
 
@@ -18,6 +20,8 @@ GAP_KINDS = (GAP_HUMAN, GAP_TOOL_RESULT, GAP_ASSISTANT, GAP_INJECTED)
 
 DEFAULT_CUTOFFS_MINUTES = (2, 5, 10, 15, 30)
 PERCENTILES = (50, 90, 99)
+
+_log = logging.getLogger(__name__)
 
 _INJECTED = re.compile(
     r"^\s*(<task-notification>|<system-reminder>|<local-command-stdout>|"
@@ -72,6 +76,48 @@ def active_seconds(gaps: Iterable[float], cutoff_seconds: float) -> float:
 
 def percentile(values: Sequence[float], p: float) -> float:
     return _percentile(sorted(values), p / 100)
+
+
+def _missing_activity(db: Any, cutoff_seconds: int) -> int:
+    rows = db.query(
+        "SELECT s.id, t.role, t.timestamp FROM copilot_session s "
+        f"LEFT JOIN {C.TBL_SESSION_ACTIVITY} a ON a.session_id = s.id AND a.idle_cutoff_seconds = ? "
+        "LEFT JOIN copilot_turn t ON t.session_id = s.id "
+        "WHERE a.session_id IS NULL ORDER BY s.id, t.sequence_num",
+        (cutoff_seconds,),
+    )
+    written = 0
+    for session_id, group in groupby(rows, key=lambda r: r[0]):
+        result = session_gaps([Turn(role, ts) for _, role, ts in group if role is not None])
+        db.execute(
+            f"INSERT INTO {C.TBL_SESSION_ACTIVITY} (session_id, idle_cutoff_seconds, active_seconds, "
+            "gaps_measured, gaps_unstamped, gaps_negative) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                session_id,
+                cutoff_seconds,
+                round(active_seconds((g for _, g in result.gaps), cutoff_seconds), 1),
+                len(result.gaps),
+                result.skipped_unstamped,
+                result.skipped_negative,
+            ),
+        )
+        written += 1
+    return written
+
+
+def ensure_activity(db: Any, cutoff_seconds: Optional[int] = None) -> int:
+    try:
+        if cutoff_seconds is None:
+            cutoff_seconds = load_config().idle_cutoff_seconds
+        written = _missing_activity(db, cutoff_seconds)
+        db.commit()
+    except Exception as exc:
+        _log.warning("activity: active time not stored (%s)", exc)
+        db.rollback()
+        return 0
+    if written:
+        _log.info("activity: stored active time for %s sessions at a %ss cutoff", written, cutoff_seconds)
+    return written
 
 
 def load_session_turns(db: Any, noise: Optional[NoiseConfig] = None) -> dict[int, list[Turn]]:

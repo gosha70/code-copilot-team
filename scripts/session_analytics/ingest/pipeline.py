@@ -20,6 +20,7 @@ from typing import Mapping, Optional, Sequence
 
 from .. import constants as C
 from .. import threads
+from ..activity import ensure_activity
 from ..config import PricingConfig, ProjectIdRule, ProjectOverride
 from ..cost import UnpricedStats
 from ..registry import get_adapter, list_adapter_ids
@@ -235,6 +236,7 @@ def ingest(
             _log.info(
                 "ingest %s: %d ingested, %d skipped", copilot, c_ingested, c_skipped
             )
+        ensure_activity(db)
         stats.unpriced_models = dict(unpriced.counts)
         if unpriced.counts:
             _log.warning(

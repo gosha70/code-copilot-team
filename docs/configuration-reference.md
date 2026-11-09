@@ -205,6 +205,7 @@ stored by name in the environment, never in the config file.
 | `sessions.noise.min_turns` | `3` | `CCT_SA_NOISE_MIN_TURNS` |
 | `sessions.noise.min_duration_seconds` | `60` | `CCT_SA_NOISE_MIN_DURATION_SECONDS` |
 | `sessions.noise.path_patterns` | `["/cct-probe", "/private/var/folders/", "/tmp/"]` | `CCT_SA_NOISE_PATH_PATTERNS` |
+| `sessions.idle_cutoff_seconds` | `900` | `CCT_SA_SESSIONS_IDLE_CUTOFF_SECONDS` |
 | `auto_build.ledger_root` | `".cct"` |  |
 | `auto_build.active_window_seconds` | `900` |  |
 | `similarity.threshold` | `0.55` | `CCT_SA_SIMILARITY_THRESHOLD` |

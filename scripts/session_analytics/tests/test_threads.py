@@ -464,7 +464,7 @@ import shutil as _shutil  # noqa: E402
 import tempfile as _tempfile  # noqa: E402
 
 from session_analytics.relational.db import (  # noqa: E402
-    Database, apply_ddl, check_schema,
+    _SCHEMA_VERSION, Database, apply_ddl, check_schema,
 )
 from session_analytics.threads import (  # noqa: E402
     ThreadStoreError,
@@ -3044,7 +3044,7 @@ class TestThreadMcpTool(unittest.TestCase):
         from session_analytics.relational import db as db_mod
         original = db_mod._DDL_FILES
         db_mod._DDL_FILES = tuple(
-            f for f in original if not f.endswith("012_thread.sql"))
+            f for f in original if int(Path(f).name[:3]) < 12)
         try:
             db_mod.apply_ddl(old)
         finally:
@@ -3084,7 +3084,7 @@ class TestThreadMcpTool(unittest.TestCase):
                           "thread_relation_candidate"):
                 self.assertIn(table, tables, f"{table} must exist before any tool")
             self.assertEqual(
-                after.query_one("SELECT MAX(version) FROM schema_version")[0], 12)
+                after.query_one("SELECT MAX(version) FROM schema_version")[0], db_mod._SCHEMA_VERSION)
         finally:
             after.close()
 
@@ -3280,7 +3280,7 @@ class TestAdditiveUpgradeFromSchema11(unittest.TestCase):
         # 12 — a state no real store is ever in.
         original_files, original_version = db_mod._DDL_FILES, db_mod._SCHEMA_VERSION
         db_mod._DDL_FILES = tuple(
-            f for f in original_files if not f.endswith("012_thread.sql"))
+            f for f in original_files if int(Path(f).name[:3]) < 12)
         db_mod._SCHEMA_VERSION = 11
         old = Database.connect(dsn)
         # Registered BEFORE the DDL runs: a failure in apply_ddl or in
@@ -3342,7 +3342,7 @@ class TestAdditiveUpgradeFromSchema11(unittest.TestCase):
             "SELECT name FROM sqlite_master WHERE type='index'")}
         self.assertIn("idx_copilot_turn_uuid", indexes)
         self.assertEqual(
-            db.query_one("SELECT MAX(version) FROM schema_version")[0], 12)
+            db.query_one("SELECT MAX(version) FROM schema_version")[0], _SCHEMA_VERSION)
 
     def test_every_pre_existing_row_survives_untouched(self) -> None:
         dsn, before = self._schema_11_store()
@@ -3374,7 +3374,7 @@ class TestAdditiveUpgradeFromSchema11(unittest.TestCase):
         for name, rows in snapshot.items():
             self.assertEqual(db.query(f"SELECT * FROM {name}"), rows)
         self.assertEqual(
-            db.query_one("SELECT MAX(version) FROM schema_version")[0], 12)
+            db.query_one("SELECT MAX(version) FROM schema_version")[0], _SCHEMA_VERSION)
 
     def test_A6_adds_NOTHING_to_the_columns_that_force_a_recreate(self) -> None:
         """_REQUIRED_COLUMNS is the list create-if-absent cannot repair.

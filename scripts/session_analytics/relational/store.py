@@ -307,6 +307,7 @@ def _delete_children(db: Database, session_id: int) -> None:
         f"DELETE FROM copilot_tool_call WHERE turn_id IN ({turn_subq})", (session_id,)
     )
     db.execute("DELETE FROM session_kpi WHERE session_id = ?", (session_id,))
+    db.execute(f"DELETE FROM {C.TBL_SESSION_ACTIVITY} WHERE session_id = ?", (session_id,))
     db.execute("DELETE FROM copilot_turn WHERE session_id = ?", (session_id,))
 
 

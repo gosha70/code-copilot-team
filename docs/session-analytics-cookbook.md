@@ -97,6 +97,7 @@ Precedence, lowest to highest: packaged defaults → `~/.cct/session-analytics.j
 | `CCT_SA_AUTO_BUILD_ROOT` | The `.cct` folder the auto-build driver wrote its ledgers under, for the Runs tab (§8.6); relative = from the repository root. | `.cct` |
 | `CCT_SA_EMBED_BACKEND`, `CCT_SA_EMBED_MODEL` | Embeddings for session similarity (Ollama; `nomic-embed-text` works well). | `ollama`, none |
 | `CCT_SA_NOISE_MIN_TURNS`, `CCT_SA_NOISE_MIN_DURATION_SECONDS`, `CCT_SA_NOISE_PATH_PATTERNS` | What the Studio hides as noise (see §5.2). | `3`, `60`, `/cct-probe,/private/var/folders/,/tmp/` |
+| `CCT_SA_SESSIONS_IDLE_CUTOFF_SECONDS` | The idle cutoff each gap between turns is capped at when active time is stored (see §5.4). Changing it needs no re-ingest. | `900` |
 | `CCT_DEVELOPER_ID` | Your id on multi-developer stores. | git `user.email` local part, else `local` |
 
 Per-project settings (redaction override, ingest opt-out, transcript
@@ -259,8 +260,17 @@ with.
 ### 5.4 Idle gaps and the active-time cutoff
 
 Session duration is wall clock. Active time (#422) sums the gaps between
-consecutive turns, each gap capped at an idle cutoff. To see where a
-cutoff falls on your own store:
+consecutive turns, each gap capped at an idle cutoff, and is stored per
+session in `session_activity` beside the gaps it measured and the gaps it
+skipped (a missing stamp, or a clock that ran backwards). Ingest writes
+it, and a store from before it (schema 12) is filled in place the next
+time it is opened, with no re-ingest. The cutoff is
+`sessions.idle_cutoff_seconds` (`CCT_SA_SESSIONS_IDLE_CUTOFF_SECONDS`,
+default 900, i.e. 15 minutes); rows are kept per cutoff, so changing it
+fills the new cutoff on the next open, again without a re-ingest.
+`duration_seconds` keeps its meaning, and the noise rule still reads it.
+
+To see where a cutoff falls on your own store:
 
 ```bash
 ./scripts/session-analytics gaps                             # both tables, as markdown
