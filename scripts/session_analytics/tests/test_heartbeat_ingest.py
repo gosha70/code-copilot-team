@@ -308,6 +308,8 @@ class TestPrivacyAndRobustness(RegistryResetTestCase):
         try:
             os.symlink(proj, link)
         except OSError:
+            if os.name != "nt":
+                raise
             self.skipTest("symlinks unavailable")
         dsn = self.sqlite_dsn()
         stats = self._ingest(base, dsn, heartbeat_cwd=link)
