@@ -905,9 +905,9 @@ def load_config(
         resolved_kuzu = resolved_kuzu / C.KUZU_STORE_NAME
     raw_runs_root = env(ENV_BENCHMARK_RUNS_ROOT) or data.get(C.CFG_BENCHMARK_RUNS_ROOT) or ""
     runs_root = str(Path(raw_runs_root).expanduser()) if raw_runs_root else ""
-    harness_stamps_path = str(Path(
-        env(ENV_HARNESS_STAMPS) or str(Path.home() / ".cct" / C.HARNESS_STAMPS_FILENAME)
-    ).expanduser())
+    harness_stamps_path = os.path.expanduser(
+        env(ENV_HARNESS_STAMPS) or (Path.home() / ".cct" / C.HARNESS_STAMPS_FILENAME).as_posix()
+    )
     resolved_redaction = (
         redaction_mode or env(ENV_REDACTION) or data.get(C.CFG_REDACTION) or C.REDACT_CODE
     )

@@ -383,6 +383,13 @@ class TestLedgerPathControl(unittest.TestCase):
         self.assertNotIn("harness_stamps_path", (_REPO / "scripts/session_analytics/config_data/defaults.json").read_text(encoding="utf-8"))
         self.assertIn('LEDGER="${CCT_HARNESS_STAMPS:-', _HOOK.read_text(encoding="utf-8"))
 
+    def test_the_environment_value_reaches_the_reader_as_written(self) -> None:
+        from unittest import mock
+        from session_analytics.config import ENV_HARNESS_STAMPS, load_config
+        written = "/tmp//stamps/./ledger.jsonl"
+        with mock.patch.dict("os.environ", {ENV_HARNESS_STAMPS: written}):
+            self.assertEqual(load_config().harness_stamps_path, written)
+
 
 class TestSchemaRefusal(unittest.TestCase):
     def test_a_schema_9_store_is_refused_with_the_remedy(self) -> None:
