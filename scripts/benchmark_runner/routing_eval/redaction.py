@@ -193,7 +193,9 @@ def _home_pattern(home_prefix: str) -> "re.Pattern[str] | None":
     # system (owner's ruling on PR #440). A tail segment stops at
     # whitespace, a quote, or a character Windows forbids in a name.
     tail = r"""(?P<tail>(?:(?:\\|/)+[^\s<>:"|?*'\\/]+)*(?:\\|/)*)"""
-    return re.compile(rf"{lead}{body}{tail}(?![\w.-])", flags)
+    # Left boundary too: ``abc:\Users\dev`` is not ``ab~`` (review of
+    # PR #442). The home must not continue a preceding word.
+    return re.compile(rf"(?<!\w){lead}{body}{tail}(?![\w.-])", flags)
 
 
 def _collapse_home(match: "re.Match[str]") -> str:

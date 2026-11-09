@@ -207,6 +207,15 @@ class TestSecretPatterns(unittest.TestCase):
                          r"C:\Users\devon\x")
         self.assertEqual(scrub_text("C:/Users/devé/x", home=r"C:\Users\dev"),
                          "C:/Users/devé/x")
+        # ...and a left boundary: text that merely ends in the home's
+        # spelling is not the home (review of PR #442).
+        self.assertEqual(scrub_text(r"abc:\Users\dev\x", home=r"C:\Users\dev"),
+                         r"abc:\Users\dev\x")
+        self.assertEqual(scrub_text("x/home/gosha/y", home="/home/gosha"), "x/home/gosha/y")
+        # while the usual neighbours still match
+        for lead in ("'", '"', "=", "(", " ", ""):
+            with self.subTest(lead=lead):
+                self.assertEqual(scrub_text(f"{lead}C:/Users/dev/y", home=r"C:\Users\dev"), f"{lead}~/y")
         self.assertEqual(
             scrub_text("/home/gosha_old/x and /home/gosha/y", home="/home/gosha"),
             "/home/gosha_old/x and ~/y",
