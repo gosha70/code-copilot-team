@@ -166,6 +166,8 @@ CFG_SESSIONS_NOISE = "noise"
 CFG_NOISE_MIN_TURNS = "min_turns"
 CFG_NOISE_MIN_DURATION = "min_duration_seconds"
 CFG_NOISE_PATH_PATTERNS = "path_patterns"
+CFG_SESSIONS_IDLE_CUTOFF = "idle_cutoff_seconds"
+TBL_SESSION_ACTIVITY = "session_activity"
 
 # ── Similarity config keys (#287, E2 slice 2) ────────────────────────
 CFG_SIMILARITY = "similarity"

@@ -124,7 +124,8 @@
         "/private/var/folders/",
         "/tmp/"
       ]
-    }
+    },
+    "idle_cutoff_seconds": 900
   },
   "auto_build": {
     "ledger_root": ".cct",

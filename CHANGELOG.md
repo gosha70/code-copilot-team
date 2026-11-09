@@ -87,6 +87,17 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   follow the response-time card's rules (`mcp.tools`). Read-only; a
   SQLite store is opened read-only. The capped sum lives in `session_analytics/activity.py`,
   which the stored active-time figure will reuse (#422).
+- **Active time is stored per session (schema 13).** A new
+  `session_activity` table holds each session's active seconds at the
+  idle cutoff, with the gaps it measured and the gaps it skipped for a
+  missing stamp or a backwards clock, so a figure can say what it rests
+  on. It is computed with the same functions as `gaps`. Ingest writes
+  it; a schema-12 store gains the table in place and is filled from the
+  stored turn timestamps when it is next opened, with no recreate and no
+  re-ingest. The cutoff is `sessions.idle_cutoff_seconds`
+  (`CCT_SA_SESSIONS_IDLE_CUTOFF_SECONDS`, default 900); rows are kept
+  per cutoff, so changing it needs no re-ingest either.
+  `duration_seconds` is unchanged (#422).
 
 ### Fixed
 

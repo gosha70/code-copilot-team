@@ -56,6 +56,7 @@ ENV_EMBED_WORKERS = "CCT_SA_EMBED_WORKERS"
 ENV_NOISE_MIN_TURNS = "CCT_SA_NOISE_MIN_TURNS"
 ENV_NOISE_MIN_DURATION = "CCT_SA_NOISE_MIN_DURATION_SECONDS"
 ENV_NOISE_PATH_PATTERNS = "CCT_SA_NOISE_PATH_PATTERNS"   # comma-separated
+ENV_IDLE_CUTOFF = "CCT_SA_SESSIONS_IDLE_CUTOFF_SECONDS"
 ENV_SIMILARITY_THRESHOLD = "CCT_SA_SIMILARITY_THRESHOLD"
 ENV_TEAM_ACTIVE_WINDOW = "CCT_SA_TEAM_ACTIVE_WINDOW"
 ENV_BUDGET_TEAM_DAILY = "CCT_SA_BUDGET_TEAM_DAILY_USD"
@@ -352,6 +353,7 @@ class AnalyticsConfig:
     noise: "NoiseConfig"
     pricing: "PricingConfig"
     auto_build: "AutoBuildConfig"
+    idle_cutoff_seconds: int
     projects: Mapping[str, ProjectOverride] = field(default_factory=dict)
     project_id_rules: tuple[ProjectIdRule, ...] = field(default_factory=tuple)
     raw: Mapping[str, Any] = field(default_factory=dict)
@@ -759,6 +761,24 @@ def _load_team(data: Mapping[str, Any], env) -> TeamConfig:
     )
 
 
+def _load_idle_cutoff(data: Mapping[str, Any], env) -> int:
+    block = data.get(C.CFG_SESSIONS)
+    name = f"{C.CFG_SESSIONS}.{C.CFG_SESSIONS_IDLE_CUTOFF}"
+    if not isinstance(block, Mapping) or C.CFG_SESSIONS_IDLE_CUTOFF not in block:
+        raise ValueError(
+            f"config has no '{name}'; defaults.json is the single source of the active-time cutoff")
+    raw = env(ENV_IDLE_CUTOFF) or block.get(C.CFG_SESSIONS_IDLE_CUTOFF)
+    if isinstance(raw, bool):
+        raise ValueError(f"{name} must be an integer, got boolean {raw!r}")
+    try:
+        seconds = int(str(raw))
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be an integer, got {raw!r}") from None
+    if seconds <= 0:
+        raise ValueError(f"{name} must be positive, got {seconds}")
+    return seconds
+
+
 def _load_noise(data: Mapping[str, Any], env) -> NoiseConfig:
     """sessions.noise from the data file, env overrides on top. Same
     discipline as similarity: the data file is the ONLY source of
@@ -1018,6 +1038,7 @@ def load_config(
     )
 
     noise = _load_noise(data, env)
+    idle_cutoff_seconds = _load_idle_cutoff(data, env)
     team = _load_team(data, env)
     auto_build = _load_auto_build(data, env)
 
@@ -1040,6 +1061,7 @@ def load_config(
         noise=noise,
         pricing=pricing,
         auto_build=auto_build,
+        idle_cutoff_seconds=idle_cutoff_seconds,
         projects=projects,
         project_id_rules=project_id_rules,
         raw=data,

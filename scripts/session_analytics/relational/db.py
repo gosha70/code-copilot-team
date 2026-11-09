@@ -96,6 +96,7 @@ _DDL_FILES = (
     "ddl/postgres/010_feedback.sql",
     "ddl/postgres/011_expectation.sql",
     "ddl/postgres/012_thread.sql",
+    "ddl/postgres/013_session_activity.sql",
 )
 # 3: + local_heartbeat (Slice B1, #187)
 # 4: + trace search index (E10 Slice B, #65). NOTE that apply_ddl creates
@@ -135,7 +136,11 @@ _DDL_FILES = (
 #    that 11's note describes, so the link is read through
 #    thread_member instead — which is also the only shape that can
 #    represent several source transcripts resolving to one session row.
-_SCHEMA_VERSION = 12
+# 13: + session_activity (#422, active time). A NEW table, so
+#    create-if-absent is the whole migration and a schema-12 store gains
+#    it in place; as with 4's index, apply_ddl then fills it for every
+#    stored session (activity.ensure_activity), so nothing is re-ingested.
+_SCHEMA_VERSION = 13
 
 _PK_SQL = {
     DIALECT_POSTGRES: "BIGSERIAL PRIMARY KEY",
@@ -354,6 +359,9 @@ def apply_ddl(db: Database) -> None:
     from ..search_index import ensure_index
 
     ensure_index(db)
+    from ..activity import ensure_activity
+
+    ensure_activity(db)
 
 
 def _record_version(db: Database) -> None:
