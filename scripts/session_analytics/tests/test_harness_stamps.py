@@ -132,7 +132,7 @@ class TestHookInvocation(unittest.TestCase):
         self.assertEqual(proc.stdout, "", "a hook must not speak to the model")
         if not self.ledger.exists():
             return []
-        return [json.loads(l) for l in self.ledger.read_text().splitlines() if l.strip()]
+        return [json.loads(l) for l in self.ledger.read_text(encoding="utf-8").splitlines() if l.strip()]
 
     @unittest.skipUnless(shutil.which("jq"), "jq not installed")
     def test_a_line_with_nulls_when_harness_json_and_profile_are_absent(self) -> None:
@@ -179,7 +179,7 @@ def _setup_functions() -> str:
     """The pieces of setup.sh a settings merge runs: HOOKS_CONFIG (the
     fresh-install file) and ensure_hook_command (the merge into an
     existing file), extracted verbatim so the test runs the real code."""
-    text = _SETUP.read_text()
+    text = _SETUP.read_text(encoding="utf-8")
     out = []
     for start, end in (("HOOKS_CONFIG='{", "}'"), ("ensure_hook_command() {", "}")):
         i = text.index(start)
@@ -197,14 +197,14 @@ def _count_session_start(settings: dict) -> int:
 
 class TestInstallSurface(unittest.TestCase):
     def test_registered_for_setup_and_excluded_from_the_plugin(self) -> None:
-        settings = json.loads(_SETTINGS.read_text())
+        settings = json.loads(_SETTINGS.read_text(encoding="utf-8"))
         self.assertEqual(_count_session_start(settings), 1, "the repo's settings.json")
-        self.assertEqual(_SETUP.read_text().count("harness-stamp.sh \\"), 2, "both hook copy lists in setup.sh")
-        self.assertIn("write_harness_json", _SETUP.read_text())
+        self.assertEqual(_SETUP.read_text(encoding="utf-8").count("harness-stamp.sh \\"), 2, "both hook copy lists in setup.sh")
+        self.assertIn("write_harness_json", _SETUP.read_text(encoding="utf-8"))
         # A plugin-only session loads its instructions from CLAUDE_PLUGIN_ROOT:
         # the hook would hash the wrong tree, so it is not shipped there.
-        self.assertNotIn("harness-stamp", _PLUGIN_HOOKS.read_text())
-        plugin_hooks = next(l for l in _GENERATE.read_text().splitlines() if l.startswith("CC_PLUGIN_HOOKS="))
+        self.assertNotIn("harness-stamp", _PLUGIN_HOOKS.read_text(encoding="utf-8"))
+        plugin_hooks = next(l for l in _GENERATE.read_text(encoding="utf-8").splitlines() if l.startswith("CC_PLUGIN_HOOKS="))
         self.assertNotIn("harness-stamp", plugin_hooks)
         self.assertTrue(os.access(_HOOK, os.X_OK))
 
@@ -231,8 +231,8 @@ ensure_hook_command "{existing}" "SessionStart" "" "{HOOK_COMMAND}" 10000 && ech
         proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=dict(os.environ, HOME=str(home)))
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout.split(), ["added-1", "present-2"])
-        self.assertEqual(_count_session_start(json.loads(fresh.read_text())), 1, "fresh install")
-        merged = json.loads(existing.read_text())
+        self.assertEqual(_count_session_start(json.loads(fresh.read_text(encoding="utf-8"))), 1, "fresh install")
+        merged = json.loads(existing.read_text(encoding="utf-8"))
         self.assertEqual(_count_session_start(merged), 1, "existing settings, after two merges")
         self.assertEqual(merged["permissions"], {"allow": ["Read"]}, "the merge keeps what was there")
         self.assertEqual(len(merged["hooks"]["SessionStart"]), 1, "added to the existing matcher group, not a new one")
@@ -262,7 +262,7 @@ class TestAdapterJoin(RegistryResetTestCase):
         tmp = Path(tempfile.mkdtemp(prefix="cct-sa-cli-")) / "project-hash"
         tmp.mkdir(parents=True)
         src = CLAUDE_CODE_ROOT / "project-hash" / "tiny-session.jsonl"
-        lines = [json.loads(l) for l in src.read_text().splitlines() if l.strip()]
+        lines = [json.loads(l) for l in src.read_text(encoding="utf-8").splitlines() if l.strip()]
         lines[-1]["version"] = "2.2.0"     # the last assistant record ran under a newer CLI
         (tmp / "s.jsonl").write_text("\n".join(json.dumps(l) for l in lines) + "\n")
         adapter = ClaudeCodeAdapter(harness_stamps_path="")
@@ -273,7 +273,7 @@ class TestAdapterJoin(RegistryResetTestCase):
         tmp = Path(tempfile.mkdtemp(prefix="cct-sa-nover-")) / "project-hash"
         tmp.mkdir(parents=True)
         src = CLAUDE_CODE_ROOT / "project-hash" / "tiny-session.jsonl"
-        lines = [json.loads(l) for l in src.read_text().splitlines() if l.strip()]
+        lines = [json.loads(l) for l in src.read_text(encoding="utf-8").splitlines() if l.strip()]
         for l in lines:
             l.pop("version", None)
         (tmp / "s.jsonl").write_text("\n".join(json.dumps(l) for l in lines) + "\n")
@@ -380,8 +380,8 @@ class TestLedgerPathControl(unittest.TestCase):
         with mock.patch.dict("os.environ", {}, clear=False):
             os.environ.pop(ENV_HARNESS_STAMPS, None)
             self.assertTrue(load_config().harness_stamps_path.endswith("/.cct/harness-stamps.jsonl"))
-        self.assertNotIn("harness_stamps_path", (_REPO / "scripts/session_analytics/config_data/defaults.json").read_text())
-        self.assertIn('LEDGER="${CCT_HARNESS_STAMPS:-', _HOOK.read_text())
+        self.assertNotIn("harness_stamps_path", (_REPO / "scripts/session_analytics/config_data/defaults.json").read_text(encoding="utf-8"))
+        self.assertIn('LEDGER="${CCT_HARNESS_STAMPS:-', _HOOK.read_text(encoding="utf-8"))
 
 
 class TestSchemaRefusal(unittest.TestCase):

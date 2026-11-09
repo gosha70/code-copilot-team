@@ -478,8 +478,9 @@ class TestProbeDoesNotCreateFiles(unittest.TestCase):
         tmp = tempfile.mkdtemp(prefix="cct-uriform-")
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
 
-        names = ["plain.db", "has?query.db", "has#frag.db", "has%pct.db",
-                 "has space.db"]
+        names = ["plain.db", "has#frag.db", "has%pct.db", "has space.db"]
+        if os.name != "nt":
+            names.append("has?query.db")
         for name in names:
             target = os.path.join(tmp, name)
             open(target, "wb").close()

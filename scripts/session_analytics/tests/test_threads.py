@@ -2030,7 +2030,7 @@ class TestThreadsCliContract(unittest.TestCase):
         import os
         import subprocess
         repo = Path(__file__).resolve().parents[3]
-        env = {**os.environ, "PYTHONPATH": f"{repo / 'scripts'}:{repo}"}
+        env = {**os.environ, "PYTHONPATH": f"{repo / 'scripts'}{os.pathsep}{repo}"}
         env.update(env_extra or {})
         return subprocess.run(
             [sys.executable, "-m", "session_analytics", "threads", *args],

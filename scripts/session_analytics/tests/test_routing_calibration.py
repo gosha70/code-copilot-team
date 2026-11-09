@@ -1930,6 +1930,8 @@ class TestOperatorEntrypoint(unittest.TestCase):
             run_evaluation(self._cfg(root=self.base))
 
     def test_isolation_resists_symlink_and_dotdot(self) -> None:
+        import os
+
         from session_analytics.routing_calibration import (
             CalibrationError,
             assert_write_isolation,
@@ -1944,6 +1946,8 @@ class TestOperatorEntrypoint(unittest.TestCase):
         try:
             link.symlink_to(self.evidence)
         except OSError:                      # pragma: no cover
+            if os.name != "nt":
+                raise
             self.skipTest("symlinks unavailable")
         with self.assertRaises(CalibrationError):
             assert_write_isolation(link, [self.evidence])
