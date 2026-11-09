@@ -107,13 +107,36 @@ class TestStoredActivity(RegistryResetTestCase):
         self.assertIn((session_pk, 900, 0.0, 0, 0, 0), self.db.query(ROWS))
 
     def test_an_unstamped_turn_is_counted_not_measured(self) -> None:
-        (first_turn, turns) = self.db.query_one("SELECT MIN(id), COUNT(*) FROM copilot_turn")
+        (first_turn, turns) = self.db.query_one(
+            "SELECT MIN(id), COUNT(*) FROM copilot_turn WHERE session_id = (SELECT MIN(session_id) FROM copilot_turn)")
         self.db.execute("UPDATE copilot_turn SET timestamp = NULL WHERE id = ?", (first_turn,))
         self.db.execute(f"DELETE FROM {C.TBL_SESSION_ACTIVITY}")
         self.db.commit()
         A.ensure_activity(self.db)
         (_, _, _, measured, unstamped, negative) = self.db.query(ROWS)[0]
         self.assertEqual((measured, unstamped, negative), (turns - 2, 1, 0))
+
+    def test_a_row_another_process_wrote_first_is_skipped_quietly(self) -> None:
+        self.db.execute(f"DELETE FROM {C.TBL_SESSION_ACTIVITY}")
+        self.db.commit()
+        rival = Database.connect(self.dsn)
+        self.addCleanup(rival.close)
+
+        class _RivalWritesFirst:
+            def __init__(self, db: Database) -> None:
+                self._db = db
+
+            def query(self, sql, params=()):
+                rows = self._db.query(sql, params)
+                A.ensure_activity(rival, 900)
+                return rows
+
+            def __getattr__(self, name):
+                return getattr(self._db, name)
+
+        with self.assertNoLogs("session_analytics.activity", level="WARNING"):
+            self.assertEqual(A.ensure_activity(_RivalWritesFirst(self.db), 900), 0)
+        self.assertEqual(len(self.db.query(ROWS)), self._sessions())
 
     def test_a_store_that_refuses_writes_is_left_alone(self) -> None:
         readonly = Database.connect(self.dsn, sqlite_mode=SQLITE_MODE_RO)

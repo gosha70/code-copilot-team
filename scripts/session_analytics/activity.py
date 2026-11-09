@@ -89,9 +89,10 @@ def _missing_activity(db: Any, cutoff_seconds: int) -> int:
     written = 0
     for session_id, group in groupby(rows, key=lambda r: r[0]):
         result = session_gaps([Turn(role, ts) for _, role, ts in group if role is not None])
-        db.execute(
+        cursor = db.execute(
             f"INSERT INTO {C.TBL_SESSION_ACTIVITY} (session_id, idle_cutoff_seconds, active_seconds, "
-            "gaps_measured, gaps_unstamped, gaps_negative) VALUES (?, ?, ?, ?, ?, ?)",
+            "gaps_measured, gaps_unstamped, gaps_negative) VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT (session_id, idle_cutoff_seconds) DO NOTHING",
             (
                 session_id,
                 cutoff_seconds,
@@ -101,7 +102,7 @@ def _missing_activity(db: Any, cutoff_seconds: int) -> int:
                 result.skipped_negative,
             ),
         )
-        written += 1
+        written += max(cursor.rowcount, 0)
     return written
 
 
