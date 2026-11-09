@@ -165,10 +165,12 @@ class TestSecretPatterns(unittest.TestCase):
         # published evidence in the other forms. On Windows
         # ``str(Path.home())`` is the native spelling.
         home = r"C:\Users\dev"
+        # Every spelling collapses to the SAME POSIX form, so hashed
+        # evidence is identical across operating systems (#440 ruling).
         cases = {
-            r"C:\Users\dev\proj\a.py": r"~\proj\a.py",
-            r"c:\users\dev\proj\a.py": r"~\proj\a.py",
-            r"C:\\Users\\dev\\proj\\a.py": r"~\\proj\\a.py",
+            r"C:\Users\dev\proj\a.py": "~/proj/a.py",
+            r"c:\users\dev\proj\a.py": "~/proj/a.py",
+            r"C:\\Users\\dev\\proj\\a.py": "~/proj/a.py",
             "C:/Users/dev/proj/a.py": "~/proj/a.py",
             "/c/Users/dev/proj/a.py": "~/proj/a.py",
             "/mnt/c/Users/dev/proj/a.py": "~/proj/a.py",
@@ -179,6 +181,24 @@ class TestSecretPatterns(unittest.TestCase):
                                  f"saw {expected} here")
         # A trailing separator on the home value changes nothing.
         self.assertEqual(scrub_text("C:/Users/dev/x", home="C:\\Users\\dev\\"), "~/x")
+
+    def test_the_tail_is_normalised_only_as_far_as_the_path_runs(self) -> None:
+        home = r"C:\Users\dev"
+        # The exact shape test_routing_evidence publishes on Windows.
+        self.assertEqual(
+            scrub_text("worktree: C:\\Users\\dev\\private\\customer-x\\repo\ntests ok", home=home),
+            "worktree: ~/private/customer-x/repo\ntests ok",
+        )
+        # Quoted, and inside JSON text with doubled backslashes.
+        self.assertEqual(scrub_text("path='C:\\Users\\dev\\proj\\a.py' next", home=home),
+                         "path='~/proj/a.py' next")
+        self.assertEqual(scrub_text('{"cwd": "C:\\\\Users\\\\dev\\\\proj"}', home=home),
+                         '{"cwd": "~/proj"}')
+        # A space ends the path: what follows it is not rewritten.
+        self.assertEqual(scrub_text(r"C:\Users\dev\p q\r", home=home), r"~/p q\r")
+        # POSIX text is unchanged apart from the collapse.
+        self.assertEqual(scrub_text("at /home/gosha/a/b.py:12", home="/home/gosha"),
+                         "at ~/a/b.py:12")
 
     def test_home_collapse_stops_at_a_name_boundary(self) -> None:
         # Another user's directory, or a sibling with the home as a

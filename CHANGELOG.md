@@ -107,8 +107,11 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   when a path appeared with a lowercase drive letter, with doubled
   backslashes inside JSON text, with forward slashes, or in the Git Bash
   `/c/Users/...` or WSL `/mnt/c/Users/...` form. One pattern now covers
-  them all, case-insensitively for a drive path, and stops at a name
-  boundary so a sibling such as `/home/gosha_old` is left alone.
+  them all, case-insensitively for a drive path, stops at a name
+  boundary so a sibling such as `/home/gosha_old` is left alone, and
+  rewrites the path tail with `/` separators so the scrubbed form is the
+  same POSIX text on every operating system and hashed evidence matches
+  across them.
   Reported privately by a Windows contributor. Evidence sets published
   from Windows before this fix may still carry the username in those
   spellings; regenerate them.

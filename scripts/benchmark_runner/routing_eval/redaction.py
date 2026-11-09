@@ -165,7 +165,10 @@ def _home_pattern(home_prefix: str) -> "re.Pattern[str] | None":
     A drive path is matched case-insensitively (Windows file systems
     are); a POSIX home keeps exact case. The match must end at a name
     boundary (``\w`` is Unicode-aware), so ``/home/gosha_old`` is not
-    ``~_old`` and ``C:\Users\devé`` is not ``~é``. Not covered: the
+    ``~_old`` and ``C:\Users\devé`` is not ``~é``. The tail after the
+    home is rewritten with ``/`` separators, so ``C:\Users\dev\p\q``
+    reads ``~/p/q`` on every operating system; a tail containing a
+    space or a quote is normalised up to that character only. Not covered: the
     8.3 short form some Windows tools print (``C:\Users\DEVELO~1``),
     which keeps the first six characters of a long username; add it if
     a published artifact ever shows one."""
@@ -184,7 +187,18 @@ def _home_pattern(home_prefix: str) -> "re.Pattern[str] | None":
     if not parts:
         return None
     body = "".join(sep + re.escape(p) for p in parts)
-    return re.compile(rf"{lead}{body}(?![\w.-])", flags)
+    # The path TAIL after the home is captured too, so its separators
+    # can be normalised to "/": published evidence is hashed, and the
+    # same session must produce the same bytes on every operating
+    # system (owner's ruling on PR #440). A tail segment stops at
+    # whitespace, a quote, or a character Windows forbids in a name.
+    tail = r"""(?P<tail>(?:(?:\\|/)+[^\s<>:"|?*'\\/]+)*(?:\\|/)*)"""
+    return re.compile(rf"{lead}{body}{tail}(?![\w.-])", flags)
+
+
+def _collapse_home(match: "re.Match[str]") -> str:
+    """``~`` plus the path tail with every separator run as one ``/``."""
+    return "~" + re.sub(r"[\\/]+", "/", match.group("tail"))
 
 
 def scrub_text(
@@ -207,7 +221,7 @@ def scrub_text(
     if home_prefix and home_prefix != "/":
         pattern = _home_pattern(home_prefix)
         if pattern is not None:
-            text = pattern.sub("~", text)
+            text = pattern.sub(_collapse_home, text)
     return text
 
 
