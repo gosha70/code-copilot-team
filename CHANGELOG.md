@@ -109,7 +109,9 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   `/c/Users/...` or WSL `/mnt/c/Users/...` form. One pattern now covers
   them all, case-insensitively for a drive path, and stops at a name
   boundary so a sibling such as `/home/gosha_old` is left alone.
-  Reported privately by a Windows contributor.
+  Reported privately by a Windows contributor. Evidence sets published
+  from Windows before this fix may still carry the username in those
+  spellings; regenerate them.
 - **The graph builds on Windows.** `GraphDatabase.copy_from` put the CSV
   path into Kùzu's `COPY ... FROM '<path>'` literal as `str(path)`, so a
   Windows path's backslashes failed the Cypher parser and

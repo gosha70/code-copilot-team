@@ -154,7 +154,7 @@ def _scrub_literals(text: str, secret_values: Sequence[str]) -> str:
 
 
 def _home_pattern(home_prefix: str) -> "re.Pattern[str] | None":
-    """Every spelling of the home directory a log can carry, as one
+    r"""Every spelling of the home directory a log can carry, as one
     pattern: native separators, forward slashes, doubled backslashes
     (a path inside JSON text), and for a drive path the lowercase or
     uppercase drive letter plus the Git Bash (``/c/Users/x``) and WSL
@@ -164,7 +164,11 @@ def _home_pattern(home_prefix: str) -> "re.Pattern[str] | None":
 
     A drive path is matched case-insensitively (Windows file systems
     are); a POSIX home keeps exact case. The match must end at a name
-    boundary, so ``/home/gosha_old`` is not ``~_old``."""
+    boundary (``\w`` is Unicode-aware), so ``/home/gosha_old`` is not
+    ``~_old`` and ``C:\Users\devé`` is not ``~é``. Not covered: the
+    8.3 short form some Windows tools print (``C:\Users\DEVELO~1``),
+    which keeps the first six characters of a long username; add it if
+    a published artifact ever shows one."""
     drive = re.match(r"^([A-Za-z]):(.*)$", home_prefix)
     sep = r"(?:\\|/)+"
     if drive:
@@ -180,7 +184,7 @@ def _home_pattern(home_prefix: str) -> "re.Pattern[str] | None":
     if not parts:
         return None
     body = "".join(sep + re.escape(p) for p in parts)
-    return re.compile(rf"{lead}{body}(?![A-Za-z0-9_.-])", flags)
+    return re.compile(rf"{lead}{body}(?![\w.-])", flags)
 
 
 def scrub_text(
