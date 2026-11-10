@@ -262,11 +262,13 @@ source, then writes a **proposal** to `doc_internal/proposals/`.
 
 Default invocation auto-detects an installed copilot CLI in the
 order `claude → codex → cursor` and uses it as the synthesis
-backend. Override with `--backend <name>`. The package reads no
-`WIKI_INGEST_BACKEND` variable and the alias does not translate it: if
-you have it set, unset it and pass `--backend` instead, or the
-auto-detected backend is used silently. Use `--backend test` for a
-deterministic stub (no real LLM call) — this is what CI uses.
+backend. Precedence, as wiki-studio 0.9.0 resolves it: `--backend
+<name>`, else the `WIKI_STUDIO_BACKEND` environment variable, else the
+deprecated `WIKI_INGEST_BACKEND` (still honoured, with a warning on
+stderr — rename it), else auto-detect. The launcher passes your
+environment through unchanged, so a set variable selects the backend,
+possibly an external model. Use `--backend test` for a deterministic
+stub (no real LLM call) — this is what CI uses.
 
 **Phase 0 hardening** added in the post-rescope branch:
 
@@ -321,7 +323,7 @@ delivery schedule.
 
 | Flag | Purpose |
 |---|---|
-| `--backend <name>` | Backend selection (claude / codex / cursor / test). Wins over `WIKI_INGEST_BACKEND`, which wins over auto-detect. |
+| `--backend <name>` | Backend selection (claude / codex / cursor / test). Wins over `WIKI_STUDIO_BACKEND` (and the deprecated `WIKI_INGEST_BACKEND`), which win over auto-detect. |
 | `--dry-run` | Run the gate but omit the draft body from the proposal file (frontmatter still records `gate_disposition` + `gate_reason`). |
 | `--output-dir <path>` | Override the default `doc_internal/proposals/` output location. |
 
@@ -605,9 +607,10 @@ history is traceable via git on `knowledge/wiki/` plus
 `knowledge/wiki/log.md`.
 
 The CLI auto-detects an installed copilot backend in the order
-`claude → codex → cursor`. Override with `--backend <name>`. Use
-`--backend test` for the deterministic stub backend (no LLM call;
-this is what CI uses).
+`claude → codex → cursor`. Override with `--backend <name>` or
+`WIKI_STUDIO_BACKEND=<name>` (`WIKI_INGEST_BACKEND` still works but is
+deprecated and warns). Use `--backend test` for the deterministic stub
+backend (no LLM call; this is what CI uses).
 
 For the v1 single-source flow, the legacy invocation
 `./scripts/wiki-ingest <source>` is preserved as a backwards-compat

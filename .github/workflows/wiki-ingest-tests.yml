@@ -6,54 +6,19 @@ name: Wiki Ingest Tests
 # it on every Python the package supports (3.11–3.13). The engine's own
 # unit tests are upstream's; nothing here imports package internals.
 #
-# The paths filter names EVERY input the contract depends on, otherwise a
-# change to one of them would not trigger CI:
-#   - scripts/wiki, scripts/wiki-ingest          (launchers)
-#   - scripts/lib/wiki_env.sh                     (resolver)
-#   - scripts/setup-wiki.sh, scripts/setup.sh,
-#     adapters/claude-code/setup.sh               (installer and the setups that call it)
-#   - scripts/wiki-requirements.txt               (the lock)
-#   - knowledge/wiki/schema/**                    (project schema + policy)
-#   - tests/test-wiki-*.sh, tests/fixtures/wiki-* (the suites and fixtures)
-#   - .github/workflows/wiki-ingest-tests.yml     (this file)
+# No paths filter, on purpose: the five-verb contract runs on a copy of the
+# CURRENT knowledge/wiki/ plus every file its pages cite elsewhere in the
+# checkout, and the schema suite drives `cct doctor`, so the set of inputs
+# is dynamic and a hand-written filter would always be incomplete (the
+# first attempt listed the launcher, lock, schema and suites and missed
+# the wiki pages themselves). Three jobs of a few minutes on every PR is
+# the honest cost of FR-9's "a copy of CCT's current wiki".
 
 on:
   push:
     branches: [master, main]
-    paths:
-      - 'scripts/wiki'
-      - 'scripts/wiki-ingest'
-      - 'scripts/lib/wiki_env.sh'
-      - 'scripts/setup-wiki.sh'
-      - 'scripts/setup.sh'
-      - 'adapters/claude-code/setup.sh'
-      - 'scripts/wiki-requirements.txt'
-      - 'knowledge/wiki/schema/**'
-      - 'tests/test-wiki-ingest.sh'
-      - 'tests/test-wiki-launcher.sh'
-      - 'tests/test-wiki-schema.sh'
-      - 'tests/test-wiki-setup.sh'
-      - 'tests/fixtures/wiki-contract/**'
-      - 'tests/fixtures/wiki-schema/**'
-      - '.github/workflows/wiki-ingest-tests.yml'
   pull_request:
     branches: [master, main]
-    paths:
-      - 'scripts/wiki'
-      - 'scripts/wiki-ingest'
-      - 'scripts/lib/wiki_env.sh'
-      - 'scripts/setup-wiki.sh'
-      - 'scripts/setup.sh'
-      - 'adapters/claude-code/setup.sh'
-      - 'scripts/wiki-requirements.txt'
-      - 'knowledge/wiki/schema/**'
-      - 'tests/test-wiki-ingest.sh'
-      - 'tests/test-wiki-launcher.sh'
-      - 'tests/test-wiki-schema.sh'
-      - 'tests/test-wiki-setup.sh'
-      - 'tests/fixtures/wiki-contract/**'
-      - 'tests/fixtures/wiki-schema/**'
-      - '.github/workflows/wiki-ingest-tests.yml'
 
 # Least privilege: this workflow reads code and runs tests; it never
 # writes to issues, PRs, packages, or any other GH surface.

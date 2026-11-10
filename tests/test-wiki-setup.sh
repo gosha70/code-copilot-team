@@ -57,20 +57,24 @@ trap 'rm -rf "$WORK"' EXIT
 
 # ── a throwaway wheel and its lock ───────────────────────────────────────
 build_wheel() {
-  # build_wheel <version> <out-dir> — a minimal, pip-installable wheel for
-  # distribution "wiki-studio" at <version>; prints its sha256.
-  "$HOST_PY" - "$1" "$2" <<'PY'
+  # build_wheel <version> <out-dir> [marker] — a minimal, pip-installable
+  # wheel for distribution "wiki-studio" at <version>; prints its sha256.
+  # With <marker>, the wheel also carries wiki_studio/<marker>.py: a
+  # different artifact with the same name and version.
+  "$HOST_PY" - "$1" "$2" "${3:-}" <<'PY'
 import base64, hashlib, sys, zipfile
 from pathlib import Path
-version, out = sys.argv[1], Path(sys.argv[2])
+version, out, marker = sys.argv[1], Path(sys.argv[2]), sys.argv[3]
 out.mkdir(parents=True, exist_ok=True)
 name = f"wiki_studio-{version}-py3-none-any.whl"
 info = f"wiki_studio-{version}.dist-info"
 files = {
-    "wiki_studio/__init__.py": f'__version__ = "{version}"\n',
+    "wiki_studio/__init__.py": f'__version__ = "{version}"\n' + (f'MARKER = "{marker}"\n' if marker else ""),
     f"{info}/METADATA": f"Metadata-Version: 2.1\nName: wiki-studio\nVersion: {version}\n",
     f"{info}/WHEEL": "Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
 }
+if marker:
+    files[f"wiki_studio/{marker}.py"] = f"# {marker}\n"
 records = []
 for path, text in files.items():
     data = text.encode()
@@ -112,8 +116,9 @@ assert_eq "a fresh venv gets the locked wheel (exit 0)" 0 "$RC"
 assert_contains "...and says it is ready" "$OUTPUT" "[done] wiki-studio 0.9.0 ready"
 assert_eq "...the installed distribution is exactly 0.9.0" "0.9.0" "$(installed_version "$V1")"
 run_setup "$V1" "$LOCK"
-assert_eq "a second run is a no-op (exit 0)" 0 "$RC"
-assert_contains "...that reports the package present" "$OUTPUT" "[ok]   wiki-studio 0.9.0 present"
+assert_eq "a second run reinstalls the locked bytes (exit 0)" 0 "$RC"
+assert_contains "...saying why it does not trust the version stamp" "$OUTPUT" "reported present in $V1 — reinstalling the locked wheel"
+assert_contains "...and ends ready" "$OUTPUT" "[done] wiki-studio 0.9.0 ready"
 run_setup "$V1" "$LOCK" --check
 assert_eq "--check is 0 when healthy" 0 "$RC"
 assert_contains "...and names the state" "$OUTPUT" "expected 0.9.0: ok"
@@ -131,6 +136,22 @@ run_setup "$V1" "$LOCK"
 assert_eq "setup reinstalls the locked version (exit 0)" 0 "$RC"
 assert_contains "...saying what it found" "$OUTPUT" "wiki-studio 0.8.0 installed, expected 0.9.0"
 assert_eq "...and 0.9.0 is back" "0.9.0" "$(installed_version "$V1")"
+
+echo "=== setup-wiki: an impostor that reports 0.9.0 is replaced by the locked bytes ==="
+# Review of PR #443: an editable checkout, a repacked wheel or an [mcp]
+# install all report 0.9.0; a version check alone would call them ready.
+IMPOSTOR="$WORK/impostor"
+build_wheel 0.9.0 "$IMPOSTOR" impostor >/dev/null
+VI="$WORK/venv-impostor"
+"$HOST_PY" -m venv "$VI" >/dev/null
+"$VI/bin/python" -m pip install --quiet --disable-pip-version-check --no-deps --no-index --find-links "$IMPOSTOR" "wiki-studio==0.9.0"
+assert_eq "fixture: the impostor is installed and reports 0.9.0" "0.9.0 impostor" \
+  "$("$VI/bin/python" -c 'import importlib.metadata as m, wiki_studio; print(m.version("wiki-studio"), wiki_studio.MARKER)')"
+run_setup "$VI" "$LOCK"
+assert_eq "setup against the good lock exits 0" 0 "$RC"
+assert_eq "...and the impostor's file is gone" "0" "$([[ -e "$(ls -d "$VI"/lib/python*/site-packages/wiki_studio)/impostor.py" ]] && echo 1 || echo 0)"
+assert_eq "...and the module is the locked wheel's (no MARKER)" "0.9.0 absent" \
+  "$("$VI/bin/python" -c 'import importlib.metadata as m, wiki_studio; print(m.version("wiki-studio"), getattr(wiki_studio, "MARKER", "absent"))')"
 
 echo "=== setup-wiki: a wrong hash is refused ==="
 V2="$WORK/venv2"
@@ -207,6 +228,29 @@ assert_contains "...and the summary says so" "$OUTPUT" "Wiki tooling: unavailabl
 # The Claude Code adapter's own venv creation asks the resolver first.
 assert_eq "the Claude Code adapter creates the shared venv with the resolver's interpreter" "1" \
   "$(grep -c 'wiki_find_interpreter' "$REPO_DIR/adapters/claude-code/setup.sh")"
+
+echo "=== root setup --wiki with no adapter detected ==="
+# Review of PR #443: auto-detection used to exit 0 before the wiki step, so
+# `setup.sh --wiki` on a machine with no adapter did nothing and succeeded.
+# A bare PATH and an empty HOME make detection find nothing.
+NOHOME="$WORK/nohome"; mkdir -p "$NOHOME"
+BARE_PATH="/usr/bin:/bin:$(dirname "$HOST_PY")"
+V9="$WORK/venv9"
+RC=0; OUTPUT=$(HOME="$NOHOME" PATH="$BARE_PATH" CCT_WIKI_VENV="$V9" CCT_WIKI_LOCK="$LOCK" CCT_WIKI_PYTHON="$HOST_PY" \
+  CCT_WIKI_PIP_ARGS="--no-index --find-links $WHEELS" bash "$ROOT_SETUP" --wiki 2>&1) || RC=$?
+assert_eq "--wiki alone, no adapter detected: exits 0 with the wiki ready" 0 "$RC"
+assert_contains "...says it proceeds for the wiki only" "$OUTPUT" "No tools detected; --wiki was given"
+assert_contains "...installs zero adapters" "$OUTPUT" "Adapters: 0 installed, 0 failed"
+assert_contains "...and reports the wiki ready" "$OUTPUT" "Wiki tooling: ready"
+assert_eq "...with the locked wheel in the venv" "0.9.0" "$(installed_version "$V9")"
+V10="$WORK/venv10"
+RC=0; OUTPUT=$(HOME="$NOHOME" PATH="$BARE_PATH" CCT_WIKI_VENV="$V10" CCT_WIKI_LOCK="$BAD_LOCK" CCT_WIKI_PYTHON="$HOST_PY" \
+  CCT_WIKI_PIP_ARGS="--no-index --find-links $WHEELS" bash "$ROOT_SETUP" --wiki 2>&1) || RC=$?
+assert_eq "--wiki alone, install fails: exits non-zero" 1 "$RC"
+assert_contains "...with the failure in the summary" "$OUTPUT" "Wiki tooling: FAILED"
+RC=0; OUTPUT=$(HOME="$NOHOME" PATH="$BARE_PATH" bash "$ROOT_SETUP" 2>&1) || RC=$?
+assert_eq "no flags, no adapter detected: still exits 0 without touching the wiki" 0 "$RC"
+assert_contains "...with the old message" "$OUTPUT" "No tools detected. Use --help for options."
 
 echo "========================================="
 echo "  Results: $PASS passed, $FAIL failed"

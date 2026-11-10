@@ -65,9 +65,10 @@ If neither shoe fits, run the pipeline. The output goes to
    ./scripts/wiki-ingest <path-to-source>
    ```
 
-   Default backend resolution is `--backend` flag → auto-detect
-   (`claude → codex → cursor`); the package reads no
-   `WIKI_INGEST_BACKEND` variable. Use `--backend test` for the
+   Default backend resolution is `--backend` flag →
+   `WIKI_STUDIO_BACKEND` env var → the deprecated `WIKI_INGEST_BACKEND`
+   (honoured with a warning) → auto-detect (`claude → codex →
+   cursor`). Use `--backend test` for the
    deterministic stub if you want to dry-run the wiring without an
    LLM call. The full flag set is documented in
    [`../../README.md`](../../README.md) §5e.

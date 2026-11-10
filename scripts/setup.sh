@@ -150,8 +150,14 @@ if [[ ${#TOOLS[@]} -eq 0 ]]; then
       echo "        or:  bash adapters/claude-code/setup.sh --playwright"
       exit 1
     fi
-    echo "  No tools detected. Use --help for options."
-    exit 0
+    if $WIKI_REQUIRED; then
+      # --wiki is an explicit request: nothing else to install is not a
+      # reason to skip it. The adapter loop runs zero times.
+      echo "  No tools detected; --wiki was given, so only the wiki tooling is set up."
+    else
+      echo "  No tools detected. Use --help for options."
+      exit 0
+    fi
   fi
   echo ""
 fi
@@ -182,7 +188,7 @@ if [[ ${#PLAYWRIGHT_ARGS[@]} -gt 0 ]]; then
   fi
 fi
 
-for tool in "${TOOLS[@]}"; do
+for tool in "${TOOLS[@]+"${TOOLS[@]}"}"; do
   for pt in "${PROJECT_TOOLS[@]}"; do
     if [[ "$tool" == "$pt" ]]; then
       needs_project=true
@@ -227,7 +233,7 @@ echo ""
 INSTALLED=0
 FAILED=0
 
-for tool in "${TOOLS[@]}"; do
+for tool in "${TOOLS[@]+"${TOOLS[@]}"}"; do
   echo "=== Installing: $tool ==="
   case "$tool" in
     claude-code)

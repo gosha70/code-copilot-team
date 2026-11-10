@@ -31,8 +31,9 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   `/promote-lesson` stays free-text and lints through the launcher;
   `wiki-first-query` stays a direct, model-free read; plugin-only installs
   are told the exact prerequisite rather than promised a managed one.
-  The package reads no `WIKI_INGEST_BACKEND` and the alias does not
-  translate it: a set variable is ignored, so pass `--backend`. The bump
+  Backend selection is `--backend`, else `WIKI_STUDIO_BACKEND`, else the
+  deprecated `WIKI_INGEST_BACKEND` (still honoured, with a warning), else
+  auto-detect; the launcher passes the environment through. The bump
   procedure is `knowledge/wiki-studio-dependency.md` (#384).
 - **`cct start [path] [launcher args…]`** opens a harness session through the
   installed `claude-code` launcher, so starting a session is spelled with the

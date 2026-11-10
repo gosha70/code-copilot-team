@@ -1092,18 +1092,15 @@ for copy in "$REPO_DIR/adapters/claude-code/plugin/commands/promote-lesson.md" "
   rc=0; grep -q 'Without a CCT checkout' "$copy" || rc=1
   assert_ok "promote-lesson copy states the plugin-only prerequisite: ${copy#"$REPO_DIR"/}" "$rc"
 done
-# ── #384 FR-14: the two wiki workflows install what production runs and
-# their path filters name every contract input (a filter that drops one
-# would let a change to it skip CI; these greps are that mutation test).
+# ── #384 FR-14: the two wiki workflows install what production runs. The
+# contract workflow has NO paths filter (its inputs — the live wiki, what
+# its pages cite, the doctor — are dynamic; an external review found the
+# first hand-written filter incomplete), and the structure test says so.
 WIT="$REPO_DIR/.github/workflows/wiki-ingest-tests.yml"
-for input in "scripts/wiki'" "scripts/wiki-ingest'" "scripts/lib/wiki_env.sh'" "scripts/setup-wiki.sh'" \
-  "scripts/setup.sh'" "adapters/claude-code/setup.sh'" \
-  "scripts/wiki-requirements.txt'" "knowledge/wiki/schema/\*\*'" "tests/test-wiki-ingest.sh'" \
-  "tests/test-wiki-launcher.sh'" "tests/test-wiki-schema.sh'" "tests/fixtures/wiki-contract/\*\*'" \
-  "tests/fixtures/wiki-schema/\*\*'" ".github/workflows/wiki-ingest-tests.yml'"; do
-  rc=0; [[ "$(grep -c -- "- '$input" "$WIT")" -eq 2 ]] || rc=1
-  assert_ok "wiki-ingest-tests.yml filters push and pull_request on ${input%\'}" "$rc"
-done
+rc=0; grep -q "^    paths:" "$WIT" && rc=1
+assert_ok "wiki-ingest-tests.yml runs on every push and pull request (no paths filter)" "$rc"
+rc=0; grep -q "No paths filter, on purpose" "$WIT" || rc=1
+assert_ok "wiki-ingest-tests.yml says why it has no filter" "$rc"
 rc=0; grep -q "run: bash scripts/setup-wiki.sh --require" "$WIT" || rc=1
 assert_ok "wiki-ingest-tests.yml installs the locked wheel with the users' installer" "$rc"
 rc=0; grep -q "python-version: \['3.11', '3.12', '3.13'\]" "$WIT" || rc=1

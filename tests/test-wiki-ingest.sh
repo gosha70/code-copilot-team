@@ -199,6 +199,16 @@ DRY_PATH="$(tr -d '\n' < "$WORK/logs/alias_dry.out")"
 assert_eq "...writes the proposal file without the drafted page body" "1 0" \
   "$([[ -f "$DRY_PATH" ]] && echo 1 || echo 0) $([[ -f "$DRY_PATH" ]] && { grep -c '^page_type: incident' "$DRY_PATH" || true; } || echo -)"
 
+echo "=== the deprecated backend variable still selects the backend ==="
+# Review of PR #443: wiki-studio 0.9.0 honours WIKI_INGEST_BACKEND (with a
+# deprecation warning) after WIKI_STUDIO_BACKEND; the launcher passes the
+# environment through, so a set variable chooses the backend.
+RC=0; WIKI_INGEST_BACKEND=test "$ALIAS" --output-dir "$WORK/legacy-env" "$ROOT/source.md" >"$WORK/logs/env.out" 2>"$WORK/logs/env.err" || RC=$?
+ENV_PATH="$(tr -d '\n' < "$WORK/logs/env.out")"
+assert_eq "WIKI_INGEST_BACKEND=test with no --backend: the test backend is used" "'test'" \
+  "$([[ -f "$ENV_PATH" ]] && awk -F': ' '/^backend:/{print $2}' "$ENV_PATH" || echo none)"
+assert_contains "...and the package warns that the variable is deprecated" "$(cat "$WORK/logs/env.err")" "WIKI_INGEST_BACKEND is deprecated"
+
 echo "=== negative paths ==="
 run missing "$WIKI" ingest --backend test "$ROOT/nope.md"
 assert_eq "a missing source exits 5" 5 "$RC"

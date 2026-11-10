@@ -7,8 +7,10 @@
 #   1. pick the venv's interpreter: the existing .venv if there is one,
 #      else the first supported Python on PATH (3.11–3.13);
 #   2. create the venv only when it does not exist (never replaces one);
-#   3. install the exact hashed base wheel from scripts/wiki-requirements.txt
-#      unless that exact version is already present;
+#   3. install the exact hashed base wheel from scripts/wiki-requirements.txt,
+#      always, with --force-reinstall: a distribution that merely reports
+#      0.9.0 (an editable checkout, a repacked wheel, an [mcp] install) is
+#      not the reviewed artifact, and only the hashed wheel proves the bytes;
 #   4. verify through package metadata that wiki-studio == 0.9.0.
 #
 # Exit status (owner ruling 2026-11-10): an unavailable or failed
@@ -94,24 +96,21 @@ else
     fi
 fi
 
-# 3. Install only when the exact version is not already present.
-if current="$(wiki_installed_version)" && [[ "$current" == "$WIKI_STUDIO_VERSION" ]]; then
-    echo "[ok]   wiki-studio $WIKI_STUDIO_VERSION present in $VENV"
-    exit 0
-fi
-REINSTALL=()
-if [[ -n "${current:-}" ]]; then
+# 3. Install the locked wheel, always. A version stamp cannot prove the
+#    artifact (an editable checkout, a repacked wheel or an [mcp] install
+#    all report 0.9.0), so --force-reinstall puts the hashed bytes in place
+#    whatever is there; pip's wheel cache usually makes that a local copy,
+#    and --require-hashes verifies it either way.
+current="$(wiki_installed_version)" || current=""
+if [[ "$current" == "$WIKI_STUDIO_VERSION" ]]; then
+    echo "[..]   wiki-studio $WIKI_STUDIO_VERSION reported present in $VENV — reinstalling the locked wheel to prove the bytes"
+elif [[ -n "$current" ]]; then
     echo "[..]   wiki-studio $current installed, expected $WIKI_STUDIO_VERSION — installing the locked wheel"
-    # pip would leave a dist whose metadata it judges satisfied; force the
-    # locked bytes over it.
-    REINSTALL=(--force-reinstall)
 else
     echo "[..]   Installing wiki-studio $WIKI_STUDIO_VERSION from $LOCK"
 fi
-# pip's wheel cache is fine here: --require-hashes verifies the bytes that
-# are installed whether they came from the index or the cache.
 # shellcheck disable=SC2086
-if ! "$PY" -m pip install --quiet --disable-pip-version-check --no-deps "${REINSTALL[@]+"${REINSTALL[@]}"}" ${CCT_WIKI_PIP_ARGS:-} -r "$LOCK"; then
+if ! "$PY" -m pip install --quiet --disable-pip-version-check --no-deps --force-reinstall ${CCT_WIKI_PIP_ARGS:-} -r "$LOCK"; then
     unavailable "hashed install from $LOCK failed (offline, proxy, or the artifact no longer matches its hash)"
 fi
 
