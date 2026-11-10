@@ -43,9 +43,10 @@ version, and the schema test refuses an unclassified difference.
 2. **Update the lock**: version, hash and the provenance comment in
    `scripts/wiki-requirements.txt`; `WIKI_STUDIO_VERSION` (and the Python
    range if upstream changed `python_requires`) in
-   `scripts/lib/wiki_env.sh`; the CI matrices in
-   `.github/workflows/wiki-ingest-tests.yml` and `wiki-lint.yml`; the
-   `wiki-maintainer` entry in `shared/features/catalog.yaml`.
+   `scripts/lib/wiki_env.sh`; the matrix in
+   `.github/workflows/wiki-ingest-tests.yml` and the single
+   `python-version` in `wiki-lint.yml`; the `wiki-maintainer` entry in
+   `shared/features/catalog.yaml`.
 3. **Install it the way users do** and confirm the bytes:
    ```bash
    bash scripts/setup-wiki.sh --require

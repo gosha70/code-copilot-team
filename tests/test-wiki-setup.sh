@@ -117,6 +117,8 @@ assert_contains "...that reports the package present" "$OUTPUT" "[ok]   wiki-stu
 run_setup "$V1" "$LOCK" --check
 assert_eq "--check is 0 when healthy" 0 "$RC"
 assert_contains "...and names the state" "$OUTPUT" "expected 0.9.0: ok"
+# cct doctor parses this exact line; a format change must fail here first.
+assert_eq "...on the exact line the doctor parses" "wiki-studio expected 0.9.0: ok ($V1/bin/python)" "$(printf '%s\n' "$OUTPUT" | sed -n 1p)"
 
 echo "=== setup-wiki: a mismatched install is replaced by the lock ==="
 # Pretend an older release is installed: rewrite its metadata version.

@@ -66,7 +66,7 @@ code-copilot-team/
 │   ├── test-routing-recovery.sh       375 probe-state + timing + probe + tick-wake tests (#257 D)
 │   ├── test-pre-pr-check.sh           11 close-keyword audit tests (#408)
 │   ├── test-github-hardening.sh       14 hardening audit tests (classic + ruleset sources)
-│   ├── test-wiki-setup.sh             39 managed wiki-studio install tests (#384)
+│   ├── test-wiki-setup.sh             40 managed wiki-studio install tests (#384)
 │   ├── test-wiki-launcher.sh          24 provenance-bound wiki launcher + alias tests (#384)
 │   ├── test-wiki-schema.sh            20 schema reconciliation + fingerprint tests (needs the managed .venv; #384)
 │   ├── test-wiki-ingest.sh            40 five-verb wiki contract tests (needs the managed .venv; #384)

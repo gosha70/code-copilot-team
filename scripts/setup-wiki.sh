@@ -20,6 +20,8 @@
 #   bash scripts/setup-wiki.sh            # optional: warn and exit 0 on failure
 #   bash scripts/setup-wiki.sh --require  # exit 1 when the wiki cannot be made ready
 #   bash scripts/setup-wiki.sh --check    # report the state only; exit 0 iff ok
+#                                         # (the first line's state word is the
+#                                         # signal for callers such as doctor)
 
 set -euo pipefail
 
@@ -106,6 +108,8 @@ if [[ -n "${current:-}" ]]; then
 else
     echo "[..]   Installing wiki-studio $WIKI_STUDIO_VERSION from $LOCK"
 fi
+# pip's wheel cache is fine here: --require-hashes verifies the bytes that
+# are installed whether they came from the index or the cache.
 # shellcheck disable=SC2086
 if ! "$PY" -m pip install --quiet --disable-pip-version-check --no-deps "${REINSTALL[@]+"${REINSTALL[@]}"}" ${CCT_WIKI_PIP_ARGS:-} -r "$LOCK"; then
     unavailable "hashed install from $LOCK failed (offline, proxy, or the artifact no longer matches its hash)"

@@ -42,7 +42,9 @@ wiki_setup_remedy() {
 }
 
 # wiki_py_version <python> — prints "major.minor" of that interpreter, or
-# nothing when it cannot run.
+# nothing when it cannot run. Two components by construction (%d.%d), and
+# wiki_py_supported's regex relies on exactly that: a wrapper that printed
+# a patch component would read as unsupported, loudly, not silently.
 wiki_py_version() {
     "$1" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null
 }
@@ -71,7 +73,11 @@ wiki_find_interpreter() {
         candidates=(python3.13 python3.12 python3.11 python3)
     fi
     for cand in "${candidates[@]}"; do
-        path="$(command -v "$cand" 2>/dev/null)" || continue
+        if ! path="$(command -v "$cand" 2>/dev/null)"; then
+            # An explicit choice that is not even on PATH is its own message.
+            [[ -n "${CCT_WIKI_PYTHON:-}" ]] && seen="CCT_WIKI_PYTHON=$cand is not on PATH"
+            continue
+        fi
         if v="$(wiki_py_supported "$path")"; then
             printf '%s' "$path"
             return 0

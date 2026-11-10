@@ -193,7 +193,11 @@ def check_wiki(repo: Path, report: Report) -> None:
         return
     expected, state, python = match.group("expected"), match.group("state"), match.group("python")
     remedy = f"run: bash {setup}"
-    extra = out.strip().splitlines()[1:]
+    # --check prints a second line only for no-venv (the interpreter a setup
+    # would pick, or why none is supported); it is consumed only there.
+    extra = out.strip().splitlines()[1:] if state == "no-venv" else []
+    # Only the ok state has a runnable launcher; every other state returns
+    # after its row, since `wiki info` cannot run without the package.
     if state == "ok":
         report.add("Wiki", "wiki-studio", OK, f"{expected} in {python}")
     elif state == "no-venv":
@@ -211,7 +215,11 @@ def check_wiki(repo: Path, report: Report) -> None:
     else:
         report.add("Wiki", "wiki-studio", BAD, f"unexpected state '{state}' from setup-wiki.sh --check")
         return
-    rc, out = run([str(repo / "scripts" / "wiki"), "info", "--json"])
+    launcher = repo / "scripts" / "wiki"
+    if not os.access(launcher, os.X_OK):
+        report.add("Wiki", "schema", BAD, f"{launcher} is not executable — restore its mode bit (chmod +x)")
+        return
+    rc, out = run([str(launcher), "info", "--json"])
     try:
         info = json.loads(out)
         contract = info["schema_contract"]
@@ -227,7 +235,10 @@ def check_wiki(repo: Path, report: Report) -> None:
         pinned = ""
     if contract.get("drift"):
         report.add("Wiki", "schema", BAD, f"{contract.get('source')} schema drifted from the declared fingerprint ({fingerprint[:12]}…)")
-    elif pinned and fingerprint != pinned:
+    elif not pinned:
+        # The pin is committed; its absence is a broken checkout, not a pass.
+        report.add("Wiki", "schema", WARN, f"{contract.get('source')} schema, fingerprint {fingerprint[:12]}… — the pin file {pin_file.relative_to(repo)} is missing, so it cannot be checked")
+    elif fingerprint != pinned:
         # Legacy mode declares no fingerprint, so this is the only check
         # that notices a local edit to an override document.
         report.add("Wiki", "schema", BAD, f"{contract.get('source')} schema fingerprint {fingerprint[:12]}… differs from the pinned {pinned[:12]}… — see knowledge/wiki/schema/POLICY.md")

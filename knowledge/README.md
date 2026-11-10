@@ -262,8 +262,10 @@ source, then writes a **proposal** to `doc_internal/proposals/`.
 
 Default invocation auto-detects an installed copilot CLI in the
 order `claude → codex → cursor` and uses it as the synthesis
-backend. Override with `--backend <name>` (the package reads no
-`WIKI_INGEST_BACKEND` variable). Use `--backend test` for a
+backend. Override with `--backend <name>`. The package reads no
+`WIKI_INGEST_BACKEND` variable and the alias does not translate it: if
+you have it set, unset it and pass `--backend` instead, or the
+auto-detected backend is used silently. Use `--backend test` for a
 deterministic stub (no real LLM call) — this is what CI uses.
 
 **Phase 0 hardening** added in the post-rescope branch:
