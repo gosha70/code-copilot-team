@@ -39,7 +39,14 @@ review-driven commits through the one that follows this record.
 
 ## Mismatches
 
-- none
+- FR-14, path filters: deliberate implementation deviation, intent
+  preserved. The spec's letter asks for a path filter naming the contract's
+  inputs; the implementation runs the workflow on every push and pull
+  request because the inputs cannot be enumerated. No change to the
+  approved spec text; the reviewer and the owner accepted the deviation on
+  PR #443.
+- The post-review aggregate job `Wiki contract` (fd3796c) is additive to
+  FR-14: one check name the ruleset can require after merge.
 
 Verdict: aligned
 Confidence: high
