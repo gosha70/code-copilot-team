@@ -116,8 +116,12 @@ WIKI_NONE=$(CCT_WIKI_VENV=/nonexistent-cct-venv bash "$CCT" doctor --no-network 
 assert "doctor: no managed venv warns, never fails the whole doctor" "[[ \$(wiki_row \"\$WIKI_NONE\" status) == warn ]]"
 assert "doctor: ...naming the missing environment and the remedy" \
   "[[ \$(wiki_row \"\$WIKI_NONE\" detail) == *'no managed environment'* && \$(wiki_row \"\$WIKI_NONE\" detail) == *'setup-wiki.sh'* ]]"
+# --without-pip: the "missing" state needs only bin/python, and a venv WITH
+# pip needs ensurepip, which a CI runner's python3 may lack (the first
+# Linux run saw "no venv" here because the creation had failed silently).
 EMPTY_VENV=$(mktemp -d)/venv
-python3 -m venv "$EMPTY_VENV" >/dev/null 2>&1
+python3 -m venv --without-pip "$EMPTY_VENV"
+assert "doctor test fixture: the empty venv exists" "[[ -x '$EMPTY_VENV/bin/python' ]]"
 WIKI_MISSING=$(CCT_WIKI_VENV="$EMPTY_VENV" bash "$CCT" doctor --no-network --json 2>&1 || true)
 assert "doctor: a venv without the package warns as missing" \
   "[[ \$(wiki_row \"\$WIKI_MISSING\" status) == warn && \$(wiki_row \"\$WIKI_MISSING\" detail) == *'not installed in'* ]]"
