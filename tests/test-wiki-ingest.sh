@@ -71,6 +71,14 @@ KNOWLEDGE_BEFORE="$(git -C "$REPO_DIR" status --short knowledge/)"
 WORK="$(cd "$(mktemp -d)" && pwd -P)"
 cleanup() {
   if [[ $FAIL -gt 0 ]]; then
+    # A CI runner cannot be inspected afterwards: print every non-empty
+    # stderr the steps left, so the cause is in the job log.
+    local err
+    for err in "$WORK"/logs/*.err; do
+      [[ -s "$err" ]] || continue
+      echo "  --- stderr of $(basename "${err%.err}") ---"
+      tail -n 20 "$err" | sed 's/^/  | /'
+    done
     echo "  (kept the disposable root for inspection: $WORK)"
   else
     rm -rf "$WORK"
