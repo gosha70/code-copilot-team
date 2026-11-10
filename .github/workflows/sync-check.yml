@@ -178,6 +178,11 @@ jobs:
       - name: Wiki setup tests
         run: bash tests/test-wiki-setup.sh
 
+      # The launchers run the managed venv's wiki-studio and nothing else,
+      # refusing a missing venv, package or version before any verb (#384).
+      - name: Wiki launcher tests
+        run: bash tests/test-wiki-launcher.sh
+
       # shared/capabilities/COMPATIBILITY.md is a deterministic render of the
       # capability registry. Until #214 Phase 2.0 this check ran only on
       # release tags, so a PR could land a stale matrix; it gates PRs now.

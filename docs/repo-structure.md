@@ -33,7 +33,8 @@ code-copilot-team/
 │   ├── generate.sh                      Builds adapter configs from shared/
 │   ├── bench                            Terse benchmark comparison driver (wraps benchmark)
 │   ├── benchmark                        Benchmark harness CLI (run, compare, judge, calibrate, report)
-│   ├── wiki                             LLM Wiki maintainer CLI (ingest, promote, query, lint, audit-flush)
+│   ├── wiki                             Wiki launcher: runs the .venv's wiki-studio 0.9.0 (ingest, promote, query, lint, audit-flush)
+│   ├── wiki-ingest                      Alias: wiki ingest --legacy-single-source
 │   ├── validate-spec.sh                 SDD spec validator (CI + local)
 │   ├── pre-pr-check.sh                  Pre-PR close-keyword audit gate
 │   ├── peer-review-runner.sh            Peer review execution engine
@@ -66,6 +67,7 @@ code-copilot-team/
 │   ├── test-pre-pr-check.sh           11 close-keyword audit tests (#408)
 │   ├── test-github-hardening.sh       14 hardening audit tests (classic + ruleset sources)
 │   ├── test-wiki-setup.sh             35 managed wiki-studio install tests (#384)
+│   ├── test-wiki-launcher.sh          24 provenance-bound wiki launcher + alias tests (#384)
 │   └── test-claude-code-launcher.sh   39 branded-launcher + cct shim + gateway notice tests (#195, #410, #399)
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification
