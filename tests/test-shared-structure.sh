@@ -1101,6 +1101,8 @@ rc=0; grep -q "^    paths:" "$WIT" && rc=1
 assert_ok "wiki-ingest-tests.yml runs on every push and pull request (no paths filter)" "$rc"
 rc=0; grep -q "No paths filter, on purpose" "$WIT" || rc=1
 assert_ok "wiki-ingest-tests.yml says why it has no filter" "$rc"
+rc=0; grep -q "^    name: Wiki contract$" "$WIT" && grep -q "needs: test" "$WIT" && grep -q "if: always()" "$WIT" || rc=1
+assert_ok "wiki-ingest-tests.yml ends in one check named 'Wiki contract' that fails unless every leg succeeded" "$rc"
 rc=0; grep -q "run: bash scripts/setup-wiki.sh --require" "$WIT" || rc=1
 assert_ok "wiki-ingest-tests.yml installs the locked wheel with the users' installer" "$rc"
 rc=0; grep -q "python-version: \['3.11', '3.12', '3.13'\]" "$WIT" || rc=1

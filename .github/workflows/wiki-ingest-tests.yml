@@ -65,3 +65,18 @@ jobs:
 
       - name: Five-verb contract (ingest, promote, query, lint, audit-flush)
         run: bash tests/test-wiki-ingest.sh
+
+  # One check named exactly `Wiki contract`, whatever the matrix does: the
+  # name the master ruleset requires once this workflow is on master (added
+  # after merge, so open PRs based on older master are not blocked by a
+  # check they cannot produce). Same pattern as codeql.yml's `CodeQL` job.
+  wiki-contract:
+    name: Wiki contract
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every Python leg succeeded
+        run: |
+          echo "test result: ${{ needs.test.result }}"
+          test "${{ needs.test.result }}" = "success"

@@ -356,9 +356,14 @@ version 0.9.0, pinned by hash in `scripts/wiki-requirements.txt`.
 `bash scripts/setup-wiki.sh` (run by `scripts/setup.sh` for every
 adapter installed from a checkout) installs it into the repository
 `.venv` with a Python 3.11–3.13 interpreter; CCT's other features keep
-Python 3.10. `./scripts/wiki` runs that venv's package and refuses,
-naming the remedy, when it is missing or another version; `cct doctor`
-reports the same under **Wiki**. Without a CCT checkout (the Claude
+Python 3.10. Every setup run reinstalls the hashed wheel to prove the
+bytes, so an offline re-run reports the wiki unavailable even when a
+correct install is present (a warning, unless `--wiki` was given).
+`./scripts/wiki` runs that venv's package and refuses, naming the
+remedy, when it is missing or another version; `cct doctor` reports the
+same under **Wiki**. Both check the package's version stamp, as the spec
+asks; the bytes are proven at setup time, so a hand-run `pip install`
+of something else stamped 0.9.0 passes them until the next setup. Without a CCT checkout (the Claude
 Code plugin alone, or copied adapter files) nothing installs it for
 you: install `wiki-studio==0.9.0` yourself and check
 `wiki-studio --version` before relying on it. How the pin is moved:
