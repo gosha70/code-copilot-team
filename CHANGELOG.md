@@ -12,6 +12,27 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Added
 
+- **wiki-studio is the wiki engine.** CCT no longer carries its own copy:
+  `scripts/wiki_ingest/` (10,344 lines) and the Bash linter
+  `knowledge/wiki/scripts/lint-wiki.sh` are deleted, and the five verbs
+  (`ingest`, `promote`, `query`, `lint`, `audit-flush`) run the
+  `wiki-studio==0.9.0` wheel pinned by hash in
+  `scripts/wiki-requirements.txt`. `scripts/setup-wiki.sh` installs it into
+  the checkout's `.venv` (Python 3.11–3.13; `scripts/setup.sh` runs it for
+  every adapter installed from a checkout, warns when it cannot, and fails
+  only with `--wiki`); `./scripts/wiki` runs that venv's package and
+  refuses, naming the remedy, when it is missing or another version;
+  `cct doctor` reports it under **Wiki** with the schema fingerprint and
+  manifest mode. The project schema is reconciled with the package's
+  (`knowledge/wiki/schema/POLICY.md`; the one retained divergence is the
+  launcher name) and its fingerprint pinned. Four new suites prove the
+  managed install, the launchers, the schema and the five-verb contract;
+  the wiki workflows install the wheel they test on 3.11, 3.12 and 3.13.
+  `/promote-lesson` stays free-text and lints through the launcher;
+  `wiki-first-query` stays a direct, model-free read; plugin-only installs
+  are told the exact prerequisite rather than promised a managed one.
+  The package reads no `WIKI_INGEST_BACKEND`; use `--backend`. The bump
+  procedure is `knowledge/wiki-studio-dependency.md` (#384).
 - **`cct start [path] [launcher args…]`** opens a harness session through the
   installed `claude-code` launcher, so starting a session is spelled with the
   harness's own name. Without an installed launcher it exits 2 and names

@@ -17,7 +17,8 @@
 #
 # A bump is one reviewed CCT change (FR-15): version + hash + provenance
 # here, the schema reconciliation and fingerprint, doctor/catalogue/docs,
-# and the full contract evidence. Never a version-only edit.
+# and the full contract evidence. Never a version-only edit. The procedure
+# is knowledge/wiki-studio-dependency.md.
 --require-hashes
 --only-binary=:all:
 wiki-studio==0.9.0 \

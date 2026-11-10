@@ -357,7 +357,8 @@ naming the remedy, when it is missing or another version; `cct doctor`
 reports the same under **Wiki**. Without a CCT checkout (the Claude
 Code plugin alone, or copied adapter files) nothing installs it for
 you: install `wiki-studio==0.9.0` yourself and check
-`wiki-studio --version` before relying on it.
+`wiki-studio --version` before relying on it. How the pin is moved:
+[`knowledge/wiki-studio-dependency.md`](wiki-studio-dependency.md).
 
 For the full curator-facing workflow (when to use ingest vs.
 manual, and how to take a proposal across the line), see
