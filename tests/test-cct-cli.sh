@@ -116,24 +116,16 @@ WIKI_NONE=$(CCT_WIKI_VENV=/nonexistent-cct-venv bash "$CCT" doctor --no-network 
 assert "doctor: no managed venv warns, never fails the whole doctor" "[[ \$(wiki_row \"\$WIKI_NONE\" status) == warn ]]"
 assert "doctor: ...naming the missing environment and the remedy" \
   "[[ \$(wiki_row \"\$WIKI_NONE\" detail) == *'no managed environment'* && \$(wiki_row \"\$WIKI_NONE\" detail) == *'setup-wiki.sh'* ]]"
-# A venv without the package. --without-pip: the state needs only
-# bin/python, and ensurepip is not a given on a runner. The interpreter
-# comes from the shared resolver: on a host with a supported Python the
-# doctor must say "missing"; on one without (ubuntu-26's python3 is 3.14)
-# the same venv is correctly "outside the package's range" — each host
-# asserts the row for the state it really produces.
-EMPTY_VENV=$(mktemp -d)/venv
-if FIX_PY=$(bash -c "source '$REPO_DIR/scripts/lib/wiki_env.sh' && wiki_find_interpreter" 2>/dev/null); then
-  "$FIX_PY" -m venv --without-pip "$EMPTY_VENV"
-  EXPECT_MISSING='not installed in'
-else
-  python3 -m venv --without-pip "$EMPTY_VENV"
-  EXPECT_MISSING="outside the package's range"
-fi
-assert "doctor test fixture: the empty venv exists" "[[ -x '$EMPTY_VENV/bin/python' ]]"
-WIKI_MISSING=$(CCT_WIKI_VENV="$EMPTY_VENV" bash "$CCT" doctor --no-network --json 2>&1 || true)
-assert "doctor: a venv without the package warns (expected: $EXPECT_MISSING)" \
-  "[[ \$(wiki_row \"\$WIKI_MISSING\" status) == warn && \$(wiki_row \"\$WIKI_MISSING\" detail) == *\"$EXPECT_MISSING\"* ]]"
+# A venv without the package, deterministic on every host: a fake
+# bin/python that answers the resolver's version probe with 3.12 and fails
+# its package-metadata probe (both are `-c` calls), which is exactly the
+# "missing" state. A real empty venv would depend on the runner's python3
+# (ubuntu-26 ships 3.14, outside the range), and so never pinned this path.
+MISS_VENV=$(mktemp -d)/venv; mkdir -p "$MISS_VENV/bin"
+printf '#!/usr/bin/env bash\ncase "$2" in *importlib.metadata*) exit 1 ;; *) echo 3.12 ;; esac\n' > "$MISS_VENV/bin/python"; chmod +x "$MISS_VENV/bin/python"
+WIKI_MISSING=$(CCT_WIKI_VENV="$MISS_VENV" bash "$CCT" doctor --no-network --json 2>&1 || true)
+assert "doctor: a venv without the package warns as missing, with the remedy" \
+  "[[ \$(wiki_row \"\$WIKI_MISSING\" status) == warn && \$(wiki_row \"\$WIKI_MISSING\" detail) == *'not installed in'* && \$(wiki_row \"\$WIKI_MISSING\" detail) == *'setup-wiki.sh'* ]]"
 # A venv on an unsupported interpreter, deterministic on every host: a
 # fake bin/python that reports 3.10.
 OLD_VENV=$(mktemp -d)/venv; mkdir -p "$OLD_VENV/bin"
