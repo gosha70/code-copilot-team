@@ -92,10 +92,16 @@ while read -r rel; do
 done < <(grep -rhoE '\.\./\.\./\.\./[A-Za-z0-9_./-]+' "$REPO_DIR/knowledge/wiki" --include='*.md' | sort -u)
 cp "$FIXTURE" "$ROOT/source.md"
 git -C "$ROOT" init -q
-git -C "$ROOT" -c user.name=t -c user.email=t@example.com add -A
-git -C "$ROOT" -c user.name=t -c user.email=t@example.com commit -q -m base
+# The package runs `git commit` itself for audit-flush; a CI runner has no
+# global identity, so the disposable repository carries its own (the first
+# Linux run of this suite failed exactly there, exit 11).
+git -C "$ROOT" config user.name "cct-wiki-contract"
+git -C "$ROOT" config user.email "cct-wiki-contract@example.invalid"
+git -C "$ROOT" config commit.gpgsign false
+git -C "$ROOT" add -A
+git -C "$ROOT" commit -q -m base
 export WIKI_STUDIO_ROOT="$ROOT"
-GIT=(git -C "$ROOT" -c user.name=t -c user.email=t@example.com)
+GIT=(git -C "$ROOT")
 
 run() {
   # run <name> <cmd...> → RC, OUT (stdout), ERR (stderr); logs kept under $WORK/logs
