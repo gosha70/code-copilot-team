@@ -30,6 +30,9 @@ __pycache__/
 *.pyc
 *.pyo
 .venv/
+# wiki-studio's per-machine lock (pid, host, start time) and search cache (#384)
+knowledge/.*.wiki-studio.lock
+knowledge/.*.wiki-studio.search.sqlite
 venv/
 target/
 build/

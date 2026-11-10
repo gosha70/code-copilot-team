@@ -58,9 +58,18 @@ for f in WIKI_MAINTAINER.md audit-rules.md citation-rules.md ingest-rules.md lin
 done
 
 echo "=== every difference from upstream is the recorded delta ==="
-# The same command POLICY.md documents for regenerating the fixture.
-ACTUAL=$(diff -ru -x '__init__.py' -x '__pycache__' -x 'POLICY.md' --label upstream --label project "$UPSTREAM" "$SCHEMA" \
-  | sed -E 's#^diff -ru .* [^ ]+/schema/([^ ]+) [^ ]+/schema/([^ ]+)$#diff upstream/\1 project/\2#')
+# One unified diff per document with explicit labels: `diff -r` prints a
+# per-file header that GNU and BSD diff spell differently (the first CI run
+# of this suite failed on Linux for exactly that), so the header is ours.
+# The same loop POLICY.md documents for regenerating the fixture.
+schema_delta() {
+  local f out
+  for f in WIKI_MAINTAINER.md audit-rules.md citation-rules.md ingest-rules.md lint-rules.md page-types.md; do
+    out=$(diff -u --label "upstream/$f" --label "project/$f" "$UPSTREAM/$f" "$SCHEMA/$f") && continue
+    printf 'diff upstream/%s project/%s\n%s\n' "$f" "$f" "$out"
+  done
+}
+ACTUAL=$(schema_delta)
 assert_eq "diff(upstream, project) equals retained-delta.patch" "" "$(diff <(printf '%s\n' "$ACTUAL") "$FIXTURES/retained-delta.patch")"
 assert_eq "the retained delta touches no fingerprinted document" "0" \
   "$(grep -cE '^diff upstream/(ingest-rules|page-types|citation-rules)\.md' "$FIXTURES/retained-delta.patch")"

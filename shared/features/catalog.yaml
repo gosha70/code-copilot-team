@@ -283,7 +283,7 @@ features:
       windsurf: advisory
       aider: advisory
     prerequisites:
-      - python3 3.11–3.13 for the wiki tooling (other CCT features keep 3.10)
+      - python3 3.11–3.13 for the wiki tooling
       - wiki-studio==0.9.0, installed into the checkout's .venv by scripts/setup-wiki.sh for every adapter installed from a checkout; a plugin-only or copied-adapter install provides it itself and /promote-lesson checks the version before linting
     guide: knowledge/README.md
     commands: [promote-lesson]

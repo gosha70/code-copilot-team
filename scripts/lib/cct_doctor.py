@@ -220,10 +220,19 @@ def check_wiki(repo: Path, report: Report) -> None:
         report.add("Wiki", "schema", BAD, f"`wiki info --json` unreadable (exit {rc}) — the installed distribution does not behave like wiki-studio {expected}")
         return
     fingerprint = str(contract.get("fingerprint") or "")
+    pin_file = repo / "tests" / "fixtures" / "wiki-schema" / "fingerprint.txt"
+    try:
+        pinned = pin_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        pinned = ""
     if contract.get("drift"):
         report.add("Wiki", "schema", BAD, f"{contract.get('source')} schema drifted from the declared fingerprint ({fingerprint[:12]}…)")
+    elif pinned and fingerprint != pinned:
+        # Legacy mode declares no fingerprint, so this is the only check
+        # that notices a local edit to an override document.
+        report.add("Wiki", "schema", BAD, f"{contract.get('source')} schema fingerprint {fingerprint[:12]}… differs from the pinned {pinned[:12]}… — see knowledge/wiki/schema/POLICY.md")
     else:
-        report.add("Wiki", "schema", OK, f"{contract.get('source')} schema, fingerprint {fingerprint[:12]}… (see knowledge/wiki/schema/POLICY.md)")
+        report.add("Wiki", "schema", OK, f"{contract.get('source')} schema, fingerprint {fingerprint[:12]}… matches the pin (knowledge/wiki/schema/POLICY.md)")
     report.add("Wiki", "manifest", OK, f"mode {manifest.get('mode')} ({manifest.get('state')})")
 
 

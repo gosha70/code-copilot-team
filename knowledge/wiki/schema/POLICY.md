@@ -64,7 +64,10 @@ three overrides as shipped in wiki-studio 0.9.0. No manifest declares it
 
 A wiki-studio bump (FR-15) redoes this table against the new package:
 start from the new packaged documents, reapply only category-1 hunks,
-regenerate `retained-delta.patch` and `fingerprint.txt` with the commands
-in `tests/test-wiki-schema.sh`, and record the new numbers here. A change
+regenerate `retained-delta.patch` (the `schema_delta` loop in
+`tests/test-wiki-schema.sh`: one `diff -u` per document with explicit
+`--label upstream/<f>` / `--label project/<f>`, never `diff -r`, whose
+per-file header differs between GNU and BSD diff) and `fingerprint.txt`,
+and record the new numbers here. A change
 to a fingerprinted document is a schema change for every proposal the
 engine writes; it is never made silently.

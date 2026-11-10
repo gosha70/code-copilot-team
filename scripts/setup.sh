@@ -199,6 +199,30 @@ if $needs_project && [[ -z "$PROJECT_DIR" ]]; then
   exit 1
 fi
 
+# ── Wiki tooling (#384): adapter-neutral, every checkout install ──────
+# wiki-studio lives in the repository .venv and is installed from a hashed
+# lock by scripts/setup-wiki.sh. It runs BEFORE the adapters: the Claude
+# Code adapter also creates .venv (for Session Analytics) with whatever
+# python3 is first on PATH, and setup-wiki.sh never replaces an existing
+# venv — so the interpreter the wiki needs must choose the venv first.
+# Optional unless --wiki was given: anything short of ready is reported
+# in the summary and does not fail the command, as every other optional
+# Python part.
+echo "=== Wiki tooling ==="
+WIKI_STATUS="ready"
+if [[ ! -f "$REPO_DIR/scripts/setup-wiki.sh" ]]; then
+  WIKI_STATUS="unavailable (scripts/setup-wiki.sh is not in this copy of the checkout)"
+  echo "[WARN] wiki tooling unavailable: scripts/setup-wiki.sh is not in this copy of the checkout"
+  $WIKI_REQUIRED && WIKI_STATUS="FAILED"
+elif $WIKI_REQUIRED; then
+  bash "$REPO_DIR/scripts/setup-wiki.sh" --require || WIKI_STATUS="FAILED"
+else
+  WIKI_OUT="$(bash "$REPO_DIR/scripts/setup-wiki.sh" 2>&1)" || WIKI_STATUS="unavailable (setup-wiki.sh exited non-zero; see above)"
+  echo "$WIKI_OUT"
+  [[ "$WIKI_OUT" == *"[WARN] wiki tooling unavailable"* ]] && WIKI_STATUS="unavailable (see above; non-wiki features unaffected)"
+fi
+echo ""
+
 # ── Install each tool ─────────────────────────────────────
 INSTALLED=0
 FAILED=0
@@ -246,28 +270,6 @@ for tool in "${TOOLS[@]}"; do
   esac
   echo ""
 done
-
-# ── Wiki tooling (#384): adapter-neutral, every checkout install ──────
-# wiki-studio lives in the repository .venv and is installed from a hashed
-# lock by scripts/setup-wiki.sh. It is optional unless --wiki was given:
-# an unavailable interpreter or a failed install is reported in the summary
-# and does not fail the command, as every other optional Python part.
-echo "=== Wiki tooling ==="
-WIKI_STATUS="ready"
-if [[ ! -f "$REPO_DIR/scripts/setup-wiki.sh" ]]; then
-  # A partial copy of the checkout (no installer, no lock): say so; it is
-  # the same "unavailable" outcome as a missing interpreter.
-  WIKI_STATUS="unavailable (scripts/setup-wiki.sh is not in this copy of the checkout)"
-  echo "[WARN] wiki tooling unavailable: scripts/setup-wiki.sh is not in this copy of the checkout"
-  $WIKI_REQUIRED && WIKI_STATUS="FAILED"
-elif $WIKI_REQUIRED; then
-  bash "$REPO_DIR/scripts/setup-wiki.sh" --require || WIKI_STATUS="FAILED"
-else
-  WIKI_OUT="$(bash "$REPO_DIR/scripts/setup-wiki.sh" 2>&1)" || WIKI_STATUS="FAILED"
-  echo "$WIKI_OUT"
-  [[ "$WIKI_OUT" == *"[WARN] wiki tooling unavailable"* ]] && WIKI_STATUS="unavailable (see above; non-wiki features unaffected)"
-fi
-echo ""
 
 # ── Summary ────────────────────────────────────────────────
 echo "========================================="

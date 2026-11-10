@@ -1,6 +1,6 @@
 diff upstream/WIKI_MAINTAINER.md project/WIKI_MAINTAINER.md
---- upstream
-+++ project
+--- upstream/WIKI_MAINTAINER.md
++++ project/WIKI_MAINTAINER.md
 @@ -65,7 +65,7 @@
     that is not reachable from `index.md` is invisible.
  8. **Log.** Append a one-line entry to [`../log.md`](../log.md):
@@ -20,8 +20,8 @@ diff upstream/WIKI_MAINTAINER.md project/WIKI_MAINTAINER.md
  - **Mix promotion and curation in one turn.** Promote *or* refactor;
    not both.
 diff upstream/audit-rules.md project/audit-rules.md
---- upstream
-+++ project
+--- upstream/audit-rules.md
++++ project/audit-rules.md
 @@ -7,7 +7,7 @@
  in [`lint-rules.md`](lint-rules.md)** (no frontmatter, no `page_type`,
  not linked from `index.md`). This file is the machine-checkable spec for
@@ -32,8 +32,8 @@ diff upstream/audit-rules.md project/audit-rules.md
  Two artifacts live under `.audit/`:
  
 diff upstream/lint-rules.md project/lint-rules.md
---- upstream
-+++ project
+--- upstream/lint-rules.md
++++ project/lint-rules.md
 @@ -1,6 +1,6 @@
 -# Lint Rules — what `lint-wiki.sh` checks
 +# Lint Rules — what `wiki lint` checks
