@@ -69,6 +69,7 @@ code-copilot-team/
 │   ├── test-wiki-setup.sh             35 managed wiki-studio install tests (#384)
 │   ├── test-wiki-launcher.sh          24 provenance-bound wiki launcher + alias tests (#384)
 │   ├── test-wiki-schema.sh            17 schema reconciliation + fingerprint tests (needs the managed .venv; #384)
+│   ├── test-wiki-ingest.sh            40 five-verb wiki contract tests (needs the managed .venv; #384)
 │   └── test-claude-code-launcher.sh   39 branded-launcher + cct shim + gateway notice tests (#195, #410, #399)
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification
