@@ -71,7 +71,7 @@ Use this in place of steps 4–9 when promoting a cluster:
 4. **Update `index.md` and `log.md` once.** One bullet per page
    in `index.md`; one entry per page in `log.md`, all dated the
    same day.
-5. **Lint once.** `bash knowledge/wiki/scripts/lint-wiki.sh`. With
+5. **Lint once.** `./scripts/wiki lint`. With
    the cross-link pass complete and the index updated, the linter
    should pass on the first run. If it doesn't, fix the violation
    without splitting the cluster.
@@ -108,8 +108,11 @@ forward-link breakage.
    will flag it.
 8. **Append to the log.** Add one line to [`../log.md`](../log.md):
    `- YYYY-MM-DD — <verb> <slug> (<page-type>): <one-line why>`.
-9. **Run the linter.** `bash knowledge/wiki/scripts/lint-wiki.sh`.
-   If it fails, fix the violation. Do not silence the linter.
+9. **Run the linter.** `./scripts/wiki lint`. If it fails, fix the
+   violation. Do not silence the linter. If the launcher refuses
+   because wiki-studio is missing or not the locked version, run
+   the remedy it prints (`bash scripts/setup-wiki.sh`) and lint
+   again; never skip the step.
 10. **Stop.** Do not "improve" adjacent pages in the same turn.
     Drive-by edits make review hard. Open a new turn for any
     other lesson.
@@ -121,7 +124,7 @@ forward-link breakage.
 - The page's frontmatter `slug` equals its filename stem.
 - The page is linked from `index.md`.
 - A new bullet exists in `log.md` for this change.
-- `bash knowledge/wiki/scripts/lint-wiki.sh` exits 0.
+- `./scripts/wiki lint` exits 0.
 
 ## Related
 

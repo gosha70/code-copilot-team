@@ -63,6 +63,9 @@ if [[ "$STATE" != "ok" ]]; then
   exit 1
 fi
 PY="$(wiki_python)"
+# Whatever state knowledge/ is in (clean or mid-edit), the suite must leave
+# it exactly so; compared at the end.
+KNOWLEDGE_BEFORE="$(git -C "$REPO_DIR" status --short knowledge/)"
 
 # ── a disposable root: this checkout's wiki plus what its pages cite ────
 WORK="$(cd "$(mktemp -d)" && pwd -P)"
@@ -190,7 +193,7 @@ run badbackend "$WIKI" ingest --backend bogus "$ROOT/source.md"
 assert_eq "an unknown backend exits 2" 2 "$RC"
 
 echo "=== the real wiki was never touched ==="
-assert_eq "knowledge/ in the checkout is unchanged" "" "$(git -C "$REPO_DIR" status --short knowledge/)"
+assert_eq "knowledge/ in the checkout is exactly as it was before the suite" "$KNOWLEDGE_BEFORE" "$(git -C "$REPO_DIR" status --short knowledge/)"
 
 echo "========================================="
 echo "  Results: $PASS passed, $FAIL failed"

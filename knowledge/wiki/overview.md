@@ -31,8 +31,9 @@ re-discovering it every session.
 - **Typed, not free-form.** Each page is exactly one of eight
   types. The type drives directory placement and required
   structure. See [`schema/page-types.md`](schema/page-types.md).
-- **Linted, not policed.** A small bash linter
-  ([`scripts/lint-wiki.sh`](scripts/lint-wiki.sh)) catches
+- **Linted, not policed.** wiki-studio's structural lint, run as
+  `./scripts/wiki lint` (what it checks:
+  [`schema/lint-rules.md`](schema/lint-rules.md)), catches
   structural breakage. Prose quality and factual accuracy still
   need a human curator.
 - **Manual promotion in v1.** No background scheduler, no

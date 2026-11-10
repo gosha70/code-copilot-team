@@ -1,21 +1,29 @@
 name: Wiki Lint
 
-# Non-blocking structural lint of knowledge/wiki/ per issue #12.
-# Surfaces violations without gating merges (continue-on-error: true).
-# Promote to blocking once the wiki layer has settled.
+# Non-blocking structural lint of knowledge/wiki/ per issue #12, now run
+# by the locked wiki-studio through CCT's launcher (#384): the job installs
+# the exact hashed wheel with the same installer users run, then runs
+# `./scripts/wiki lint`. Surfaces violations without gating merges
+# (continue-on-error: true); making it blocking is a separate decision.
 
 on:
   push:
     branches: [master, main]
     paths:
       - 'knowledge/wiki/**'
-      - 'knowledge/wiki/scripts/lint-wiki.sh'
+      - 'scripts/wiki'
+      - 'scripts/lib/wiki_env.sh'
+      - 'scripts/setup-wiki.sh'
+      - 'scripts/wiki-requirements.txt'
       - '.github/workflows/wiki-lint.yml'
   pull_request:
     branches: [master, main]
     paths:
       - 'knowledge/wiki/**'
-      - 'knowledge/wiki/scripts/lint-wiki.sh'
+      - 'scripts/wiki'
+      - 'scripts/lib/wiki_env.sh'
+      - 'scripts/setup-wiki.sh'
+      - 'scripts/wiki-requirements.txt'
       - '.github/workflows/wiki-lint.yml'
 
 permissions:
@@ -30,5 +38,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Run wiki linter
-        run: bash knowledge/wiki/scripts/lint-wiki.sh
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install the locked wiki-studio into the managed venv
+        env:
+          CCT_WIKI_PYTHON: python
+        run: bash scripts/setup-wiki.sh --require
+
+      - name: Run the structural lint through the launcher
+        run: ./scripts/wiki lint

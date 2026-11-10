@@ -33,7 +33,7 @@ two other layers:
   (file paths with commit SHAs, issue/PR numbers, dated URLs).
 - **Typed.** Every page is exactly one of nine page types, each
   with required structure.
-- **Linted.** A small bash script (`wiki/scripts/lint-wiki.sh`)
+- **Linted.** wiki-studio's structural lint (`./scripts/wiki lint`)
   catches structural breakage. Prose quality and factual accuracy
   still need a human curator.
 - **Manual in v1.** No background scheduler, no auto-ingest. Every
@@ -96,10 +96,13 @@ knowledge/
     │   ├── ingest-rules.md      ← the four-question gate
     │   ├── page-types.md        ← page-type templates and rules
     │   ├── citation-rules.md    ← how to cite sources
-    │   └── lint-rules.md        ← what the linter checks
-    └── scripts/
-        └── lint-wiki.sh         ← structural linter (bash, no deps)
+    │   ├── lint-rules.md        ← what the linter checks
+    │   └── POLICY.md            ← how this copy relates to wiki-studio's schema
 ```
+
+The structural linter, ingest, promotion, query and the audit ledger are
+the `wiki-studio` package (exactly 0.9.0, installed into the checkout's
+`.venv` by `scripts/setup-wiki.sh`), run through `./scripts/wiki`.
 
 ---
 
@@ -198,7 +201,7 @@ ten steps in summary:
 6. Write or update the page using its type's template.
 7. Link it from `wiki/index.md` under the right section.
 8. Append a one-line entry to `wiki/log.md`.
-9. Run `bash wiki/scripts/lint-wiki.sh` — must exit 0.
+9. Run `./scripts/wiki lint` — must exit 0.
 10. **Stop.** No drive-by edits to other pages.
 
 ### 5c. Claude Code shortcut: `/promote-lesson`
@@ -259,10 +262,9 @@ source, then writes a **proposal** to `doc_internal/proposals/`.
 
 Default invocation auto-detects an installed copilot CLI in the
 order `claude → codex → cursor` and uses it as the synthesis
-backend. Override with `--backend <name>` or the
-`WIKI_INGEST_BACKEND` environment variable. Use
-`--backend test` for a deterministic stub (no real LLM call) —
-this is what CI uses.
+backend. Override with `--backend <name>` (the package reads no
+`WIKI_INGEST_BACKEND` variable). Use `--backend test` for a
+deterministic stub (no real LLM call) — this is what CI uses.
 
 **Phase 0 hardening** added in the post-rescope branch:
 
@@ -338,15 +340,24 @@ mechanically). A candidate is only promoted on `accept`; a
 gate's reasoning, so the curator sees *why* a candidate was
 declined.
 
-**CI mode:** `tests/test-wiki-ingest.sh` invokes the entrypoint
-with `--backend test` (deterministic stub, no network, no copilot
-CLI required). The same flag is what
-`.github/workflows/wiki-ingest-tests.yml` uses on every PR
-touching `scripts/wiki_ingest/**`.
+**CI mode:** `tests/test-wiki-ingest.sh` is CCT's thin contract over
+the engine: it drives the five verbs with `--backend test`
+(deterministic stub, no network, no copilot CLI) in a disposable copy
+of this wiki. `.github/workflows/wiki-ingest-tests.yml` installs the
+locked wheel and runs it on every PR touching the launcher, the lock,
+the schema, or the wiki tests, on Python 3.11, 3.12 and 3.13.
 
-**Stdlib only.** No `pip install` step; Python 3.10+. The
-`scripts/wiki-ingest` Bash entrypoint sets `PYTHONPATH` and
-exec's `python3 -m wiki_ingest`.
+**Prerequisite.** The engine is the `wiki-studio` package, exactly
+version 0.9.0, pinned by hash in `scripts/wiki-requirements.txt`.
+`bash scripts/setup-wiki.sh` (run by `scripts/setup.sh` for every
+adapter installed from a checkout) installs it into the repository
+`.venv` with a Python 3.11–3.13 interpreter; CCT's other features keep
+Python 3.10. `./scripts/wiki` runs that venv's package and refuses,
+naming the remedy, when it is missing or another version; `cct doctor`
+reports the same under **Wiki**. Without a CCT checkout (the Claude
+Code plugin alone, or copied adapter files) nothing installs it for
+you: install `wiki-studio==0.9.0` yourself and check
+`wiki-studio --version` before relying on it.
 
 For the full curator-facing workflow (when to use ingest vs.
 manual, and how to take a proposal across the line), see
@@ -416,7 +427,7 @@ knowledge.
 ### 8a. Local
 
 ```bash
-bash knowledge/wiki/scripts/lint-wiki.sh
+./scripts/wiki lint
 ```
 
 Output on a clean tree:
@@ -545,7 +556,7 @@ in-wiki decision record.
 - **Just want to read?** → [`wiki/index.md`](wiki/index.md)
 - **About to add a page?** → [`wiki/schema/WIKI_MAINTAINER.md`](wiki/schema/WIKI_MAINTAINER.md)
   + [`wiki/workflows/promote-lesson-to-wiki.md`](wiki/workflows/promote-lesson-to-wiki.md)
-- **Just want to lint?** → `bash knowledge/wiki/scripts/lint-wiki.sh`
+- **Just want to lint?** → `./scripts/wiki lint`
 - **Curious about the rules?** → [`wiki/schema/`](wiki/schema/)
 
 ---
@@ -591,9 +602,9 @@ history is traceable via git on `knowledge/wiki/` plus
 `knowledge/wiki/log.md`.
 
 The CLI auto-detects an installed copilot backend in the order
-`claude → codex → cursor`. Override with `--backend <name>` or
-`WIKI_INGEST_BACKEND=<name>`. Use `--backend test` for the
-deterministic stub backend (no LLM call; this is what CI uses).
+`claude → codex → cursor`. Override with `--backend <name>`. Use
+`--backend test` for the deterministic stub backend (no LLM call;
+this is what CI uses).
 
 For the v1 single-source flow, the legacy invocation
 `./scripts/wiki-ingest <source>` is preserved as a backwards-compat

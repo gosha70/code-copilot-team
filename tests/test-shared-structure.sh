@@ -1092,6 +1092,57 @@ for copy in "$REPO_DIR/adapters/claude-code/plugin/commands/promote-lesson.md" "
   rc=0; grep -q 'Without a CCT checkout' "$copy" || rc=1
   assert_ok "promote-lesson copy states the plugin-only prerequisite: ${copy#"$REPO_DIR"/}" "$rc"
 done
+# ── #384 FR-14: the two wiki workflows install what production runs and
+# their path filters name every contract input (a filter that drops one
+# would let a change to it skip CI; these greps are that mutation test).
+WIT="$REPO_DIR/.github/workflows/wiki-ingest-tests.yml"
+for input in "scripts/wiki'" "scripts/wiki-ingest'" "scripts/lib/wiki_env.sh'" "scripts/setup-wiki.sh'" \
+  "scripts/wiki-requirements.txt'" "knowledge/wiki/schema/\*\*'" "tests/test-wiki-ingest.sh'" \
+  "tests/test-wiki-launcher.sh'" "tests/test-wiki-schema.sh'" "tests/fixtures/wiki-contract/\*\*'" \
+  "tests/fixtures/wiki-schema/\*\*'" ".github/workflows/wiki-ingest-tests.yml'"; do
+  rc=0; [[ "$(grep -c -- "- '$input" "$WIT")" -eq 2 ]] || rc=1
+  assert_ok "wiki-ingest-tests.yml filters push and pull_request on ${input%\'}" "$rc"
+done
+rc=0; grep -q "run: bash scripts/setup-wiki.sh --require" "$WIT" || rc=1
+assert_ok "wiki-ingest-tests.yml installs the locked wheel with the users' installer" "$rc"
+rc=0; grep -q "python-version: \['3.11', '3.12', '3.13'\]" "$WIT" || rc=1
+assert_ok "wiki-ingest-tests.yml runs on exactly the package's Python range" "$rc"
+for suite in test-wiki-launcher.sh test-wiki-schema.sh test-wiki-ingest.sh; do
+  rc=0; grep -q "run: bash tests/$suite" "$WIT" || rc=1
+  assert_ok "wiki-ingest-tests.yml runs $suite" "$rc"
+done
+WL="$REPO_DIR/.github/workflows/wiki-lint.yml"
+for input in "knowledge/wiki/\*\*'" "scripts/wiki'" "scripts/lib/wiki_env.sh'" "scripts/setup-wiki.sh'" "scripts/wiki-requirements.txt'"; do
+  rc=0; [[ "$(grep -c -- "- '$input" "$WL")" -eq 2 ]] || rc=1
+  assert_ok "wiki-lint.yml filters push and pull_request on ${input%\'}" "$rc"
+done
+rc=0; grep -q "run: bash scripts/setup-wiki.sh --require" "$WL" || rc=1
+assert_ok "wiki-lint.yml installs the locked wheel" "$rc"
+rc=0; grep -q "run: ./scripts/wiki lint" "$WL" || rc=1
+assert_ok "wiki-lint.yml lints through the launcher" "$rc"
+rc=0; grep -q "continue-on-error: true" "$WL" || rc=1
+assert_ok "wiki-lint.yml stays non-blocking (unchanged merge policy)" "$rc"
+rc=0; grep -q "lint-wiki.sh" "$WL" && rc=1
+assert_ok "wiki-lint.yml no longer runs the Bash linter" "$rc"
+
+# ── #384 FR-5/FR-6/FR-13: both duplicate engines are gone and nothing
+# production-facing names them. Records of the removal (specs, the
+# changelog, the schema policy and its delta fixture) are the only
+# places the old names may appear.
+rc=0; [[ -e "$REPO_DIR/scripts/wiki_ingest" ]] && rc=1
+assert_ok "the embedded engine tree scripts/wiki_ingest/ is gone" "$rc"
+rc=0; [[ -e "$REPO_DIR/knowledge/wiki/scripts/lint-wiki.sh" ]] && rc=1
+assert_ok "the Bash linter knowledge/wiki/scripts/lint-wiki.sh is gone" "$rc"
+STALE=$(git -C "$REPO_DIR" grep -lE 'wiki_ingest|python3? -m wiki_ingest' -- . \
+  ':!specs' ':!CHANGELOG.md' ':!tests/test-shared-structure.sh' ':!tests/test-wiki-schema.sh' 2>/dev/null || true)
+rc=0; [[ -z "$STALE" ]] || rc=1
+assert_ok "no file imports or invokes the deleted engine${STALE:+ (found: $(echo "$STALE" | tr '\n' ' '))}" "$rc"
+STALE=$(git -C "$REPO_DIR" grep -l 'lint-wiki\.sh' -- . \
+  ':!specs' ':!CHANGELOG.md' ':!knowledge/wiki/schema/POLICY.md' ':!tests/fixtures/wiki-schema' \
+  ':!tests/test-shared-structure.sh' ':!tests/test-wiki-schema.sh' 2>/dev/null || true)
+rc=0; [[ -z "$STALE" ]] || rc=1
+assert_ok "no production file names the deleted Bash linter${STALE:+ (found: $(echo "$STALE" | tr '\n' ' '))}" "$rc"
+
 WF_SENTENCE='The convention never runs `wiki query`'
 rc=0; grep -qF "$WF_SENTENCE" "$SHARED_DIR/skills/wiki-first-query/SKILL.md" || rc=1
 assert_ok "wiki-first-query (source) stays a direct read: never wiki query or find" "$rc"
