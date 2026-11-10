@@ -1,41 +1,24 @@
 name: Wiki Ingest Tests
 
-# Runs the wiki ingest pipeline test suite (Python unittest + bash
-# end-to-end smoke + negative-path drills) on PRs that touch the
-# pipeline. Per specs/wiki-ingest-pipeline/plan.md Phase 4 option
-# (a): a feature-scoped workflow with an explicit paths filter is
-# preferred over wiring the suite into an always-on entrypoint —
-# keeps the change small and avoids cross-cutting count drift in
-# tests/test-counts.env.
+# CCT's thin contract over the wiki-studio engine (#384): the exact hashed
+# wheel is installed into a venv by the same installer users run, then the
+# launcher, schema-reconciliation and five-verb contract suites run against
+# it on every Python the package supports (3.11–3.13). The engine's own
+# unit tests are upstream's; nothing here imports package internals.
 #
-# The paths filter must include EVERY input the test depends on,
-# otherwise a change to the test harness or schema will not trigger
-# CI:
-#   - scripts/wiki-ingest                   (bash entrypoint)
-#   - scripts/wiki_ingest/**                (python package + tests)
-#   - tests/test-wiki-ingest.sh             (the runner itself)
-#   - .github/workflows/wiki-ingest-tests.yml (this file)
-#   - knowledge/wiki/schema/**              (prompt.py loads schema at runtime)
+# No paths filter, on purpose: the five-verb contract runs on a copy of the
+# CURRENT knowledge/wiki/ plus every file its pages cite elsewhere in the
+# checkout, and the schema suite drives `cct doctor`, so the set of inputs
+# is dynamic and a hand-written filter would always be incomplete (the
+# first attempt listed the launcher, lock, schema and suites and missed
+# the wiki pages themselves). Three jobs of a few minutes on every PR is
+# the honest cost of FR-9's "a copy of CCT's current wiki".
 
 on:
   push:
     branches: [master, main]
-    paths:
-      - 'scripts/wiki'
-      - 'scripts/wiki-ingest'
-      - 'scripts/wiki_ingest/**'
-      - 'tests/test-wiki-ingest.sh'
-      - '.github/workflows/wiki-ingest-tests.yml'
-      - 'knowledge/wiki/schema/**'
   pull_request:
     branches: [master, main]
-    paths:
-      - 'scripts/wiki'
-      - 'scripts/wiki-ingest'
-      - 'scripts/wiki_ingest/**'
-      - 'tests/test-wiki-ingest.sh'
-      - '.github/workflows/wiki-ingest-tests.yml'
-      - 'knowledge/wiki/schema/**'
 
 # Least privilege: this workflow reads code and runs tests; it never
 # writes to issues, PRs, packages, or any other GH surface.
@@ -44,15 +27,13 @@ permissions:
 
 jobs:
   test:
-    name: Run wiki-ingest pipeline tests (py${{ matrix.python-version }})
+    name: Wiki contract against the locked wiki-studio (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        # Stdlib-only pipeline (see spec.md requirement #10) — no pip
-        # install step required. Python 3.10+ for PEP 604 union syntax
-        # (X | None). Matrix proves both ends of the supported range.
-        python-version: ['3.10', '3.11', '3.12']
+        # wiki-studio 0.9.0 declares >=3.11,<3.14; every supported minor.
+        python-version: ['3.11', '3.12', '3.13']
     steps:
       - name: Checkout repository
         # Pin to a SHA so an upstream tag re-point cannot inject code
@@ -65,10 +46,37 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Run tests/test-wiki-ingest.sh
-        # The bash runner internally runs `python3 -m unittest
-        # discover` against scripts/wiki_ingest/tests/ before the
-        # bash smoke + negative-path drills, so this single step
-        # exercises both the Python unit tests AND the e2e tests
-        # against the matrix-selected Python version.
+      - name: Install the locked wiki-studio into the managed venv
+        # The same installer users run; --require because this job exists
+        # to test the wiki and must not pass with it absent. The matrix
+        # interpreter is the only candidate.
+        env:
+          CCT_WIKI_PYTHON: python
+        run: bash scripts/setup-wiki.sh --require
+
+      - name: Managed install (setup-wiki.sh, root setup, the Claude Code adapter's venv)
+        run: bash tests/test-wiki-setup.sh
+
+      - name: Launcher contract
+        run: bash tests/test-wiki-launcher.sh
+
+      - name: Schema reconciliation and fingerprint
+        run: bash tests/test-wiki-schema.sh
+
+      - name: Five-verb contract (ingest, promote, query, lint, audit-flush)
         run: bash tests/test-wiki-ingest.sh
+
+  # One check named exactly `Wiki contract`, whatever the matrix does: the
+  # name the master ruleset requires once this workflow is on master (added
+  # after merge, so open PRs based on older master are not blocked by a
+  # check they cannot produce). Same pattern as codeql.yml's `CodeQL` job.
+  wiki-contract:
+    name: Wiki contract
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every Python leg succeeded
+        run: |
+          echo "test result: ${{ needs.test.result }}"
+          test "${{ needs.test.result }}" = "success"

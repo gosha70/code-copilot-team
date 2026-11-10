@@ -159,6 +159,24 @@ done once, in this order, each step confirmed before the next:
 `bash scripts/check-github-hardening.sh --required-checks "pi-tests,sync-check,CodeQL"`
 after step 7 confirms the required set is back.
 
+## Wiki contract: the required check for the wiki tooling
+
+`.github/workflows/wiki-ingest-tests.yml` runs CCT's wiki suites against
+the locked wiki-studio on Python 3.11, 3.12 and 3.13, on every push and
+pull request, and ends in one job named exactly `Wiki contract` that
+fails unless every leg succeeded. It is not part of `sync-check` (whose
+runner Python is outside the package's range), so it protects master
+only if the ruleset requires it. After the PR that adds the workflow is
+on master, add the context — after, not before, so open PRs based on an
+older master are not blocked by a check they cannot produce:
+
+```bash
+gh api repos/gosha70/code-copilot-team/rulesets/19893594 > ruleset.json
+jq '(.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks) += [{"context":"Wiki contract"}]' ruleset.json > ruleset-wiki.json
+gh api -X PUT repos/gosha70/code-copilot-team/rulesets/19893594 --input ruleset-wiki.json
+bash scripts/check-github-hardening.sh --required-checks "pi-tests,sync-check,CodeQL,External review on record,Wiki contract"
+```
+
 ## Review gate: a PR merges only after its head is reviewed
 
 `.github/workflows/review-gate.yml` (the same mechanics as wiki-studio's)

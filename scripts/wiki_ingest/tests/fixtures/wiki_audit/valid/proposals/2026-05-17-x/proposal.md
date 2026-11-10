@@ -1,3 +1,0 @@
-# proposed
-
-rationale + body

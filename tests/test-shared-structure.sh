@@ -1066,7 +1066,99 @@ assert_ok "test-counts has TEST_REVIEW_LOOP_EXPECTED_PASS numeric value" "$rc"
 COUNT_VARS=$(grep -Ec '^TEST_[A-Z_]+_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env")
 # 15 as of #239 C3 T4 (test-ui-harness.sh). Bump deliberately when a
 # suite is added, so a pin cannot go missing unnoticed.
-assert_eq "test-counts has exactly 23 expected-pass variables (github-hardening arrived with the CodeQL cutover)" "23" "$COUNT_VARS"
+assert_eq "test-counts has exactly 27 expected-pass variables (the four wiki suites arrived with #384)" "27" "$COUNT_VARS"
+
+# ── #384 FR-10: assistant workflows keep their meaning after the engine swap ──
+# /promote-lesson stays a free-text, manual curator procedure that lints
+# through the launcher; wiki-first-query stays a direct, model-free read.
+# Asserted on the SOURCE and on every generated copy, so a regeneration
+# cannot drop either contract.
+PL_SRC="$REPO_DIR/adapters/claude-code/.claude/commands/promote-lesson.md"
+rc=0; grep -q './scripts/wiki lint' "$PL_SRC" || rc=1
+assert_ok "promote-lesson (source) lints through ./scripts/wiki lint" "$rc"
+rc=0; grep -q 'lint-wiki.sh' "$PL_SRC" && rc=1
+assert_ok "promote-lesson (source) names no Bash linter" "$rc"
+rc=0; grep -q 'Free-form prose' "$PL_SRC" || rc=1
+assert_ok "promote-lesson (source) keeps its free-text argument" "$rc"
+rc=0; grep -q 'never a source path to ingest' "$PL_SRC" || rc=1
+assert_ok "promote-lesson (source) never reinterprets the text as an ingest source" "$rc"
+rc=0; grep -q 'Without a CCT checkout' "$PL_SRC" || rc=1
+assert_ok "promote-lesson (source) states the plugin-only prerequisite and refuses rather than skips" "$rc"
+for copy in "$REPO_DIR/adapters/claude-code/plugin/commands/promote-lesson.md" "$REPO_DIR/adapters/pi/resources/prompts/promote-lesson.md"; do
+  rc=0; grep -q './scripts/wiki lint' "$copy" || rc=1
+  assert_ok "promote-lesson copy lints through the launcher: ${copy#"$REPO_DIR"/}" "$rc"
+  rc=0; grep -q 'lint-wiki.sh' "$copy" && rc=1
+  assert_ok "promote-lesson copy names no Bash linter: ${copy#"$REPO_DIR"/}" "$rc"
+  rc=0; grep -q 'Without a CCT checkout' "$copy" || rc=1
+  assert_ok "promote-lesson copy states the plugin-only prerequisite: ${copy#"$REPO_DIR"/}" "$rc"
+done
+# ── #384 FR-14: the two wiki workflows install what production runs. The
+# contract workflow has NO paths filter (its inputs — the live wiki, what
+# its pages cite, the doctor — are dynamic; an external review found the
+# first hand-written filter incomplete), and the structure test says so.
+WIT="$REPO_DIR/.github/workflows/wiki-ingest-tests.yml"
+rc=0; grep -q "^    paths:" "$WIT" && rc=1
+assert_ok "wiki-ingest-tests.yml runs on every push and pull request (no paths filter)" "$rc"
+rc=0; grep -q "No paths filter, on purpose" "$WIT" || rc=1
+assert_ok "wiki-ingest-tests.yml says why it has no filter" "$rc"
+rc=0; grep -q "^    name: Wiki contract$" "$WIT" && grep -q "needs: test" "$WIT" && grep -q "if: always()" "$WIT" || rc=1
+assert_ok "wiki-ingest-tests.yml ends in one check named 'Wiki contract' that fails unless every leg succeeded" "$rc"
+rc=0; grep -q "run: bash scripts/setup-wiki.sh --require" "$WIT" || rc=1
+assert_ok "wiki-ingest-tests.yml installs the locked wheel with the users' installer" "$rc"
+rc=0; grep -q "python-version: \['3.11', '3.12', '3.13'\]" "$WIT" || rc=1
+assert_ok "wiki-ingest-tests.yml runs on exactly the package's Python range" "$rc"
+for suite in test-wiki-setup.sh test-wiki-launcher.sh test-wiki-schema.sh test-wiki-ingest.sh; do
+  rc=0; grep -q "run: bash tests/$suite" "$WIT" || rc=1
+  assert_ok "wiki-ingest-tests.yml runs $suite" "$rc"
+done
+rc=0; grep -q "tests/test-wiki-setup.sh\|tests/test-wiki-launcher.sh" "$REPO_DIR/.github/workflows/sync-check.yml" && rc=1
+assert_ok "sync-check does not run the wiki suites (its python3 is outside the package's range)" "$rc"
+WL="$REPO_DIR/.github/workflows/wiki-lint.yml"
+for input in "knowledge/wiki/\*\*'" "scripts/wiki'" "scripts/lib/wiki_env.sh'" "scripts/setup-wiki.sh'" "scripts/wiki-requirements.txt'"; do
+  rc=0; [[ "$(grep -c -- "- '$input" "$WL")" -eq 2 ]] || rc=1
+  assert_ok "wiki-lint.yml filters push and pull_request on ${input%\'}" "$rc"
+done
+rc=0; grep -q "run: bash scripts/setup-wiki.sh --require" "$WL" || rc=1
+assert_ok "wiki-lint.yml installs the locked wheel" "$rc"
+rc=0; grep -q "run: ./scripts/wiki lint" "$WL" || rc=1
+assert_ok "wiki-lint.yml lints through the launcher" "$rc"
+rc=0; grep -q "continue-on-error: true" "$WL" || rc=1
+assert_ok "wiki-lint.yml stays non-blocking (unchanged merge policy)" "$rc"
+rc=0; grep -q "lint-wiki.sh" "$WL" && rc=1
+assert_ok "wiki-lint.yml no longer runs the Bash linter" "$rc"
+
+# ── #384 FR-5/FR-6/FR-13: both duplicate engines are gone and nothing
+# production-facing names them. Records of the removal (specs, the
+# changelog, the schema policy and its delta fixture) are the only
+# places the old names may appear.
+rc=0; [[ -e "$REPO_DIR/scripts/wiki_ingest" ]] && rc=1
+assert_ok "the embedded engine tree scripts/wiki_ingest/ is gone" "$rc"
+rc=0; [[ -e "$REPO_DIR/knowledge/wiki/scripts/lint-wiki.sh" ]] && rc=1
+assert_ok "the Bash linter knowledge/wiki/scripts/lint-wiki.sh is gone" "$rc"
+STALE=$(git -C "$REPO_DIR" grep -lE 'wiki_ingest|python3? -m wiki_ingest' -- . \
+  ':!specs' ':!CHANGELOG.md' ':!tests/test-shared-structure.sh' ':!tests/test-wiki-schema.sh' 2>/dev/null || true)
+rc=0; [[ -z "$STALE" ]] || rc=1
+assert_ok "no file imports or invokes the deleted engine${STALE:+ (found: $(echo "$STALE" | tr '\n' ' '))}" "$rc"
+STALE=$(git -C "$REPO_DIR" grep -l 'lint-wiki\.sh' -- . \
+  ':!specs' ':!CHANGELOG.md' ':!knowledge/wiki/schema/POLICY.md' ':!tests/fixtures/wiki-schema' \
+  ':!tests/test-shared-structure.sh' ':!tests/test-wiki-schema.sh' 2>/dev/null || true)
+rc=0; [[ -z "$STALE" ]] || rc=1
+assert_ok "no production file names the deleted Bash linter${STALE:+ (found: $(echo "$STALE" | tr '\n' ' '))}" "$rc"
+
+WF_SENTENCE='The convention never runs `wiki query`'
+rc=0; grep -qF "$WF_SENTENCE" "$SHARED_DIR/skills/wiki-first-query/SKILL.md" || rc=1
+assert_ok "wiki-first-query (source) stays a direct read: never wiki query or find" "$rc"
+for copy in \
+  "$REPO_DIR/adapters/claude-code/plugin/skills/wiki-first-query/SKILL.md" \
+  "$REPO_DIR/adapters/cursor/.cursor/rules/wiki-first-query.mdc" \
+  "$REPO_DIR/adapters/codex/AGENTS.md" \
+  "$REPO_DIR/adapters/github-copilot/.github/copilot-instructions.md" \
+  "$REPO_DIR/adapters/pi/resources/context/always-context.md" \
+  "$REPO_DIR/adapters/aider/CONVENTIONS.md" \
+  "$REPO_DIR/adapters/windsurf/.windsurf/rules/rules.md"; do
+  rc=0; grep -qF "$WF_SENTENCE" "$copy" || rc=1
+  assert_ok "wiki-first-query copy keeps the model-free contract: ${copy#"$REPO_DIR"/}" "$rc"
+done
 
 rc=0
 grep -Eq '^TEST_LITELLM_PROXY_DEPS_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env" || rc=1

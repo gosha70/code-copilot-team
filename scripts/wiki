@@ -1,24 +1,53 @@
 #!/usr/bin/env bash
-# wiki — primary entrypoint for the Karpathy-pattern LLM Wiki maintainer.
+# wiki — CCT's entrypoint for the wiki-studio engine (#384, FR-3).
 #
-# Verbs (Phase 0+):
-#   wiki ingest <source>            — Phase 0: requires --legacy-single-source
-#                                     (Phase 1 multi-page ingest TBD).
-#   wiki promote <proposal-dir>     — Phase 2 (TBD).
-#   wiki query "<question>"         — Phase 3 (TBD).
-#   wiki lint [--health]            — Phase 0: structural lint via
-#                                     knowledge/wiki/scripts/lint-wiki.sh.
-#                                     --health is Phase 4 (TBD).
+#   ./scripts/wiki ingest <source>          ./scripts/wiki lint [--health]
+#   ./scripts/wiki promote <proposal-dir>   ./scripts/wiki audit-flush [--dry-run]
+#   ./scripts/wiki query "<question>"       ./scripts/wiki info
+#   ./scripts/wiki --version                 → the installed wiki-studio version
 #
-# Sets PYTHONPATH so scripts/wiki_ingest/ resolves as a top-level package,
-# then exec's python3 -m wiki_ingest with the verb and remaining args.
+# The launcher chooses the bytes: it runs the repository .venv's
+# interpreter after checking, through package metadata, that the installed
+# wiki-studio is exactly the locked version. It never falls through to a
+# `wiki-studio` on PATH, the system Python, or another venv, and it never
+# installs anything. A missing venv, a missing package or a version
+# mismatch stops here, before the verb runs, with the setup remedy.
 #
-# See specs/wiki-ingest-pipeline/spec.md for the full feature spec and
-# specs/wiki-ingest-pipeline/plan.md for the phased delivery plan.
+# WIKI_STUDIO_ROOT defaults to this checkout, so the verbs act on
+# <checkout>/knowledge/wiki from any working directory; an explicit
+# WIKI_STUDIO_ROOT or --root still wins, as the package documents.
 
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=lib/wiki_env.sh
+source "$REPO_DIR/scripts/lib/wiki_env.sh"
 
-exec env PYTHONPATH="${REPO_DIR}/scripts${PYTHONPATH:+:${PYTHONPATH}}" \
-  python3 -m wiki_ingest "$@"
+STATE="$(wiki_state)" || true
+PY="$(wiki_python)"
+REMEDY="$(wiki_setup_remedy)"
+case "$STATE" in
+    ok) ;;
+    no-venv)
+        echo "wiki: no managed environment at $(wiki_venv_dir) — wiki-studio $WIKI_STUDIO_VERSION is not installed." >&2
+        echo "wiki: run: $REMEDY" >&2
+        exit 3 ;;
+    venv-unsupported:*)
+        echo "wiki: the managed environment runs Python ${STATE#venv-unsupported:}; wiki-studio $WIKI_STUDIO_VERSION needs $WIKI_PY_RANGE." >&2
+        echo "wiki: recreate $(wiki_venv_dir) with a supported interpreter, then run: $REMEDY" >&2
+        exit 3 ;;
+    missing)
+        echo "wiki: wiki-studio is not installed in $(wiki_venv_dir) ($PY)." >&2
+        echo "wiki: run: $REMEDY" >&2
+        exit 3 ;;
+    mismatch:*)
+        echo "wiki: wiki-studio ${STATE#mismatch:} is installed in $(wiki_venv_dir); CCT requires exactly $WIKI_STUDIO_VERSION." >&2
+        echo "wiki: run: $REMEDY" >&2
+        exit 3 ;;
+    *)
+        echo "wiki: unexpected environment state '$STATE'" >&2
+        exit 3 ;;
+esac
+
+export WIKI_STUDIO_ROOT="${WIKI_STUDIO_ROOT:-$REPO_DIR}"
+exec "$PY" -m wiki_studio "$@"

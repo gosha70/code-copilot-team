@@ -172,6 +172,11 @@ jobs:
       - name: GitHub hardening audit tests
         run: bash tests/test-github-hardening.sh
 
+      # The wiki suites (setup, launcher, schema, five-verb contract) run in
+      # wiki-ingest-tests.yml: they need a Python in wiki-studio's range,
+      # 3.11–3.13, and this job's python3 is whatever ubuntu-latest ships
+      # (3.14 on ubuntu-26), which is outside it (#384).
+
       # shared/capabilities/COMPATIBILITY.md is a deterministic render of the
       # capability registry. Until #214 Phase 2.0 this check ran only on
       # release tags, so a PR could land a stale matrix; it gates PRs now.

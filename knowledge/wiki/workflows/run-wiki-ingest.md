@@ -66,8 +66,9 @@ If neither shoe fits, run the pipeline. The output goes to
    ```
 
    Default backend resolution is `--backend` flag →
-   `WIKI_INGEST_BACKEND` env var → auto-detect
-   (`claude → codex → cursor`). Use `--backend test` for the
+   `WIKI_STUDIO_BACKEND` env var → the deprecated `WIKI_INGEST_BACKEND`
+   (honoured with a warning) → auto-detect (`claude → codex →
+   cursor`). Use `--backend test` for the
    deterministic stub if you want to dry-run the wiring without an
    LLM call. The full flag set is documented in
    [`../../README.md`](../../README.md) §5e.
@@ -124,7 +125,7 @@ If neither shoe fits, run the pipeline. The output goes to
 - For an `accept` disposition that the curator promoted: a new
   page exists under `knowledge/wiki/<page_type>/<slug>.md`,
   `index.md` carries a bullet linking to it, `log.md` carries an
-  entry, and `bash knowledge/wiki/scripts/lint-wiki.sh` exits 0.
+  entry, and `./scripts/wiki lint` exits 0.
 - For a `reject` disposition or a `--dry-run`: nothing changed
   under `knowledge/wiki/`. The proposal file alone records the
   gate's decision.
@@ -156,8 +157,8 @@ knowledge/wiki/.audit/
 
 The `.audit/` subtree is excluded from structural lint (no frontmatter,
 no page-type, not linked from `index.md`). It is validated by the
-separate `wiki lint` audit pass (`scripts/wiki_ingest/audit_lint.py`)
-against `knowledge/wiki/schema/audit-rules.md`.
+separate `wiki lint` audit pass of the wiki-studio package against
+`knowledge/wiki/schema/audit-rules.md`.
 
 ### `--check` vs `--dry-run`
 

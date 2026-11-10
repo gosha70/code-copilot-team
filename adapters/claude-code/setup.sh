@@ -168,8 +168,23 @@ install_analytics_deps() {
     fi
 
     if [[ ! -x "$venv/bin/python" ]]; then
-        echo "[..]   Creating Python venv for session-analytics ($venv)"
-        if ! python3 -m venv "$venv"; then
+        # One venv for Session Analytics AND the wiki tooling (#384 D2):
+        # pick the interpreter with the shared resolver when it is here,
+        # so a venv created on this path is one wiki-studio can run in.
+        # Standalone runs of this adapter (not via scripts/setup.sh) reach
+        # here too; with the resolver present the venv still gets a wiki-
+        # capable interpreter. On failure the resolver prints the versions
+        # it saw, not a path, so only a success may set interp.
+        local interp="python3" found=""
+        if [[ -f "$repo_root/scripts/lib/wiki_env.sh" ]]; then
+            if found="$(bash -c "source '$repo_root/scripts/lib/wiki_env.sh' && wiki_find_interpreter" 2>/dev/null)"; then
+                interp="$found"
+            else
+                echo "[WARN] no Python 3.11–3.13 on PATH (found: ${found:-none}); creating the venv with python3 — wiki tooling will be unavailable"
+            fi
+        fi
+        echo "[..]   Creating Python venv for session-analytics ($venv) with $interp"
+        if ! "$interp" -m venv "$venv"; then
             echo "[WARN] venv creation failed — session-analytics will need manual setup"
             return 0
         fi

@@ -1,0 +1,63 @@
+diff upstream/WIKI_MAINTAINER.md project/WIKI_MAINTAINER.md
+--- upstream/WIKI_MAINTAINER.md
++++ project/WIKI_MAINTAINER.md
+@@ -65,7 +65,7 @@
+    that is not reachable from `index.md` is invisible.
+ 8. **Log.** Append a one-line entry to [`../log.md`](../log.md):
+    `- YYYY-MM-DD — <verb> <slug> (<page-type>): <one-line why>`.
+-9. **Lint.** Run `bash knowledge/wiki/scripts/lint-wiki.sh`. If it
++9. **Lint.** Run `./scripts/wiki lint`. If it
+    fails, fix the violation; do not silence it.
+ 10. **Stop.** Do not "improve" adjacent pages while you are here —
+     drive-by edits make review impossible. Open a new turn for each
+@@ -80,7 +80,7 @@
+ - **Edit a generated artifact.** AGENTS.md, Cursor rules, Copilot
+   instructions, Windsurf rules, and Aider conventions are produced
+   by `scripts/generate.sh`. Edit `shared/skills/` and regenerate.
+-- **Bypass the linter.** If `lint-wiki.sh` is wrong, fix the linter
++- **Bypass the linter.** If `wiki lint` is wrong, fix the linter
+   in a separate change. Do not commit lint violations.
+ - **Mix promotion and curation in one turn.** Promote *or* refactor;
+   not both.
+diff upstream/audit-rules.md project/audit-rules.md
+--- upstream/audit-rules.md
++++ project/audit-rules.md
+@@ -7,7 +7,7 @@
+ in [`lint-rules.md`](lint-rules.md)** (no frontmatter, no `page_type`,
+ not linked from `index.md`). This file is the machine-checkable spec for
+ its format, validated by the `wiki lint` **audit pass** — not by
+-`lint-wiki.sh`.
++`wiki lint`.
+ 
+ Two artifacts live under `.audit/`:
+ 
+diff upstream/lint-rules.md project/lint-rules.md
+--- upstream/lint-rules.md
++++ project/lint-rules.md
+@@ -1,6 +1,6 @@
+-# Lint Rules — what `lint-wiki.sh` checks
++# Lint Rules — what `wiki lint` checks
+ 
+-The lint script at `knowledge/wiki/scripts/lint-wiki.sh` is the
++The structural linter, `./scripts/wiki lint` (wiki-studio's `lint` verb), is the
+ mechanical gate on wiki structure. It is intentionally narrow: it
+ catches the kinds of breakage that are easy to verify without
+ reading prose. Everything else is a curator concern.
+@@ -28,7 +28,7 @@
+ content — it has no frontmatter and is never linked from `index.md`.
+ Its format is governed by a separate machine-checkable spec,
+ [`audit-rules.md`](audit-rules.md), validated by the `wiki lint`
+-audit pass rather than by `lint-wiki.sh`. See that file for the
++audit pass rather than by `wiki lint`. See that file for the
+ `ingest-log.md` NDJSON schema and the `.audit/proposals/<dir>/`
+ structure.
+ 
+@@ -176,7 +176,7 @@
+ ## Running it
+ 
+ ```bash
+-bash knowledge/wiki/scripts/lint-wiki.sh
++./scripts/wiki lint
+ ```
+ 
+ CI runs the same script via `.github/workflows/wiki-lint.yml` on

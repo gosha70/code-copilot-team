@@ -50,6 +50,35 @@ candidate and why it was rejected. This preserves the input without
 inflating the wiki and makes it easy to revisit when more context
 arrives.
 
+## Writing rules
+
+Write every page in plain technical English. A reader who is new to
+the project must understand each sentence on the first read. Apply
+these rules to every page you create or update.
+
+- Put one fact in each sentence.
+- Keep each sentence to 25 words or fewer. In a numbered step, keep
+  it to 20 words or fewer.
+- Give one instruction in each numbered step.
+- Use the active voice. Name who or what does the action.
+- Do not use semicolons. Write two sentences instead.
+- Use one term for each concept. If the glossary defines a term for
+  the concept, use the glossary term.
+- Make the first sentence of `## Summary` state the main claim of
+  the page.
+
+These rules change the form of the text. They never change the
+facts. When you rewrite a sentence, preserve these items exactly:
+
+- identifiers, such as function, class, key and command names
+- file paths
+- numbers and their units
+- `path:` citations
+- the words "if", "unless" and "not verified"
+
+Split a long sentence into shorter sentences. Do not delete content
+from it to make it shorter.
+
 ## Manual-only in v1
 
 Promotion is **always initiated by a human or by an explicit

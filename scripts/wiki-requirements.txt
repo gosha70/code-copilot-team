@@ -1,0 +1,25 @@
+# wiki-requirements.txt — the exact wiki-studio artifact CCT's wiki tooling
+# runs (#384, FR-1). Installed into the repository .venv by
+# scripts/setup-wiki.sh and verified by scripts/wiki and `cct doctor`.
+#
+# This is a one-package hash lock, kept apart from
+# scripts/session_analytics/requirements.txt on purpose: that file's
+# dependencies are ranged, and one hashed line would force its whole
+# transitive graph under --require-hashes.
+#
+# Provenance: PyPI's Trusted Publisher attestation (gosha70/wiki-studio,
+# release.yml) ties this wheel to upstream tag v0.9.0, which resolves to
+# commit b66b3be82e0bfe17747907b30d71975fcf9d9f81. The hash below is the
+# PyPI SHA-256 of wiki_studio-0.9.0-py3-none-any.whl.
+#
+# The [mcp] extra is deliberately NOT requested: it requires mcp>=2.3,<3,
+# which conflicts with Session Analytics' mcp>=1,<2 in the same .venv.
+#
+# A bump is one reviewed CCT change (FR-15): version + hash + provenance
+# here, the schema reconciliation and fingerprint, doctor/catalogue/docs,
+# and the full contract evidence. Never a version-only edit. The procedure
+# is knowledge/wiki-studio-dependency.md.
+--require-hashes
+--only-binary=:all:
+wiki-studio==0.9.0 \
+    --hash=sha256:91d0b10582725e8f5a4b1807b1ac9d807f4a8df7a72d27b8059fe681cc3bbfc6

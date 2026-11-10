@@ -33,18 +33,22 @@ code-copilot-team/
 │   ├── generate.sh                      Builds adapter configs from shared/
 │   ├── bench                            Terse benchmark comparison driver (wraps benchmark)
 │   ├── benchmark                        Benchmark harness CLI (run, compare, judge, calibrate, report)
-│   ├── wiki                             LLM Wiki maintainer CLI (ingest, promote, query, lint, audit-flush)
+│   ├── wiki                             Wiki launcher: runs the .venv's wiki-studio 0.9.0 (ingest, promote, query, lint, audit-flush)
+│   ├── wiki-ingest                      Alias: wiki ingest --legacy-single-source
 │   ├── validate-spec.sh                 SDD spec validator (CI + local)
 │   ├── pre-pr-check.sh                  Pre-PR close-keyword audit gate
 │   ├── peer-review-runner.sh            Peer review execution engine
 │   ├── auto-build-loop.sh               Autonomous build driver (advisory|pr|merge; unattended policy core)
 │   ├── providers-health.sh              Peer provider availability diagnostics
 │   ├── setup-reviewer.sh                Copilot independent-reviewer installer (Codex first)
+│   ├── setup-wiki.sh                    Managed wiki-studio install into .venv from the hashed lock (#384)
+│   ├── wiki-requirements.txt            wiki-studio==0.9.0 hash lock + provenance (#384)
+│   ├── lib/wiki_env.sh                  One resolver for the wiki venv, interpreter range and state (#384)
 │   └── setup.sh                         Unified install entry point
 ├── tests/
 │   ├── test-hooks.sh                    196 hook tests
 │   ├── test-generate.sh                 322 generation + adapter tests
-│   ├── test-shared-structure.sh         843 structure + content tests
+│   ├── test-shared-structure.sh         885 structure + content tests
 │   ├── test-sync.sh                     126 sync + init metadata tests
 │   ├── test-litellm-proxy-deps.sh       13 benchmark proxy pin tests (+11 with --online)
 │   ├── test-coverage-parse.sh           46 coverage parser + safety tests
@@ -62,6 +66,10 @@ code-copilot-team/
 │   ├── test-routing-recovery.sh       375 probe-state + timing + probe + tick-wake tests (#257 D)
 │   ├── test-pre-pr-check.sh           11 close-keyword audit tests (#408)
 │   ├── test-github-hardening.sh       14 hardening audit tests (classic + ruleset sources)
+│   ├── test-wiki-setup.sh             54 managed wiki-studio install tests (#384)
+│   ├── test-wiki-launcher.sh          24 provenance-bound wiki launcher + alias tests (#384)
+│   ├── test-wiki-schema.sh            20 schema reconciliation + fingerprint tests (needs the managed .venv; #384)
+│   ├── test-wiki-ingest.sh            42 five-verb wiki contract tests (needs the managed .venv; #384)
 │   └── test-claude-code-launcher.sh   39 branded-launcher + cct shim + gateway notice tests (#195, #410, #399)
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification

@@ -1,20 +1,16 @@
 #!/usr/bin/env bash
-# wiki-ingest — backwards-compat alias for the v1 single-source proposal generator.
+# wiki-ingest — backwards-compatible alias for the v1 single-source
+# proposal generator (#384, FR-4).
 #
-# Phase-0 onwards, the canonical entrypoint is `./scripts/wiki <verb>`.
-# This wrapper preserves the v1 caller surface — every existing
-# invocation (`./scripts/wiki-ingest <source>`, `--backend`, `--dry-run`,
-# `--output-dir`) continues to work unchanged. The shell prepends
-# `ingest --legacy-single-source` so the Python verb dispatcher routes
-# to the v1 single-source path.
+# Every existing invocation keeps working unchanged:
+#   ./scripts/wiki-ingest <source>
+#   ./scripts/wiki-ingest --backend test --dry-run --output-dir <dir> <source>
 #
-# See specs/wiki-ingest-pipeline/plan.md § "Phase 0" for the relabel
-# rationale and the rescope record at
-# specs/wiki-ingest-pipeline/origin-alignment-2026-05-06-2200.md.
+# It is exactly `./scripts/wiki ingest --legacy-single-source "$@"`: the
+# arguments, exit status, stdout and stderr are the launcher's, and the
+# launcher's environment checks apply. There is no engine code here.
 
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-
-exec env PYTHONPATH="${REPO_DIR}/scripts${PYTHONPATH:+:${PYTHONPATH}}" \
-  python3 -m wiki_ingest ingest --legacy-single-source "$@"
+exec "$REPO_DIR/scripts/wiki" ingest --legacy-single-source "$@"

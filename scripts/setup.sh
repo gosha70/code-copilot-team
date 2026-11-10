@@ -25,6 +25,7 @@ ADAPTERS="$REPO_DIR/adapters"
 # ── Parse flags ────────────────────────────────────────────
 TOOLS=()
 SYNC=false
+WIKI_REQUIRED=false
 PROJECT_DIR=""
 SHOW_HELP=false
 MEMKERNEL_ARGS=()
@@ -45,6 +46,7 @@ while [[ $# -gt 0 ]]; do
     --aider)            TOOLS+=("aider"); shift ;;
     --all)              TOOLS=("claude-code" "codex" "pi" "cursor" "github-copilot" "windsurf" "aider"); shift ;;
     --sync)             SYNC=true; shift ;;
+    --wiki)             WIKI_REQUIRED=true; shift ;;
     --playwright)       PLAYWRIGHT_ARGS+=("--playwright"); shift ;;
     --memkernel)
       MEMKERNEL_ARGS+=("--memkernel")
@@ -97,6 +99,7 @@ if $SHOW_HELP; then
   echo "Flags:"
   echo "  --all             Install all adapters"
   echo "  --sync            Regenerate configs before installing"
+  echo "  --wiki            Require the wiki tooling (wiki-studio in .venv); fail setup if it cannot be made ready"
   echo "  --memkernel [dir] Install or enable MemKernel support for Claude Code"
   echo "  --help            Show this help"
   echo ""
@@ -147,8 +150,14 @@ if [[ ${#TOOLS[@]} -eq 0 ]]; then
       echo "        or:  bash adapters/claude-code/setup.sh --playwright"
       exit 1
     fi
-    echo "  No tools detected. Use --help for options."
-    exit 0
+    if $WIKI_REQUIRED; then
+      # --wiki is an explicit request: nothing else to install is not a
+      # reason to skip it. The adapter loop runs zero times.
+      echo "  No tools detected; --wiki was given, so only the wiki tooling is set up."
+    else
+      echo "  No tools detected. Use --help for options."
+      exit 0
+    fi
   fi
   echo ""
 fi
@@ -179,7 +188,7 @@ if [[ ${#PLAYWRIGHT_ARGS[@]} -gt 0 ]]; then
   fi
 fi
 
-for tool in "${TOOLS[@]}"; do
+for tool in "${TOOLS[@]+"${TOOLS[@]}"}"; do
   for pt in "${PROJECT_TOOLS[@]}"; do
     if [[ "$tool" == "$pt" ]]; then
       needs_project=true
@@ -196,11 +205,35 @@ if $needs_project && [[ -z "$PROJECT_DIR" ]]; then
   exit 1
 fi
 
+# ── Wiki tooling (#384): adapter-neutral, every checkout install ──────
+# wiki-studio lives in the repository .venv and is installed from a hashed
+# lock by scripts/setup-wiki.sh. It runs BEFORE the adapters: the Claude
+# Code adapter also creates .venv (for Session Analytics) with whatever
+# python3 is first on PATH, and setup-wiki.sh never replaces an existing
+# venv — so the interpreter the wiki needs must choose the venv first.
+# Optional unless --wiki was given: anything short of ready is reported
+# in the summary and does not fail the command, as every other optional
+# Python part.
+echo "=== Wiki tooling ==="
+WIKI_STATUS="ready"
+if [[ ! -f "$REPO_DIR/scripts/setup-wiki.sh" ]]; then
+  WIKI_STATUS="unavailable (scripts/setup-wiki.sh is not in this copy of the checkout)"
+  echo "[WARN] wiki tooling unavailable: scripts/setup-wiki.sh is not in this copy of the checkout"
+  $WIKI_REQUIRED && WIKI_STATUS="FAILED"
+elif $WIKI_REQUIRED; then
+  bash "$REPO_DIR/scripts/setup-wiki.sh" --require || WIKI_STATUS="FAILED"
+else
+  WIKI_OUT="$(bash "$REPO_DIR/scripts/setup-wiki.sh" 2>&1)" || WIKI_STATUS="unavailable (setup-wiki.sh exited non-zero; see above)"
+  echo "$WIKI_OUT"
+  [[ "$WIKI_OUT" == *"[WARN] wiki tooling unavailable"* ]] && WIKI_STATUS="unavailable (see above; non-wiki features unaffected)"
+fi
+echo ""
+
 # ── Install each tool ─────────────────────────────────────
 INSTALLED=0
 FAILED=0
 
-for tool in "${TOOLS[@]}"; do
+for tool in "${TOOLS[@]+"${TOOLS[@]}"}"; do
   echo "=== Installing: $tool ==="
   case "$tool" in
     claude-code)
@@ -246,9 +279,11 @@ done
 
 # ── Summary ────────────────────────────────────────────────
 echo "========================================="
-echo "  Setup complete: $INSTALLED installed, $FAILED failed"
+echo "  Setup complete"
+echo "  Adapters: $INSTALLED installed, $FAILED failed"
+echo "  Wiki tooling: $WIKI_STATUS"
 echo "========================================="
 
-if [[ $FAILED -gt 0 ]]; then
+if [[ $FAILED -gt 0 || "$WIKI_STATUS" == "FAILED" ]]; then
   exit 1
 fi
