@@ -10,7 +10,8 @@ name: Wiki Ingest Tests
 # change to one of them would not trigger CI:
 #   - scripts/wiki, scripts/wiki-ingest          (launchers)
 #   - scripts/lib/wiki_env.sh                     (resolver)
-#   - scripts/setup-wiki.sh                       (installer)
+#   - scripts/setup-wiki.sh, scripts/setup.sh,
+#     adapters/claude-code/setup.sh               (installer and the setups that call it)
 #   - scripts/wiki-requirements.txt               (the lock)
 #   - knowledge/wiki/schema/**                    (project schema + policy)
 #   - tests/test-wiki-*.sh, tests/fixtures/wiki-* (the suites and fixtures)
@@ -24,6 +25,8 @@ on:
       - 'scripts/wiki-ingest'
       - 'scripts/lib/wiki_env.sh'
       - 'scripts/setup-wiki.sh'
+      - 'scripts/setup.sh'
+      - 'adapters/claude-code/setup.sh'
       - 'scripts/wiki-requirements.txt'
       - 'knowledge/wiki/schema/**'
       - 'tests/test-wiki-ingest.sh'
@@ -40,6 +43,8 @@ on:
       - 'scripts/wiki-ingest'
       - 'scripts/lib/wiki_env.sh'
       - 'scripts/setup-wiki.sh'
+      - 'scripts/setup.sh'
+      - 'adapters/claude-code/setup.sh'
       - 'scripts/wiki-requirements.txt'
       - 'knowledge/wiki/schema/**'
       - 'tests/test-wiki-ingest.sh'
@@ -83,6 +88,9 @@ jobs:
         env:
           CCT_WIKI_PYTHON: python
         run: bash scripts/setup-wiki.sh --require
+
+      - name: Managed install (setup-wiki.sh, root setup, the Claude Code adapter's venv)
+        run: bash tests/test-wiki-setup.sh
 
       - name: Launcher contract
         run: bash tests/test-wiki-launcher.sh

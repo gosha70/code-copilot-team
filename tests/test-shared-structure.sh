@@ -1097,6 +1097,7 @@ done
 # would let a change to it skip CI; these greps are that mutation test).
 WIT="$REPO_DIR/.github/workflows/wiki-ingest-tests.yml"
 for input in "scripts/wiki'" "scripts/wiki-ingest'" "scripts/lib/wiki_env.sh'" "scripts/setup-wiki.sh'" \
+  "scripts/setup.sh'" "adapters/claude-code/setup.sh'" \
   "scripts/wiki-requirements.txt'" "knowledge/wiki/schema/\*\*'" "tests/test-wiki-ingest.sh'" \
   "tests/test-wiki-launcher.sh'" "tests/test-wiki-schema.sh'" "tests/fixtures/wiki-contract/\*\*'" \
   "tests/fixtures/wiki-schema/\*\*'" ".github/workflows/wiki-ingest-tests.yml'"; do
@@ -1107,10 +1108,12 @@ rc=0; grep -q "run: bash scripts/setup-wiki.sh --require" "$WIT" || rc=1
 assert_ok "wiki-ingest-tests.yml installs the locked wheel with the users' installer" "$rc"
 rc=0; grep -q "python-version: \['3.11', '3.12', '3.13'\]" "$WIT" || rc=1
 assert_ok "wiki-ingest-tests.yml runs on exactly the package's Python range" "$rc"
-for suite in test-wiki-launcher.sh test-wiki-schema.sh test-wiki-ingest.sh; do
+for suite in test-wiki-setup.sh test-wiki-launcher.sh test-wiki-schema.sh test-wiki-ingest.sh; do
   rc=0; grep -q "run: bash tests/$suite" "$WIT" || rc=1
   assert_ok "wiki-ingest-tests.yml runs $suite" "$rc"
 done
+rc=0; grep -q "tests/test-wiki-setup.sh\|tests/test-wiki-launcher.sh" "$REPO_DIR/.github/workflows/sync-check.yml" && rc=1
+assert_ok "sync-check does not run the wiki suites (its python3 is outside the package's range)" "$rc"
 WL="$REPO_DIR/.github/workflows/wiki-lint.yml"
 for input in "knowledge/wiki/\*\*'" "scripts/wiki'" "scripts/lib/wiki_env.sh'" "scripts/setup-wiki.sh'" "scripts/wiki-requirements.txt'"; do
   rc=0; [[ "$(grep -c -- "- '$input" "$WL")" -eq 2 ]] || rc=1
