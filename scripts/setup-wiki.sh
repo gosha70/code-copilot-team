@@ -62,6 +62,14 @@ unavailable() {
 if (( CHECK )); then
     state="$(wiki_state)" || true
     echo "wiki-studio expected $WIKI_STUDIO_VERSION: $state ($PY)"
+    if [[ "$state" == "no-venv" ]]; then
+        # Say why a setup run would or would not succeed (FR-12).
+        if found="$(wiki_find_interpreter)"; then
+            echo "interpreter for a new venv: $found"
+        else
+            echo "no supported interpreter on PATH (found: $found; wiki-studio $WIKI_STUDIO_VERSION needs Python $WIKI_PY_RANGE)"
+        fi
+    fi
     [[ "$state" == "ok" ]]
     exit $?
 fi

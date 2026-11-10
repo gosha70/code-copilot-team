@@ -172,6 +172,61 @@ def profile_path() -> Path:
     return Path(os.environ.get("CCT_PROVIDER_PROFILE", Path.home() / ".code-copilot-team/providers.toml"))
 
 
+WIKI_CHECK_LINE = re.compile(r"^wiki-studio expected (?P<expected>\S+): (?P<state>\S+) \((?P<python>.*)\)$", re.MULTILINE)
+
+
+def check_wiki(repo: Path, report: Report) -> None:
+    """#384 FR-12: the wiki tooling as the launcher will run it. The same
+    resolver (scripts/lib/wiki_env.sh, via setup-wiki.sh --check) decides
+    the state, so a passing row means `./scripts/wiki` would run exactly
+    the locked distribution in the repository venv; then `wiki info`
+    reports the schema and manifest state from that very interpreter.
+    System Python is never consulted."""
+    setup = repo / "scripts" / "setup-wiki.sh"
+    if not setup.is_file():
+        report.add("Wiki", "wiki-studio", SKIP, "scripts/setup-wiki.sh not in this checkout")
+        return
+    rc, out = run(["bash", str(setup), "--check"])
+    match = WIKI_CHECK_LINE.search(out)
+    if match is None:
+        report.add("Wiki", "wiki-studio", BAD, f"setup-wiki.sh --check gave no state (exit {rc}): {out.strip()[:120]}")
+        return
+    expected, state, python = match.group("expected"), match.group("state"), match.group("python")
+    remedy = f"run: bash {setup}"
+    extra = out.strip().splitlines()[1:]
+    if state == "ok":
+        report.add("Wiki", "wiki-studio", OK, f"{expected} in {python}")
+    elif state == "no-venv":
+        report.add("Wiki", "wiki-studio", WARN, f"no managed environment ({python} missing); {'; '.join(extra)}; {remedy}")
+        return
+    elif state.startswith("venv-unsupported:"):
+        report.add("Wiki", "wiki-studio", WARN, f"the managed environment runs Python {state.split(':', 1)[1]}, outside the package's range — recreate it, then {remedy}")
+        return
+    elif state == "missing":
+        report.add("Wiki", "wiki-studio", WARN, f"not installed in {python}; {remedy}")
+        return
+    elif state.startswith("mismatch:"):
+        report.add("Wiki", "wiki-studio", WARN, f"{state.split(':', 1)[1]} installed in {python}, expected exactly {expected}; {remedy}")
+        return
+    else:
+        report.add("Wiki", "wiki-studio", BAD, f"unexpected state '{state}' from setup-wiki.sh --check")
+        return
+    rc, out = run([str(repo / "scripts" / "wiki"), "info", "--json"])
+    try:
+        info = json.loads(out)
+        contract = info["schema_contract"]
+        manifest = info["manifest"]
+    except (ValueError, KeyError, TypeError):
+        report.add("Wiki", "schema", BAD, f"`wiki info --json` unreadable (exit {rc}) — the installed distribution does not behave like wiki-studio {expected}")
+        return
+    fingerprint = str(contract.get("fingerprint") or "")
+    if contract.get("drift"):
+        report.add("Wiki", "schema", BAD, f"{contract.get('source')} schema drifted from the declared fingerprint ({fingerprint[:12]}…)")
+    else:
+        report.add("Wiki", "schema", OK, f"{contract.get('source')} schema, fingerprint {fingerprint[:12]}… (see knowledge/wiki/schema/POLICY.md)")
+    report.add("Wiki", "manifest", OK, f"mode {manifest.get('mode')} ({manifest.get('state')})")
+
+
 def check_profile(repo: Path, report: Report) -> dict:
     """The provider profile: schema-valid, and are the named keys exported?"""
     profile = profile_path()
@@ -326,6 +381,7 @@ def main() -> None:
         check_tools(report)
         check_shim(report)
         check_gateway(report)
+        check_wiki(repo, report)
         providers = check_profile(repo, report)
         if not args.no_network:
             check_health(repo, report, providers, profile_path())

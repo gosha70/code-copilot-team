@@ -48,7 +48,7 @@ code-copilot-team/
 ├── tests/
 │   ├── test-hooks.sh                    196 hook tests
 │   ├── test-generate.sh                 322 generation + adapter tests
-│   ├── test-shared-structure.sh         843 structure + content tests
+│   ├── test-shared-structure.sh         862 structure + content tests
 │   ├── test-sync.sh                     126 sync + init metadata tests
 │   ├── test-litellm-proxy-deps.sh       13 benchmark proxy pin tests (+11 with --online)
 │   ├── test-coverage-parse.sh           46 coverage parser + safety tests
@@ -68,7 +68,7 @@ code-copilot-team/
 │   ├── test-github-hardening.sh       14 hardening audit tests (classic + ruleset sources)
 │   ├── test-wiki-setup.sh             35 managed wiki-studio install tests (#384)
 │   ├── test-wiki-launcher.sh          24 provenance-bound wiki launcher + alias tests (#384)
-│   ├── test-wiki-schema.sh            17 schema reconciliation + fingerprint tests (needs the managed .venv; #384)
+│   ├── test-wiki-schema.sh            20 schema reconciliation + fingerprint tests (needs the managed .venv; #384)
 │   ├── test-wiki-ingest.sh            40 five-verb wiki contract tests (needs the managed .venv; #384)
 │   └── test-claude-code-launcher.sh   39 branded-launcher + cct shim + gateway notice tests (#195, #410, #399)
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/

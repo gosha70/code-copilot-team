@@ -104,6 +104,24 @@ assert "doctor: ENABLE_TOOL_SEARCH=true still warns (value-aware)" "[[ \$(gw_sta
 GW_FALSE=$(ANTHROPIC_BASE_URL=https://gateway.example CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS= ENABLE_TOOL_SEARCH=false bash "$CCT" doctor --no-network --json 2>&1 || true)
 assert "doctor: ENABLE_TOOL_SEARCH=false reads ok" "[[ \$(gw_status \"\$GW_FALSE\") == ok ]]"
 
+# ── doctor reports the wiki tooling as the launcher would run it (#384) ──
+wiki_row() {
+  # wiki_row <json> <field> → the Wiki/wiki-studio row's field
+  python3 -c "
+import json, sys
+d = json.loads(sys.stdin.read())
+print(next(c for c in d['checks'] if c['section'] == 'Wiki' and c['check'] == 'wiki-studio')['$2'])" <<<"$1"
+}
+WIKI_NONE=$(CCT_WIKI_VENV=/nonexistent-cct-venv bash "$CCT" doctor --no-network --json 2>&1 || true)
+assert "doctor: no managed venv warns, never fails the whole doctor" "[[ \$(wiki_row \"\$WIKI_NONE\" status) == warn ]]"
+assert "doctor: ...naming the missing environment and the remedy" \
+  "[[ \$(wiki_row \"\$WIKI_NONE\" detail) == *'no managed environment'* && \$(wiki_row \"\$WIKI_NONE\" detail) == *'setup-wiki.sh'* ]]"
+EMPTY_VENV=$(mktemp -d)/venv
+python3 -m venv "$EMPTY_VENV" >/dev/null 2>&1
+WIKI_MISSING=$(CCT_WIKI_VENV="$EMPTY_VENV" bash "$CCT" doctor --no-network --json 2>&1 || true)
+assert "doctor: a venv without the package warns as missing" \
+  "[[ \$(wiki_row \"\$WIKI_MISSING\" status) == warn && \$(wiki_row \"\$WIKI_MISSING\" detail) == *'not installed in'* ]]"
+
 # ── doctor looks at the cct shim's target (#410) ─────────────
 # A shim on PATH whose baked checkout is gone must FAIL doctor; one whose
 # checkout is present is OK. Both shims are planted first on PATH.

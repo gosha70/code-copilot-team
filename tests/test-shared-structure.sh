@@ -1068,6 +1068,45 @@ COUNT_VARS=$(grep -Ec '^TEST_[A-Z_]+_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/tes
 # suite is added, so a pin cannot go missing unnoticed.
 assert_eq "test-counts has exactly 27 expected-pass variables (the four wiki suites arrived with #384)" "27" "$COUNT_VARS"
 
+# ── #384 FR-10: assistant workflows keep their meaning after the engine swap ──
+# /promote-lesson stays a free-text, manual curator procedure that lints
+# through the launcher; wiki-first-query stays a direct, model-free read.
+# Asserted on the SOURCE and on every generated copy, so a regeneration
+# cannot drop either contract.
+PL_SRC="$REPO_DIR/adapters/claude-code/.claude/commands/promote-lesson.md"
+rc=0; grep -q './scripts/wiki lint' "$PL_SRC" || rc=1
+assert_ok "promote-lesson (source) lints through ./scripts/wiki lint" "$rc"
+rc=0; grep -q 'lint-wiki.sh' "$PL_SRC" && rc=1
+assert_ok "promote-lesson (source) names no Bash linter" "$rc"
+rc=0; grep -q 'Free-form prose' "$PL_SRC" || rc=1
+assert_ok "promote-lesson (source) keeps its free-text argument" "$rc"
+rc=0; grep -q 'never a source path to ingest' "$PL_SRC" || rc=1
+assert_ok "promote-lesson (source) never reinterprets the text as an ingest source" "$rc"
+rc=0; grep -q 'Without a CCT checkout' "$PL_SRC" || rc=1
+assert_ok "promote-lesson (source) states the plugin-only prerequisite and refuses rather than skips" "$rc"
+for copy in "$REPO_DIR/adapters/claude-code/plugin/commands/promote-lesson.md" "$REPO_DIR/adapters/pi/resources/prompts/promote-lesson.md"; do
+  rc=0; grep -q './scripts/wiki lint' "$copy" || rc=1
+  assert_ok "promote-lesson copy lints through the launcher: ${copy#"$REPO_DIR"/}" "$rc"
+  rc=0; grep -q 'lint-wiki.sh' "$copy" && rc=1
+  assert_ok "promote-lesson copy names no Bash linter: ${copy#"$REPO_DIR"/}" "$rc"
+  rc=0; grep -q 'Without a CCT checkout' "$copy" || rc=1
+  assert_ok "promote-lesson copy states the plugin-only prerequisite: ${copy#"$REPO_DIR"/}" "$rc"
+done
+WF_SENTENCE='The convention never runs `wiki query`'
+rc=0; grep -qF "$WF_SENTENCE" "$SHARED_DIR/skills/wiki-first-query/SKILL.md" || rc=1
+assert_ok "wiki-first-query (source) stays a direct read: never wiki query or find" "$rc"
+for copy in \
+  "$REPO_DIR/adapters/claude-code/plugin/skills/wiki-first-query/SKILL.md" \
+  "$REPO_DIR/adapters/cursor/.cursor/rules/wiki-first-query.mdc" \
+  "$REPO_DIR/adapters/codex/AGENTS.md" \
+  "$REPO_DIR/adapters/github-copilot/.github/copilot-instructions.md" \
+  "$REPO_DIR/adapters/pi/resources/context/always-context.md" \
+  "$REPO_DIR/adapters/aider/CONVENTIONS.md" \
+  "$REPO_DIR/adapters/windsurf/.windsurf/rules/rules.md"; do
+  rc=0; grep -qF "$WF_SENTENCE" "$copy" || rc=1
+  assert_ok "wiki-first-query copy keeps the model-free contract: ${copy#"$REPO_DIR"/}" "$rc"
+done
+
 rc=0
 grep -Eq '^TEST_LITELLM_PROXY_DEPS_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env" || rc=1
 assert_ok "test-counts has TEST_LITELLM_PROXY_DEPS_EXPECTED_PASS numeric value" "$rc"

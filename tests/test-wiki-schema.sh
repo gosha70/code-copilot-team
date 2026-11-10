@@ -89,6 +89,13 @@ assert_eq "info reports the pinned fingerprint" "$PINNED" "$(printf '%s' "$INFO"
 assert_eq "no manifest declares one (legacy mode, no drift)" "None False" "$(printf '%s' "$INFO" | "$PY" -c 'import json,sys; c=json.load(sys.stdin)["schema_contract"]; print(c["declared_fingerprint"], c["drift"])')"
 assert_eq "the wiki stays in legacy, manifest-less mode" "legacy" "$(printf '%s' "$INFO" | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["manifest"]["mode"])')"
 
+echo "=== doctor reports the same bytes (FR-12) ==="
+DOCTOR=$(cd "$REPO_DIR" && bash scripts/cct doctor --no-network --json 2>/dev/null)
+wiki_row() { printf '%s' "$DOCTOR" | "$PY" -c "import json,sys; d=json.load(sys.stdin); print(next(c for c in d['checks'] if c['section']=='Wiki' and c['check']=='$1')['$2'])"; }
+assert_eq "doctor: wiki-studio ok in the managed venv" "ok" "$(wiki_row wiki-studio status)"
+assert_eq "doctor: the schema row carries the pinned fingerprint" "1" "$([[ "$(wiki_row schema detail)" == *"${PINNED:0:12}"* ]] && echo 1 || echo 0)"
+assert_eq "doctor: the manifest row says legacy" "1" "$([[ "$(wiki_row manifest detail)" == *"mode legacy"* ]] && echo 1 || echo 0)"
+
 echo "========================================="
 echo "  Results: $PASS passed, $FAIL failed"
 echo "========================================="

@@ -547,6 +547,12 @@ sources (specs, issues, PRs, code) for the same topic. The wiki
 exists so that you do not re-discover the same context every
 session.
 
+These are direct file reads. The convention never runs `wiki query`
+or `wiki find`: those are engine operations that call a configured
+backend (a model, with its cost) and belong to a separate, deliberate
+workflow (`./scripts/wiki query "<question>"`), not to reading the
+wiki first.
+
 ## When the wiki is silent or stale
 
 If the wiki has nothing on the topic, or what it has is clearly
@@ -562,7 +568,10 @@ out of date with the current code:
 
 In Claude Code, the `/promote-lesson <description>` slash command
 runs the promotion workflow on your behalf. Other adapters can
-follow the workflow document directly.
+follow the workflow document directly. Its final lint runs
+wiki-studio 0.9.0 through `./scripts/wiki lint` from a CCT checkout
+(`bash scripts/setup-wiki.sh` installs it); a plugin-only install
+provides the package itself and checks the version before linting.
 
 ## What this convention does NOT do
 

@@ -32,11 +32,13 @@ If the user is asking you to remember something for *this session only*, use ses
    - Link from `knowledge/wiki/index.md`.
    - Append a one-line entry to `knowledge/wiki/log.md`.
 
-4. **Run the linter:**
+4. **Run the linter** through CCT's launcher, which runs the locked wiki-studio in the checkout's `.venv`:
    ```bash
-   bash knowledge/wiki/scripts/lint-wiki.sh
+   ./scripts/wiki lint
    ```
-   If it fails, fix the violation. Never commit lint violations and never silence the linter.
+   If it fails, fix the violation. Never commit lint violations and never silence the linter. If the launcher refuses (no managed environment, wiki-studio missing or not 0.9.0), run the remedy it prints — `bash scripts/setup-wiki.sh` — and lint again; do not skip the step.
+
+   **Without a CCT checkout** (the Claude Code plugin alone, or copied adapter files): nothing installs wiki-studio for you. Install `wiki-studio==0.9.0` into a virtual environment yourself, run `wiki-studio --version`, and only if it prints exactly `0.9.0` run `wiki-studio lint --root <project root>`. Any other version, or no installation, stops here with that message to the user; a missing lint is never silently skipped.
 
 5. **Stop.** Do not "improve" adjacent pages in the same turn. Drive-by edits make review hard. If the user wants more lessons promoted, run this command again per lesson.
 
@@ -44,4 +46,5 @@ If the user is asking you to remember something for *this session only*, use ses
 
 - It does not commit. After the wiki edit is complete, show the diff and let the user decide whether to commit.
 - It does not push. Never push wiki changes without explicit user instruction.
-- It does not run automated ingest, RLMKit synthesis, or adapter regeneration. Those are deferred per issue #12.
+- It does not run `wiki ingest`, create a package proposal, or call `wiki query`: the argument is free-form prose describing the lesson, never a source path to ingest. Automated ingest is the separate `./scripts/wiki ingest <source>` workflow.
+- It does not regenerate adapters.
