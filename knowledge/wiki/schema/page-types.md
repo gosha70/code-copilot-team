@@ -28,6 +28,26 @@ sources:
 See [`citation-rules.md`](citation-rules.md) for source-specific
 rules.
 
+### Optional keys (schema version 2)
+
+Each is one single-line `key: value` scalar
+(`docs/adr/0002-page-identity-and-review-keys.md`):
+
+- `page_id: pg-<32 lowercase hex>` — the page's stable identity.
+  `propose --from` and `ingest` add it to every page they create; never
+  write or change one by hand. Lint reports a malformed or duplicated
+  `page_id`.
+- `superseded_by: <wiki-relative path>` — on a page another page
+  replaces. The target must be an existing page that is not itself
+  superseded.
+- `corrects: <memkernel refs>` — memkernel's key, kept byte for byte and
+  not interpreted here; its value syntax is not final.
+
+`approved`, `approved_by`, `approval` and `review_state` are reserved
+for the approval record; never write them in frontmatter. Approval is recorded by
+`wiki-studio approve`, never by frontmatter, and `status: stable` does not
+make a page approved.
+
 ## The types
 
 ### `concept` — `concepts/<slug>.md`
@@ -41,6 +61,9 @@ Required H2 sections:
 - `## Key ideas` — bulleted, each idea ≤2 sentences.
 - `## Where this shows up` — concrete file paths or features.
 - `## Related` — links to other wiki pages.
+
+Write the body by the writing rules in
+[`ingest-rules.md`](ingest-rules.md#writing-rules).
 
 ### `workflow` — `workflows/<slug>.md`
 "How to do X in this project." A numbered procedure that can be
@@ -121,6 +144,18 @@ Required H2 sections:
 short entries — in that case it carries `page_type: glossary` and
 each entry is a `### <term>` subsection. Per the slug rule below,
 its `slug:` is `glossary` (the parent directory name), not `index`.
+
+Write each definition by the writing rules in
+[`ingest-rules.md`](ingest-rules.md#writing-rules).
+
+Optional keys: a per-file glossary page may carry `avoid:`, one line of
+comma-separated terms the wiki should not use for this concept, for
+example `avoid: alignment check, origin check`. The value is unquoted or
+wrapped in double quotes, and a term cannot contain a comma, `"` or `\`.
+An entry in `glossary/index.md` names its terms on an `Avoid: …` line,
+the first non-blank line after its `### <term>` heading, with the same
+syntax. Any other form is reported as an `avoid-format` finding. See
+`docs/adr/0001-glossary-avoid-key.md`.
 
 ### `open-question` — `open-questions/<slug>.md`
 Something the project does not yet know but should. Marks the gap

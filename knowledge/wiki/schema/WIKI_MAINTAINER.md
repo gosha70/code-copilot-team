@@ -45,14 +45,27 @@ For every promotion or update:
 5. **Cite.** Per [`citation-rules.md`](citation-rules.md), every page
    needs at least one source in its frontmatter. No source → no
    page.
-6. **Write.** Use the template from `page-types.md`. Keep prose tight.
+   - **Two pages disagree.** When this page's sources disagree with
+     another page's sources about one claim, and the other page is in
+     this wiki, mark both pages with the conflict callout pair in one
+     patch-set, per
+     [`citation-rules.md`](citation-rules.md#when-sources-disagree).
+     For a page outside this wiki, see Escalation below. Resolve it
+     later by that section's resolution rule. Write each callout as a
+     top-level blockquote that starts the line, outside any list. A
+     marker after a list bullet, on a lazy-continuation line or in a
+     nested quote is not read, and nothing reports it; a blockquote
+     indented under a list item is read as if it started the line.
+6. **Write.** Use the template from `page-types.md`. Keep prose tight:
+   follow the writing rules in
+   [`ingest-rules.md`](ingest-rules.md#writing-rules).
    Prefer concrete examples over abstract claims.
 7. **Link.** Add a link to the new or updated page from
    [`../index.md`](../index.md) under the correct section. A page
    that is not reachable from `index.md` is invisible.
 8. **Log.** Append a one-line entry to [`../log.md`](../log.md):
    `- YYYY-MM-DD — <verb> <slug> (<page-type>): <one-line why>`.
-9. **Lint.** Run `bash knowledge/wiki/scripts/lint-wiki.sh`. If it
+9. **Lint.** Run `./scripts/wiki lint`. If it
    fails, fix the violation; do not silence it.
 10. **Stop.** Do not "improve" adjacent pages while you are here —
     drive-by edits make review impossible. Open a new turn for each
@@ -67,7 +80,7 @@ For every promotion or update:
 - **Edit a generated artifact.** AGENTS.md, Cursor rules, Copilot
   instructions, Windsurf rules, and Aider conventions are produced
   by `scripts/generate.sh`. Edit `shared/skills/` and regenerate.
-- **Bypass the linter.** If `lint-wiki.sh` is wrong, fix the linter
+- **Bypass the linter.** If `wiki lint` is wrong, fix the linter
   in a separate change. Do not commit lint violations.
 - **Mix promotion and curation in one turn.** Promote *or* refactor;
   not both.
@@ -119,3 +132,11 @@ or stale content that you cannot fix in the current turn, open an
 entry in [`../open-questions/`](../open-questions/) describing the
 contradiction and what would resolve it. Do not delete the affected
 pages.
+
+A disagreement between two pages whose sources conflict takes the
+conflict callout pair of
+[`citation-rules.md`](citation-rules.md#when-sources-disagree), not an
+`open-questions/` entry. Keep `open-questions/` for a gap that spans more
+than two pages or has no sources yet, and for a disagreement with a page
+outside this wiki. A callout may link such an entry on a sources line,
+never first on the marker line, where it would be read as the other page.
