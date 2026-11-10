@@ -40,6 +40,9 @@ code-copilot-team/
 │   ├── auto-build-loop.sh               Autonomous build driver (advisory|pr|merge; unattended policy core)
 │   ├── providers-health.sh              Peer provider availability diagnostics
 │   ├── setup-reviewer.sh                Copilot independent-reviewer installer (Codex first)
+│   ├── setup-wiki.sh                    Managed wiki-studio install into .venv from the hashed lock (#384)
+│   ├── wiki-requirements.txt            wiki-studio==0.9.0 hash lock + provenance (#384)
+│   ├── lib/wiki_env.sh                  One resolver for the wiki venv, interpreter range and state (#384)
 │   └── setup.sh                         Unified install entry point
 ├── tests/
 │   ├── test-hooks.sh                    196 hook tests
@@ -62,6 +65,7 @@ code-copilot-team/
 │   ├── test-routing-recovery.sh       375 probe-state + timing + probe + tick-wake tests (#257 D)
 │   ├── test-pre-pr-check.sh           11 close-keyword audit tests (#408)
 │   ├── test-github-hardening.sh       14 hardening audit tests (classic + ruleset sources)
+│   ├── test-wiki-setup.sh             35 managed wiki-studio install tests (#384)
 │   └── test-claude-code-launcher.sh   39 branded-launcher + cct shim + gateway notice tests (#195, #410, #399)
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification

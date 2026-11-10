@@ -25,6 +25,7 @@ ADAPTERS="$REPO_DIR/adapters"
 # ── Parse flags ────────────────────────────────────────────
 TOOLS=()
 SYNC=false
+WIKI_REQUIRED=false
 PROJECT_DIR=""
 SHOW_HELP=false
 MEMKERNEL_ARGS=()
@@ -45,6 +46,7 @@ while [[ $# -gt 0 ]]; do
     --aider)            TOOLS+=("aider"); shift ;;
     --all)              TOOLS=("claude-code" "codex" "pi" "cursor" "github-copilot" "windsurf" "aider"); shift ;;
     --sync)             SYNC=true; shift ;;
+    --wiki)             WIKI_REQUIRED=true; shift ;;
     --playwright)       PLAYWRIGHT_ARGS+=("--playwright"); shift ;;
     --memkernel)
       MEMKERNEL_ARGS+=("--memkernel")
@@ -97,6 +99,7 @@ if $SHOW_HELP; then
   echo "Flags:"
   echo "  --all             Install all adapters"
   echo "  --sync            Regenerate configs before installing"
+  echo "  --wiki            Require the wiki tooling (wiki-studio in .venv); fail setup if it cannot be made ready"
   echo "  --memkernel [dir] Install or enable MemKernel support for Claude Code"
   echo "  --help            Show this help"
   echo ""
@@ -244,11 +247,35 @@ for tool in "${TOOLS[@]}"; do
   echo ""
 done
 
+# ── Wiki tooling (#384): adapter-neutral, every checkout install ──────
+# wiki-studio lives in the repository .venv and is installed from a hashed
+# lock by scripts/setup-wiki.sh. It is optional unless --wiki was given:
+# an unavailable interpreter or a failed install is reported in the summary
+# and does not fail the command, as every other optional Python part.
+echo "=== Wiki tooling ==="
+WIKI_STATUS="ready"
+if [[ ! -f "$REPO_DIR/scripts/setup-wiki.sh" ]]; then
+  # A partial copy of the checkout (no installer, no lock): say so; it is
+  # the same "unavailable" outcome as a missing interpreter.
+  WIKI_STATUS="unavailable (scripts/setup-wiki.sh is not in this copy of the checkout)"
+  echo "[WARN] wiki tooling unavailable: scripts/setup-wiki.sh is not in this copy of the checkout"
+  $WIKI_REQUIRED && WIKI_STATUS="FAILED"
+elif $WIKI_REQUIRED; then
+  bash "$REPO_DIR/scripts/setup-wiki.sh" --require || WIKI_STATUS="FAILED"
+else
+  WIKI_OUT="$(bash "$REPO_DIR/scripts/setup-wiki.sh" 2>&1)" || WIKI_STATUS="FAILED"
+  echo "$WIKI_OUT"
+  [[ "$WIKI_OUT" == *"[WARN] wiki tooling unavailable"* ]] && WIKI_STATUS="unavailable (see above; non-wiki features unaffected)"
+fi
+echo ""
+
 # ── Summary ────────────────────────────────────────────────
 echo "========================================="
-echo "  Setup complete: $INSTALLED installed, $FAILED failed"
+echo "  Setup complete"
+echo "  Adapters: $INSTALLED installed, $FAILED failed"
+echo "  Wiki tooling: $WIKI_STATUS"
 echo "========================================="
 
-if [[ $FAILED -gt 0 ]]; then
+if [[ $FAILED -gt 0 || "$WIKI_STATUS" == "FAILED" ]]; then
   exit 1
 fi

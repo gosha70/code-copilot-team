@@ -172,6 +172,12 @@ jobs:
       - name: GitHub hardening audit tests
         run: bash tests/test-github-hardening.sh
 
+      # The managed install of wiki-studio into the repository .venv (#384):
+      # hashed install, idempotence, hash refusal, interpreter selection and
+      # the root-setup summary, driven against a throwaway wheel.
+      - name: Wiki setup tests
+        run: bash tests/test-wiki-setup.sh
+
       # shared/capabilities/COMPATIBILITY.md is a deterministic render of the
       # capability registry. Until #214 Phase 2.0 this check ran only on
       # release tags, so a PR could land a stale matrix; it gates PRs now.
