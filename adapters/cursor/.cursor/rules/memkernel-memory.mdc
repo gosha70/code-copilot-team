@@ -29,12 +29,37 @@ session checkpoints.
 
 ## Decision Records
 
-Record and reuse decisions as memkernel's instructions template defines them: the
-"Decision records" section of
-[`templates/claude-memory-instructions.md`](https://github.com/gosha70/memkernel/blob/main/templates/claude-memory-instructions.md#decision-records).
-It covers the record form, recalling before adding a helper, dependency or module,
-checking a decision's evidence before reuse, and asking when two decisions conflict.
-That section is the single source; this skill does not restate it.
+A `decision` memory says what was chosen, what was rejected and why, and when to
+look again. Retain one decision per memory in this form; the first line is what
+recall's preview shows, so make it a complete sentence:
+
+```
+decision: In the context of <requirement>, we chose <option> over <rejected options>, because <reason>.
+requirement: <what was needed; the scope where this applies>
+chosen: <existing helper / native capability / dependency, with its path or symbol>
+rejected: <option>: <reason or evidence>; <option>: <reason>
+evidence: <repo>@<commit> <path>[:<symbol>]; tests: <test id or result>
+revisit-when: <condition, e.g. "the Python floor reaches 3.14" or "requirement X changes">
+```
+
+Three rules go with the form:
+
+- **Before building** a helper, dependency or module:
+  `recall(query="<capability> <path or symbol>", type="decision", top_k=3)`;
+  `get(ref_id)` only for a hit you will act on.
+- **Before reusing** a recalled decision: check that its `evidence` paths still
+  exist and still do what it says, and that its `requirement` covers the new need.
+  If not, do not apply it; retain a corrected decision with `supersedes=<old ref_id>`.
+- **Conflicts:** if two live decisions give different `chosen` for overlapping
+  scope, show both with their `evidence` and dates and ask the user before acting.
+  Never merge them yourself.
+
+The long-form reference, with the `retain(...)` call and the wiki hand-off, is the
+"Decision records" section of memkernel's instructions template, pinned to the
+commit that introduced it:
+[`templates/claude-memory-instructions.md@4ac307e`](https://github.com/gosha70/memkernel/blob/4ac307ea9b274ea90ad2e2521bdcd1ed5a09a543/templates/claude-memory-instructions.md#decision-records).
+This skill carries the form and the rules so it works without network access;
+bump the pin when memkernel changes that section.
 
 ## Checkpoint Pattern
 
