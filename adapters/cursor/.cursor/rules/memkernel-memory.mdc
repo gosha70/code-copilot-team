@@ -27,6 +27,15 @@ session checkpoints.
 - `code`: important interfaces, schemas, contracts, or code snapshots
 - `episode`: session events and structured checkpoints
 
+## Decision Records
+
+Record and reuse decisions as memkernel's instructions template defines them: the
+"Decision records" section of
+[`templates/claude-memory-instructions.md`](https://github.com/gosha70/memkernel/blob/main/templates/claude-memory-instructions.md#decision-records).
+It covers the record form, recalling before adding a helper, dependency or module,
+checking a decision's evidence before reuse, and asking when two decisions conflict.
+That section is the single source; this skill does not restate it.
+
 ## Checkpoint Pattern
 
 Before compaction, retain a checkpoint with:

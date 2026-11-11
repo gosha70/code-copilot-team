@@ -184,6 +184,12 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Changed
 
+- **memkernel decision records come from memkernel's template.** The
+  `memkernel-memory` skill points to the "Decision records" section of
+  memkernel's `templates/claude-memory-instructions.md` (gosha70/memkernel#57)
+  instead of restating it: the record form, recalling before adding a helper,
+  dependency or module, checking evidence before reuse, and asking on
+  conflicting decisions. Adapters regenerated.
 - **Aider sessions are discovered only under a declared root.** The packaged
   `sources.aider` default was `~`, which made every load and listing walk
   the whole home directory. It is now unset; set `sources.aider` in
