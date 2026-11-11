@@ -184,6 +184,14 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Changed
 
+- **memkernel decision records in the `memkernel-memory` skill.** The skill
+  carries the decision record form (`requirement`, `chosen`, `rejected`,
+  `evidence`, `revisit-when`) and the three rules (recall before building,
+  check evidence before reuse, ask on conflicting decisions) from memkernel's
+  instructions template, pinned to memkernel commit `4ac307e`
+  (gosha70/memkernel#57, merged in gosha70/memkernel#118) so the skill works
+  without network access and an old CCT release cannot drift with upstream
+  `main`. Adapters regenerated.
 - **Aider sessions are discovered only under a declared root.** The packaged
   `sources.aider` default was `~`, which made every load and listing walk
   the whole home directory. It is now unset; set `sources.aider` in
