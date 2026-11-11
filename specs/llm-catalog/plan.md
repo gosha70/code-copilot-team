@@ -40,7 +40,7 @@ origin:
 
 # Plan: harness-agnostic LLM catalog and `--llm` selection
 
-Revision 4 (2026-11-10, after the third review).
+Revision 6 (2026-11-10, after the fifth review).
 
 ## Shape
 
@@ -48,7 +48,7 @@ Composition, not invention. The catalog reuses the routing registry's
 constrained grammar and credential-by-name boundary; the resolver
 reuses the supervisor's child-only environment wiring and secret
 scrub, and the routing library's two-digest construction (an
-environment-independent tuple and an execution digest that binds the
+environment-independent tuple and a launch-identity digest that binds the
 resolved endpoint); the probe reuses the routing probe's canary
 primitives and tri-state; the launchers gain one flag each and a
 child-side resolution step. New code is: the catalog schema and
@@ -65,12 +65,15 @@ Layers, each with one owner:
    user home for catalog, records and stamps (`CCT_LLM_HOME` in
    tests); `scripts/lib/cct-endpoint.sh` is the one endpoint
    sanitizer, emitting `origin` (unchanged grammar, still validated by
-   `routing-result.sh`) and a separate `path_sha256`, sourced by the
-   supervisor in place of its private copy.
+   `routing-result.sh`), sourced by the supervisor in place of its
+   private copy.
 2. **Resolver** — `scripts/lib/llm-resolve.sh`: `(harness, target,
    project, resume)` → LaunchPlan as canonical JSON (jq), with the
    per-harness adapter functions in `scripts/lib/llm-adapters/
-   <harness>.sh`; defines `start` versus `exec` (FR-6).
+   <harness>.sh`; defines `start` versus `exec` (FR-6). Slice A ships
+   the plan schema and an "adapter not implemented" refusal for every
+   harness; each adapter is implemented in its slice after its
+   capture.
 3. **Compatibility** — `shared/llm/compat-rules.json` (`rule_version`,
    protocols, quirks and required capabilities per harness),
    `scripts/lib/llm-compat.sh` (state computation, records),
@@ -92,13 +95,13 @@ Layers, each with one owner:
 
 | Slice | Issue (to file) | Delivers | Depends on |
 |---|---|---|---|
-| A | catalog and read-only CLI | layers 1–4 without any launcher change; `cct llm list/show/validate/compatibility/test`, `cct harness explain`; `start`/`exec` definitions; rule table; probe records; doctor section; docs; example file | — |
-| B | Claude Code | `--llm` on `claude-code` and `cct start`; child-side resolution inside the cmux/tmux pane; `rejects-dynamic-tools`; stamps and exact-id resume rules; behavioral probe through the real launcher (mock and one real run on the owner's machine) | A |
-| C | Codex | capture against the installed CLI; `adapters/codex/bin/codex-code`; `-c` overlay; rule table amended by capture; probe | A, B's launch contract |
-| D | Pi | capture: launch-scoped agent-directory overlay versus owned merge; D11 ruled on the capture; `--llm` on `pi-code`; `--provider/--model`; probe | A, B |
-| E | Kiro | capture of the installed `kiro-cli`; `adapters/kiro/bin/kiro-code`, managed-model-only; `--model`, `--resume-id`; endpoint bindings `unsupported`; docs state the limit | A, B |
+| A | catalog and read-only CLI | layers 1–4 without any launcher change; `cct llm list/show/validate/compatibility/test/sessions`, `cct harness explain`; `start`/`exec` definitions; plan schema with "adapter not implemented" refusals; rule table; probe records; doctor section; docs; example file | — |
+| B | Claude Code | capture first; the `claude-code` adapter; `--llm` on `claude-code` and `cct start`; child-side resolution inside the cmux/tmux pane; `rejects-dynamic-tools`; stamps, promotion and exact-id resume rules; native byte-for-byte; behavioral probe through the real launcher (mock and one real run on the owner's machine) | A |
+| C | Codex | capture against the installed CLI; `adapters/codex/bin/codex-code`; `-c` overlay; rule table amended by capture; stamps, exact-id resume, native byte-for-byte (FR-17–19, FR-27); probe | A, B's launch contract |
+| D | Pi | capture: launch-scoped agent-directory overlay versus owned merge; D11 ruled on the capture; `--llm` on `pi-code`; `--provider/--model`; stamps, exact-id resume, native byte-for-byte (FR-17–19, FR-27); probe | A, B |
+| E | Kiro | capture of the installed `kiro-cli`; `adapters/kiro/bin/kiro-code`, managed-model-only; `--model`, `--resume-id`; endpoint bindings `unsupported`; stamps, exact-id resume, native byte-for-byte (FR-17–19, FR-27); managed-harness evidence contract; docs state the limit | A, B |
 | F | Unified launch and Studio | `cct harness start/exec`; Studio read-only page, non-secret editing, id-only command generation | B, C, D, E |
-| G | Routing and provenance | `llm =` / `binding =` in routing profiles; supervisor resolves through the resolver; journal and stamp agree by execution digest; closes #400 | A–F merged |
+| G | Routing and provenance | `llm =` / `binding =` in routing profiles; supervisor resolves through the resolver; journal and stamp agree by launch-identity digest; closes #400 | A–F merged |
 
 Each slice gets its own `tasks.md` section when its issue opens;
 `tasks.md` here details A and B and outlines the rest.
@@ -135,20 +138,22 @@ proposed amendment to #400's text.
   `lc_binding_for <harness> <target>` (explicit only),
   `lc_catalog_digest <binding>`.
 - `scripts/lib/llm-resolve.sh`: `lr_plan <harness> <target> <project>
-  [--resume <key>] [--allow-unverified]` → JSON on stdout, exit 0
-  plan, 3 refused (reason in `.refusal`), 2 catalog unusable. Reads
-  credential values and computes `execution_digest` from the resolved
-  endpoint only when `LR_CHILD=1`; otherwise `env_names` carries
-  set/unset per name.
+  [--resume <key>] [--allow-unverified] [--probe]` → JSON on stdout,
+  exit 0 plan, 3 refused (reason in `.refusal`), 2 catalog unusable.
+  Always computes the digests (the resolved endpoint value is read,
+  validated and hashed read-only) and `env_clear`; reads credential
+  values only when `LR_CHILD=1`; otherwise `env_names` carries
+  set/unset per name. `--probe` applies the FR-15 exemption.
 - `scripts/lib/llm-compat.sh`: `lcm_state <harness> <binding>` → one
   of the five states plus reason; `lcm_record_attempt`,
   `lcm_record_conclusive`, `lcm_record_read`.
 - `scripts/lib/llm-probe.sh`: `lp_probe <plan-json>` → outcome
   (`pass | fail | unverifiable`) plus the capability matrix JSON; seam
-  `CCT_LLM_PROBE_CMD`; signal-safe temp cleanup.
+  `CCT_LLM_PROBE_CMD`; watchdog `CCT_LLM_PROBE_TIMEOUT_SEC` with
+  TERM→KILL on the process group; signal-safe temp cleanup.
 - `scripts/lib/cct-statefile.sh`: `sf_write <path> <content>` (locked,
-  same-dir temp, rename, `0600`, symlink refusal), `sf_read <path>`,
-  `sf_dir <path>` (`0700`).
+  same-dir temp, rename, `0600`, symlink refusal, stale lock-directory
+  reclaim), `sf_read <path>`, `sf_dir <path>` (`0700`).
 - `scripts/lib/llm-stamp.sh`: `ls_write_attempted <plan-json>
   <session-key>`, `ls_promote <harness> <session-key> <evidence>`,
   `ls_read <harness> <session-key>`.
@@ -177,22 +182,32 @@ proposed amendment to #400's text.
 - `tests/test-cct-endpoint.sh`: the sanitizer on userinfo, query,
   fragment, path, IPv6, case, non-http schemes; `origin` byte-identical
   to the supervisor's former private function for every existing
-  supervisor fixture and accepted by `rr_origin_is_sanitized`;
-  `path_sha256` absent without a path.
+  supervisor fixture and accepted by `rr_origin_is_sanitized`; the
+  resolved `base_url_env` value validated by the same rule.
 - `tests/test-cct-statefile.sh`: permissions, same-directory rename,
   symlink refusal, interrupted write (killed writer leaves no temp or
-  partial file), two concurrent writers, malformed file refused by
-  name.
+  partial file), two concurrent writers, a writer killed while holding
+  the fallback lock directory followed by a successful writer,
+  malformed file refused by name.
 - `tests/test-llm-cli.sh`: every command, text and JSON, redaction of
-  a planted secret value and of endpoint userinfo/query/fragment with
-  the path retained; schema validation of JSON; set/unset reporting
-  without values.
+  a planted secret value; a planted path token and the readable path
+  absent from every output; schema validation of JSON; set/unset
+  reporting without values; `sessions` promotion from a fixture
+  transcript; `test` runs an `unverified` and an `incompatible`
+  fixture target and refuses `unsupported` and `unavailable` ones.
 - `tests/test-claude-code-launcher.sh` (extended) and a new
   `tests/test-llm-launch.sh`: stub `claude` records argv and env;
   stub `cmux`/`tmux` record the typed command; assertions for FR-10,
   FR-11 (with mutation), FR-12 including the escape hatch, FR-17–19
-  (exact id, bare `--continue` native, changed digest refused), FR-20;
-  a planted secret is grepped out of every capture, record and stamp.
+  (exact id, bare `--continue` native and refused with `--llm`,
+  launch-identity mismatch refused with and without the flag,
+  evidence-only change bypassable), FR-20; hostile project paths
+  (spaces, quotes, newlines, `$( )`, `;`) through the stub
+  multiplexers; a newline path refused; a planted secret and a
+  planted path token are grepped out of every capture, record and
+  stamp; a planted ambient `ANTHROPIC_API_KEY` and
+  `CLAUDE_CODE_USE_BEDROCK` are absent from the stub harness's
+  environment with `--llm` and present without it (FR-30).
 - Routing suite unchanged in count after the lexer extraction (pin
   365) and the probe-primitive extraction (routing probe/recovery pins
   unchanged); supervisor suite proves FR-27 for routed launches in
@@ -212,7 +227,9 @@ proposed amendment to #400's text.
 - Claude Code (B): whether `--output-format json` reports the
   effective model; `--session-id` on a new session and the transcript
   path that proves the session was established; minimum version for
-  the #399 retry behaviour.
+  the #399 retry behaviour; whether a settings-file `env` block
+  overrides variables the launcher sets in the child environment
+  (FR-20).
 - Pi (D, first task): the overlay-versus-merge capture of FR-22;
   refusal behaviour for an unknown `--provider`; `--session-id` on a
   new session; `$VAR` interpolation when the variable exists only in
@@ -228,15 +245,21 @@ proposed amendment to #400's text.
 | Risk | Mitigation |
 |---|---|
 | A credential value reaches a capture, stamp, record, journal, digest or multiplexer command | One redaction function; planted-secret grep over every artifact in every suite; value read only behind `LR_CHILD=1`; digests take the credential name only |
-| A gateway path carrying a tenant id or token is stamped as provenance | Endpoint rendered as origin plus path hash; the readable path never leaves the resolver |
+| A gateway path carrying a tenant id or token is stamped as provenance | Durable provenance is origin only; the launch-identity digest binds the full URL opaquely; planted path token asserted absent |
 | Lexer or probe-primitive extraction changes routing behaviour | Routing pins unchanged; extraction commits contain no vocabulary change |
-| A `supported` state outlives the endpoint it was measured against | Execution digest binds the resolved endpoint, harness version and adapter options; mismatch degrades to `unverified` |
+| A `supported` state outlives the endpoint it was measured against | Evidence digest binds the launch identity (resolved endpoint, options) plus harness and rule versions; mismatch degrades to `unverified` |
+| A resume silently changes what runs, or a harness upgrade refuses every resume | Resume compares launch identity only; evidence-only changes degrade, never refuse |
+| The first probe can never run | `cct llm test` is the controlled path exempt from the `unverified`/`incompatible` refusals, pinned by a regression test |
+| A probe hangs or orphans a child | Watchdog with TERM→KILL on the process group; expiry is `unverifiable` |
+| A project path hijacks the typed command | `printf %q` for typed commands (bash/zsh), paths needing `$'…'` refused, argv arrays for direct exec, hostile-path tests |
+| An ambient credential or provider switch rides into a selected launch | FR-30 clear-list per adapter, applied only with `--llm`, printed by `explain`, proven by the sentinel control |
+| A settings-file `env` block silently overrides the injected variables | B's capture decides; if so the adapter refuses on conflicting keys by name |
 | An inconclusive probe erases conclusive evidence | Two-part records; only `pass` or behavioral `fail` updates `latest_conclusive` |
 | Native launches change by accident | FR-11 byte-for-byte assertion plus mutation test |
 | `--continue` binds the wrong session | Bare `--continue` stays native; only exact ids are enforced; stamps are `attempted` until the harness's own evidence promotes them |
 | Pi overlay damages user state | Decided by capture; merge path requires ownership manifest, collision refusal and FR-29 |
 | Codex `-c` form unsupported by the installed CLI | Capture first; slice stops for a ruling, no silent fallback |
-| Partial or racing state-file writes | FR-29 primitives with interruption and concurrency tests |
+| Partial or racing state-file writes, or a wedged fallback lock | FR-29 primitives with interruption, concurrency and stale-lock recovery tests |
 | Kiro expectations | Managed-model-only launcher; rule table and docs state the limit; endpoint bindings refused |
 | #411 moves the home directory | One helper for catalog, records and stamps |
 

@@ -53,9 +53,9 @@ four external references it cites (facts in
   session. Exact ids are enforced; `--continue` with `--llm` is
   refused; the limit is printed. This keeps the issue's "cannot
   silently switch" promise by refusing to guess.
-- Endpoint provenance is origin plus path hash, not the readable
-  path (FR-7), following the supervisor's existing privacy rule; the
-  execution digest carries the full identity.
+- Endpoint provenance is the origin only (FR-7), following the
+  supervisor's existing privacy rule; the opaque launch-identity
+  digest carries the full identity.
 - Kiro ships as a managed-model-only launcher with the endpoint limit
   the issue itself requires; a Kiro rules/hooks adapter is a separate
   decision.
