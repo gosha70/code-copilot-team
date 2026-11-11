@@ -1,7 +1,7 @@
 ---
 feature_id: llm-catalog
 spec_mode: full
-status: draft
+status: approved
 date: 2026-11-10
 issue: "#400"
 origin:
@@ -669,12 +669,12 @@ task rows when its issue opens.
 | session stamp | `(harness, session-key)` | `llm-sessions/` | `attempted` → `established`; redacted provenance for exact resume |
 | project policy | `[llm].allowed` | project config | restriction only |
 
-## Decisions (owner rules; each is open until ruled)
+## Decisions (ruled by the owner on 2026-11-10)
 
 Recommendations revised after the two bundle reviews of 2026-11-10.
-Decisions slices A and B need are marked for ruling now; D11 is
-deferred to the Pi capture and ruled at slice D's Task 0, so the spec
-gate does not wait on a capture nobody can run yet. **A deferred
+D1–D10 and D12–D15 were ruled on 2026-11-10 after five review rounds;
+D11 is deferred to the Pi capture and ruled at slice D's Task 0, so the
+spec gate does not wait on a capture nobody can run yet. **A deferred
 ruling is a spec amendment, never a silent edit:** slice D's Task 0
 records the capture under `specs/llm-catalog/verification/`, appends
 the ruling to this section with its date and evidence, updates FR-22,
@@ -684,49 +684,49 @@ before slice D builds; the approved spec's history stays in git.
 - **D1 Slicing.** One spec bundle; one issue and one PR per
   increment A–G; #400 stays open as the umbrella and G's PR closes it
   only after A–F, Kiro and Studio included, are merged. Recommended.
-  [NEEDS CLARIFICATION: owner ruling]
+  **Ruled 2026-11-10 by the owner: accepted as recommended.** Condition: every slice PR says "Part of #400"; only G's PR closes it.
 - **D2 User home.** `~/.code-copilot-team/` for the catalog, the
   compatibility records and the stamps, through one helper so #411
   moves them together. Alternative: wait for #411. Recommended:
-  proceed now. [NEEDS CLARIFICATION: owner ruling]
+  proceed now. **Ruled 2026-11-10 by the owner: accepted as recommended.**
 - **D3 Three files.** `llms.toml` is new and separate; `routing.toml`
   references it in G; `providers.toml` stays the reviewer profile.
-  Recommended: separate. [NEEDS CLARIFICATION: owner ruling]
+  Recommended: separate. **Ruled 2026-11-10 by the owner: accepted as recommended.**
 - **D4 Parser.** Extract the line lexer of `routing-config.sh` into
   `scripts/lib/cct-toml.sh`, shared by both registries (bash 3.2).
   Alternatives: a second bash parser; Python `tomllib` (3.11+, which
   the launchers cannot assume). Recommended: extraction.
-  [NEEDS CLARIFICATION: owner ruling]
+  **Ruled 2026-11-10 by the owner: accepted as recommended.** Condition: the extraction is its own commit with the existing routing-config tests passing unchanged.
 - **D5 Bindings.** Explicit bindings only; `<llm>` resolves through
   the one explicit binding for `(harness, llm)`, `<llm>@<binding>`
   disambiguates. Inferred bindings were rejected in review because
   records and stamps need a stable binding key. Recommended:
-  explicit only. [NEEDS CLARIFICATION: owner ruling]
+  explicit only. **Ruled 2026-11-10 by the owner: accepted as recommended.**
 - **D6 Probe reuse.** Share the canary primitives and the tri-state
   classification with `routing-probe.sh`; do not reuse routing's
-  accounting, caps or state runner. Recommended. [NEEDS CLARIFICATION: owner ruling]
+  accounting, caps or state runner. Recommended. **Ruled 2026-11-10 by the owner: accepted as recommended.**
 - **D7 Unverified launches.** Refuse by default; `--allow-unverified`
   launches with a notice, never records `supported`, and marks the
   stamp; `cct llm test` is the one exempt path, or no first record
   could ever exist. The earlier recommendation (launch with a notice)
   was withdrawn: a notice is not a gate. Recommended: refuse by
-  default. [NEEDS CLARIFICATION: owner ruling]
+  default. **Ruled 2026-11-10 by the owner: accepted as recommended.**
 - **D8 Endpoint quirks.** `quirks = ["rejects-dynamic-tools"]` on the
   endpoint drives the three #399 variables for selected launches and
   enters the launch-identity digest; the declaration is never evidence; the
   #399 notice stays for native launches. Recommended.
-  [NEEDS CLARIFICATION: owner ruling]
+  **Ruled 2026-11-10 by the owner: accepted as recommended.**
 - **D9 Session keys.** The launcher generates the session id and
   passes `--session-id` for Claude Code and Pi; stamps start as
   `attempted`; bare `--continue` and the interactive picker stay
   native. Project-latest restoration was withdrawn: the harness's
   "most recent" and CCT's "most recent stamp" are different sets.
-  Recommended. [NEEDS CLARIFICATION: owner ruling]
+  Recommended. **Ruled 2026-11-10 by the owner: accepted as recommended.**
 - **D10 Codex overlay form.** `-c` overrides (names and URLs, no
   secret, nothing to clean up), adopted only after the capture proves
   nested keys on the installed CLI; a disproving capture stops the
   slice for a ruling, with no silent profile-file fallback.
-  Recommended. [NEEDS CLARIFICATION: owner ruling]
+  Recommended. **Ruled 2026-11-10 by the owner: accepted as recommended.**
 - **D11 Pi overlay form.** Deferred to the capture in FR-22
   (launch-scoped agent-directory overlay versus owned merge); the
   overlay is preferred if it preserves Pi behaviour. The earlier
@@ -738,17 +738,17 @@ before slice D builds; the approved spec's history stays in git.
   adapter remains a separate decision. The earlier deferral was
   withdrawn because #400 names Kiro selection explicitly. The ruling
   here is scope only; model ids, resume and headless details come from
-  slice E's capture. Recommended. [NEEDS CLARIFICATION: owner ruling]
+  slice E's capture. Recommended. **Ruled 2026-11-10 by the owner: accepted as recommended.**
 - **D13 Project policy.** `[llm].allowed` only. Recommended.
-  [NEEDS CLARIFICATION: owner ruling]
+  **Ruled 2026-11-10 by the owner: accepted as recommended.**
 - **D14 Studio.** Edits non-secret fields, explains, generates the
   id-only command; never spawns a harness. This is a narrowing of the
   issue's "start harness" and needs the owner's explicit approval.
-  Recommended: approve the narrowing. [NEEDS CLARIFICATION: owner ruling]
+  Recommended: approve the narrowing. **Ruled 2026-11-10 by the owner: accepted as recommended.**
 - **D15 Unified entry.** `start` and `exec` semantics defined in A
   (FR-6); `cct start --llm` for Claude Code from B; `cct harness
   start <harness>` and `cct harness exec` with F. Recommended.
-  [NEEDS CLARIFICATION: owner ruling]
+  **Ruled 2026-11-10 by the owner: accepted as recommended.**
 
 ## Success Criteria
 

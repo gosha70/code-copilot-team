@@ -11,7 +11,7 @@ justification: |
   harnesses, routing, Studio) and schema (new TOML registry, probe and
   stamp records) are all touched. FR-1..FR-29 in spec.md define the
   boundaries.
-status: draft
+status: approved
 date: 2026-11-10
 issue: "#400"
 origin:
@@ -118,12 +118,12 @@ to slice D) · D12 Kiro managed-model launcher in E (scope only) · D13
 `[llm].allowed` only · D14 Studio never spawns an interactive session
 (narrowing) · D15 `start`/`exec` defined in A.
 
-Fourteen are marked for ruling now; D11 is deferred to slice D's
-capture. Build does not start until the owner rules the fourteen and
-the `[NEEDS CLARIFICATION]` markers are removed from spec.md. Two
-items (D14 and the secure-store deferral in Constraints) narrow the
-issue and are listed as such in the alignment record, each with a
-proposed amendment to #400's text.
+Fourteen were ruled by the owner on 2026-11-10, all as recommended,
+with conditions on D1 (slice PRs say "Part of #400"; only G closes it)
+and D4 (the extraction is its own commit, routing-config tests
+unchanged); D11 is deferred to slice D's capture. The two narrowings
+(D14 and the secure-store deferral) were approved and #400's slice F
+and credential sentences amended to match on the same day.
 
 ## Interfaces
 
