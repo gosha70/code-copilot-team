@@ -12,6 +12,15 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Added
 
+- **Auto-build moves the pitch's hill chart.** A driver-built Shape-Up
+  cycle (`claude-code build <pitch-id>`, resolved under
+  `specs/pitches/<id>/`) moves each scope `downhill` when a phase naming
+  it starts and `done` when the last phase naming it lands through the
+  driver's gates, committing `hill.json` per landed phase and ending the
+  automation summary with a `Hill chart:` line. The phase-to-scope
+  mapping is the `(S<n>)` token in each `## US<n>:` heading; a phase
+  without one, or naming a scope the chart lacks, is refused at
+  preflight. Feature runs without `hill.json` are unchanged (#405).
 - **wiki-studio is the wiki engine.** CCT no longer carries its own copy:
   `scripts/wiki_ingest/` (10,344 lines) and the Bash linter
   `knowledge/wiki/scripts/lint-wiki.sh` are deleted, and the five verbs

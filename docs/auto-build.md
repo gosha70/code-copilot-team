@@ -329,3 +329,54 @@ exits before the first phase. The conformance example above carries it too.
   worktree and swap-and-restore races by an active same-user process
   are out of scope. The gate bounds an unattended pipeline against a
   drifting or sloppy harness, not against a hostile local user.
+
+## Hill Chart (Shape-Up pitches)
+
+A pitch keeps its SDD artifacts under `specs/pitches/<pitch-id>/`; the
+driver resolves a bare id there when `specs/<id>/` does not exist, the
+same rule `validate-spec.sh` and `check-origin-alignment.sh` use. When
+that directory holds a `hill.json` (written by `/cycle-start`), the
+driver moves the chart as phases land, so a driver-built cycle reaches
+`/cooldown` with a true chart instead of every scope still `uphill`
+(#405).
+
+**The mapping is a planning fact, stated in the pitch.** Every phase
+names its scope(s) with `(S<n>)` tokens in its `## US<n>:` heading in
+`tasks.md` (or in the `phases.phases` override):
+
+```markdown
+## US1: Templates and validator (S1)
+## US2: Agents (S2)
+## US3: Commands (S2)
+```
+
+Preflight prints the mapping, `hill: phase 1 -> S1`, and refuses the
+run before anything is built when a phase names no scope or names one
+the chart does not have; a dry run predicts the same refusal. The
+driver never infers a mapping. A scope that no phase names is allowed
+and is left untouched. The mapping is frozen in the run's ledger
+(`hill-map.tsv`); a `--resume` whose headings now map a phase to a
+different scope is refused until the headings are restored or a new
+run is started.
+
+**Transitions.** When a phase's build session starts, each scope it
+names moves `uphill → downhill` (the change rides the phase's build
+commit). When a phase lands — after the review rounds, the phase gate
+and the coverage gate, where the ledger marks it done — each scope it
+names moves to `done`, unless a later phase also names it, in which
+case it waits for that phase. The `done` change is committed on its own
+as `docs(<pitch-id>): phase <n> hill chart [auto-build]`; a git failure
+on that commit is retried once (`CCT_HILL_COMMIT_RETRY_SEC`, default 2)
+and then journaled as `artifact_skipped` without parking, since the
+next build commit or the final summary commit stages the file anyway.
+The driver never moves a scope backwards and never re-stamps one that
+is already at or past the target, so a scope you set with `/hill`
+keeps its note. A chart the driver cannot write at all parks the run
+as `hill_chart_error`; a run never finishes over a stale chart.
+
+**At the end** the automation summary carries `Hill chart: S1=done
+S2=done S3=uphill` and the journal a `hill_final` event with the same
+text; `/cooldown` reads the chart as usual and still asks about a
+partial cycle. The driver's gates are the verification that lets it
+mark `done`; the `scope-executor` agent's rule that a human marks
+`done` applies to session-driven cycles.
