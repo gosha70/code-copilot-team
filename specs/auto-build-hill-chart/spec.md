@@ -88,8 +88,11 @@ headings. This feature connects the two and nothing more.
   the list of gaps, when any phase has no token (`hill: phase <n> -> (no scope)`)
   or names a scope id absent from `hill.json` (`hill: phase <n> ->
   S9 not in hill.json`). The message names `tasks.md` as the file to
-  fix. A scope that no phase names is not a gap. The mapping is stored
-  in the ledger as `.hill.map` so `--resume` uses the same one.
+  fix. A scope that no phase names is not a gap. The mapping is frozen
+  in the ledger (`hill-map.tsv`) by the attempt that starts the run; a
+  `--resume` whose live mapping differs from the frozen one refuses
+  with exit 1 naming each changed phase, so a phase started against one
+  scope can never credit another.
 - **FR-5 Transitions.** When a phase's build session is about to start,
   each mapped scope at `uphill` moves to `downhill` with
   `note = "auto-build: phase <n> started"`. When a phase lands, which
@@ -101,6 +104,10 @@ headings. This feature connects the two and nothing more.
   already at the target status. Each write updates the scope's
   `last_updated` and the root `updated_at`, is atomic (temp file in
   the same directory, then rename), and preserves every other field.
+  A chart the driver cannot write (unparseable JSON, no temp file)
+  parks the run with reason `hill_chart_error`: unlike a failed
+  commit (FR-6), a failed write leaves nothing a later commit could
+  heal, and a run must not finish over a stale chart.
 - **FR-6 Commit.** The `downhill` change rides in the phase's own build
   commit, since `driver_commit` without paths stages everything. The
   `done` change is committed on its own, scoped to `hill.json`, with

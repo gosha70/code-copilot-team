@@ -90,6 +90,8 @@ regenerated copies.
 | A phase is built with no scope to credit | Preflight refuses the run on a mapping gap (D1) |
 | A transient git failure leaves the chart behind the branch | One retry, then journal; the next build or summary commit stages `hill.json` (D4) |
 | Resume double-stamps | ledger already skips done phases; `hill_set` is idempotent |
+| A resumed run credits a different scope than the phase started against | the mapping is frozen in the ledger; a live map that differs refuses the resume |
+| The run finishes over a chart it could not write | a write failure parks as `hill_chart_error`; only a commit failure is retried and journaled |
 | Feature runs change | activation needs `hill.json`; suite asserts unchanged journal and commits |
 
 ## Delivery gates
