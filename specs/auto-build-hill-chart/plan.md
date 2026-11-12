@@ -31,7 +31,9 @@ One driver change in three small functions plus the resolution rule;
 one new test block; one doc section and three one-sentence notes.
 
 1. `resolve_spec_dir` in `auto-build-loop.sh`: `specs/<id>`, else
-   `specs/pitches/<id>` (FR-1).
+   `specs/pitches/<id>` (FR-1); the same resolution in
+   `review-round-runner.sh`, and the driver passes
+   `CCT_REVIEW_COLLAB_DIR` so review artifacts land in the pitch dir.
 2. `hill_*` helpers, defined only in terms of `jq`, `now_iso` and the
    existing `journal`/`driver_commit`: `hill_active`, `hill_map`
    (phase → scope ids from `enumerate_phases` titles), `hill_preflight`
@@ -58,7 +60,7 @@ one new test block; one doc section and three one-sentence notes.
 - `hill_set` returns 0 when it wrote, 1 when the scope was already at
   or past the target; an unknown scope cannot reach it because
   preflight refused the mapping.
-- `hill_preflight` exit 2 is a configuration refusal, the same class as
+- `hill_preflight` exit 1 is a configuration refusal, the same code as
   a missing `tasks.md`; it happens before the ledger is written.
 - The hill commit message: `docs(<feature-id>): phase <n> hill chart
   [auto-build]`, path-scoped to `$SPEC_DIR/hill.json`.

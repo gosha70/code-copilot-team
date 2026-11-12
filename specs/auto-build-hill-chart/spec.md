@@ -65,7 +65,10 @@ headings. This feature connects the two and nothing more.
   `specs/pitches/<id>` exists, as the pitch directory, the same rule
   `validate-spec.sh` and `check-origin-alignment.sh` apply. `FEATURE_ID`
   stays the bare id in the ledger, branch, commit messages and
-  notifications.
+  notifications. The review-round runner resolves the same way for its
+  spec listing and collaboration artifacts, and the driver passes the
+  resolved collaboration directory to it, so a pitch run never creates
+  a stray `specs/<id>/` beside the pitch.
 - **FR-2 Activation.** Hill-chart automation is active when
   `$SPEC_DIR/hill.json` exists. With no `hill.json` the driver's
   behaviour, journal, commits and outputs are byte-for-byte unchanged
@@ -80,8 +83,9 @@ headings. This feature connects the two and nothing more.
   scope that exists in `hill.json`, and the driver never infers one.
 - **FR-4 Preflight gate.** With automation active, preflight journals
   and prints one line per phase, `hill: phase <n> -> S1 S2`, and then
-  refuses the run before the first phase, with exit 2 and the list of
-  gaps, when any phase has no token (`hill: phase <n> -> (no scope)`)
+  refuses the run before the first phase, with exit 1 (the driver's
+  configuration-refusal code, the same as a missing `tasks.md`) and
+  the list of gaps, when any phase has no token (`hill: phase <n> -> (no scope)`)
   or names a scope id absent from `hill.json` (`hill: phase <n> ->
   S9 not in hill.json`). The message names `tasks.md` as the file to
   fix. A scope that no phase names is not a gap. The mapping is stored
