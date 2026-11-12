@@ -207,12 +207,6 @@ class TestSecretPatterns(unittest.TestCase):
                          r"C:\Users\devon\x")
         self.assertEqual(scrub_text("C:/Users/devé/x", home=r"C:\Users\dev"),
                          "C:/Users/devé/x")
-        # ...and a left boundary: text that merely ends in the home's
-        # spelling is not the home (review of PR #442).
-        self.assertEqual(scrub_text(r"abc:\Users\dev\x", home=r"C:\Users\dev"),
-                         r"abc:\Users\dev\x")
-        self.assertEqual(scrub_text("x/home/gosha/y", home="/home/gosha"), "x/home/gosha/y")
-        # while the usual neighbours still match
         for lead in ("'", '"', "=", "(", " ", ""):
             with self.subTest(lead=lead):
                 self.assertEqual(scrub_text(f"{lead}C:/Users/dev/y", home=r"C:\Users\dev"), f"{lead}~/y")
@@ -223,6 +217,26 @@ class TestSecretPatterns(unittest.TestCase):
         # Idempotent: a second pass changes nothing.
         once = scrub_text("C:/Users/dev/x", home=r"C:\Users\dev")
         self.assertEqual(scrub_text(once, home=r"C:\Users\dev"), once)
+
+    def test_a_home_directly_after_a_letter_is_still_scrubbed(self) -> None:
+        win = r"C:\Users\dev"
+        posix = "/home/gosha"
+        cases = [
+            (win, json.dumps("worktree:\n" + win + "\\proj\\a.py"), "~/proj/a.py"),
+            (win, json.dumps("x\t" + win + "\\proj"), "~/proj"),
+            (win, "\x1b[32m" + win + "\\proj\\a.py\x1b[0m", "~/proj/a.py"),
+            (win, r"abc:\Users\dev\x", "~/x"),
+            (posix, json.dumps("worktree:\n/home/gosha/proj/a.py"), "~/proj/a.py"),
+            (posix, json.dumps("x\t/home/gosha/proj"), "~/proj"),
+            (posix, "\x1b[32m/home/gosha/proj/a.py\x1b[0m", "~/proj/a.py"),
+            (posix, "x/home/gosha/y", "~/y"),
+        ]
+        for home, text, scrubbed in cases:
+            with self.subTest(text=text):
+                out = scrub_text(text, home=home)
+                self.assertNotIn("gosha", out)
+                self.assertNotIn("dev", out)
+                self.assertIn(scrubbed, out)
 
     def test_deep_scrub_touches_string_values_only(self) -> None:
         payload = {"a": [1, True, None, f"key={_SECRET}"],

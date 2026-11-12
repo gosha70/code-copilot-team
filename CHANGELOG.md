@@ -124,6 +124,15 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Fixed
 
+- **The home-path scrub no longer leaves the username when the home
+  follows a letter.** The left boundary added to the home match kept
+  `scrub_text` from touching a home that came straight after a word
+  character, which is where it sits after a JSON `\n` or `\t` and after
+  an ANSI colour code (`\x1b[32m`), so a worktree path in a logged
+  message or coloured output shipped the OS username in published
+  evidence. The match has no left boundary again; text that only ends
+  in the home's spelling (`x/home/gosha/y`) now reads `x~/y`, which
+  hides a little more and leaks nothing.
 - **The home-path scrub catches every spelling of the home directory.**
   `scrub_text` collapsed only the exact `str(Path.home())` spelling to
   `~`, so on Windows a username shipped in published routing evidence
