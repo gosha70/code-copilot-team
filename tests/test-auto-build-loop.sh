@@ -1902,10 +1902,11 @@ DISPATCH_OK=1
 for r in origin_gate provider_unavailable review_breaker cap_exceeded \
          build_session_error build_session_timeout test_failure git_anomaly \
          pr_error pr_config pr_precheck merge_blocked \
-         coverage_gate conformance_gate cost_accounting_failed review_inconclusive; do
+         coverage_gate conformance_gate cost_accounting_failed review_inconclusive \
+         hill_chart_error; do
     grep -q "dispose \"$r\"" "$DRIVER" || { DISPATCH_OK=0; echo "  (missing dispose for $r)"; }
 done
-assert_eq "all 16 breaker reasons dispatch via dispose()" "1" "$DISPATCH_OK"
+assert_eq "all 17 breaker reasons dispatch via dispose()" "1" "$DISPATCH_OK"
 assert_eq "no breaker call site bypasses dispose()" "0" \
     "$(grep -cE '(^|[^a-zA-Z_"])park "[a-z]' "$DRIVER")"
 assert_eq "termination artifacts add no force-push (prechecks not weakened)" "0" \
@@ -9190,6 +9191,44 @@ REVIEW_PROFILE="$PASS_PROFILE" run_driver_id "$P" demo-pitch --resume
 assert_exit "#405: resume completes the run" 0 "$RC"
 assert_eq "#405: ...S1 landed exactly once" "1" "$(grep -c 'S1 -> done' "$P/.cct/auto-build/demo-pitch/events.jsonl")"
 assert_eq "#405: ...final chart" "S1=done S2=done S3=uphill" "$(hill_state "$P/specs/pitches/demo-pitch/hill.json")"
+rm -rf "$P"
+
+echo "--- #405: the mapping is frozen for the run; drift refuses a resume"
+P=$(setup_pitch)
+REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver_id "$P" demo-pitch
+assert_exit "#405: park before landing (drift fixture)" 4 "$RC"
+assert_eq "#405: ...the ledger froze the mapping" "$(printf '1\tS1\n2\tS2\n3\tS2')" "$(cat "$P/.cct/auto-build/demo-pitch/hill-map.tsv")"
+sed -i '' 's/^## US1: One (S1)$/## US1: One (S2)/' "$P/specs/pitches/demo-pitch/tasks.md" 2>/dev/null || \
+    sed -i 's/^## US1: One (S1)$/## US1: One (S2)/' "$P/specs/pitches/demo-pitch/tasks.md"
+git -C "$P" commit -qam "fixture: move phase 1 to S2 while parked"
+fake_review_decide "$P" approve
+REVIEW_PROFILE="$PASS_PROFILE" run_driver_id "$P" demo-pitch --resume
+assert_exit "#405: a resume with a changed mapping refuses" 1 "$RC"
+assert_contains "#405: ...naming the drift" "$OUTPUT" "phase 1 was 'S1', now 'S2'"
+assert_eq "#405: ...chart untouched by the refused resume" "S1=downhill S2=uphill S3=uphill" "$(hill_state "$P/specs/pitches/demo-pitch/hill.json")"
+assert_eq "#405: ...no scope was credited" "0" "$(grep -c 'S2 -> done' "$P/.cct/auto-build/demo-pitch/events.jsonl")"
+sed -i '' 's/^## US1: One (S2)$/## US1: One (S1)/' "$P/specs/pitches/demo-pitch/tasks.md" 2>/dev/null || \
+    sed -i 's/^## US1: One (S2)$/## US1: One (S1)/' "$P/specs/pitches/demo-pitch/tasks.md"
+git -C "$P" commit -qam "fixture: restore the frozen mapping"
+REVIEW_PROFILE="$PASS_PROFILE" run_driver_id "$P" demo-pitch --resume
+assert_exit "#405: restoring the mapping lets the resume land" 0 "$RC"
+assert_eq "#405: ...against the frozen scopes" "S1=done S2=done S3=uphill" "$(hill_state "$P/specs/pitches/demo-pitch/hill.json")"
+rm -rf "$P"
+
+echo "--- #405: a chart the driver cannot write parks the run"
+HILL_CORRUPT_SCRIPT=$(mktemp)
+cat > "$HILL_CORRUPT_SCRIPT" << 'SCRIPTLET'
+# Phase 1's build session leaves hill.json unparseable; the landing write must fail loudly.
+printf '#!/usr/bin/env bash\necho ok\n' > demo.sh
+printf '{' > specs/pitches/demo-pitch/hill.json
+SCRIPTLET
+P=$(setup_pitch)
+MOCK_CLAUDE_SCRIPT="$HILL_CORRUPT_SCRIPT" run_driver_id "$P" demo-pitch
+assert_exit "#405: an unwritable chart parks (exit 4), never a silent stale chart" 4 "$RC"
+assert_eq "#405: ...with reason hill_chart_error" "hill_chart_error" \
+    "$(jq -r '.reason' "$(ls "$P"/.cct/auto-build/demo-pitch/escalations/esc-*.json 2>/dev/null | head -1)" 2>/dev/null)"
+assert_eq "#405: ...naming the scope and status" "1" "$(grep -c 'S1 -> done' "$P/.cct/auto-build/demo-pitch/escalations/esc-1.json")"
+assert_eq "#405: ...the run did not land" "0" "$(grep -c '"outcome":"landed"' "$P/.cct/auto-build/demo-pitch/state.json")"
 rm -rf "$P"
 
 echo "--- #405: a scope already done is never re-stamped"

@@ -3523,6 +3523,24 @@ hill_preflight() {
         echo "Every phase of a pitch run must name its scope(s) with an (S<n>) token in its '## US<n>:' heading in $SPEC_REL/tasks.md (or in the phases.phases override). Fix the plan, then rerun." >&2
         exit 1
     fi
+    # The mapping is FROZEN by the run that started: a resumed run must
+    # not credit a different scope than the phase was started against.
+    # The ledger keeps the map the first attempt computed; a live map that
+    # differs refuses (restore the headings, or start a new run).
+    local frozen="$LEDGER_DIR/hill-map.tsv" drift=""
+    if [[ -f "$frozen" ]]; then
+        drift=$(awk -F'\t' 'NR==FNR { was[$1]=$2; next }
+            { if (!($1 in was)) printf "phase %s is new (was absent); ", $1;
+              else if (was[$1] != $2) printf "phase %s was \x27%s\x27, now \x27%s\x27; ", $1, was[$1], $2;
+              seen[$1]=1 }
+            END { for (k in was) if (!(k in seen)) printf "phase %s was \x27%s\x27, now absent; ", k, was[k] }' \
+            "$frozen" <(printf '%s\n' "$HILL_MAP"))
+        if [[ -n "$drift" ]]; then
+            echo "Error: hill chart mapping changed since this run started (frozen in ${frozen#"$PROJECT_DIR"/}): ${drift% }" >&2
+            echo "Restore the (S<n>) tokens in $SPEC_REL/tasks.md to the frozen mapping, or start a new run." >&2
+            exit 1
+        fi
+    fi
 }
 
 hill_rank() { case "$1" in downhill) echo 1 ;; done) echo 2 ;; *) echo 0 ;; esac; }
@@ -3551,19 +3569,28 @@ hill_set() {
     journal "hill_scope" "$id -> $target ($note)"
 }
 
+hill_write_failed() {  # <n> <scope> <status>: a chart that cannot be written parks the run
+    # A commit failure self-heals (the written file rides a later commit,
+    # D4); a WRITE failure leaves nothing to heal from, so the run stops.
+    dispose "hill_chart_error" "phase $1: hill.json could not be written ($2 -> $3)" \
+        "$(jq -n --arg f "$HILL_JSON" '{hill_json: $f}')"
+}
+
 hill_phase_start() {  # <n>: mapped scopes uphill -> downhill
     hill_active || return 0
-    local s
+    local s rc
     for s in $(hill_scopes_of_phase "$1"); do
-        hill_set "$s" downhill "auto-build: phase $1 started" || true
+        rc=0; hill_set "$s" downhill "auto-build: phase $1 started" || rc=$?
+        [[ $rc -ge 2 ]] && hill_write_failed "$1" "$s" downhill
     done
+    return 0
 }
 
 hill_phase_landed() {
     # <n>: mapped scopes -> done unless a phase not yet landed also
     # names them; then the chart's own scoped commit, retried once.
     hill_active || return 0
-    local n="$1" sha s m scopes pending moved=0
+    local n="$1" sha s m scopes pending moved=0 rc
     sha=$(git -C "$PROJECT_DIR" rev-parse --short HEAD 2>/dev/null || echo "")
     for s in $(hill_scopes_of_phase "$n"); do
         pending=0
@@ -3573,7 +3600,9 @@ hill_phase_landed() {
             [[ "$(state_get ".phases[\"$m\"].status // empty")" == "done" ]] || pending=1
         done <<< "$HILL_MAP"
         [[ $pending -eq 1 ]] && continue
-        hill_set "$s" done "auto-build: phase $n landed $sha" && moved=1
+        rc=0; hill_set "$s" done "auto-build: phase $n landed $sha" || rc=$?
+        [[ $rc -eq 0 ]] && moved=1
+        [[ $rc -ge 2 ]] && hill_write_failed "$n" "$s" done
     done
     [[ $moved -eq 1 ]] || return 0
     local rc=0

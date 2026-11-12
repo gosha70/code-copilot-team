@@ -354,7 +354,10 @@ Preflight prints the mapping, `hill: phase 1 -> S1`, and refuses the
 run before anything is built when a phase names no scope or names one
 the chart does not have; a dry run predicts the same refusal. The
 driver never infers a mapping. A scope that no phase names is allowed
-and is left untouched.
+and is left untouched. The mapping is frozen in the run's ledger
+(`hill-map.tsv`); a `--resume` whose headings now map a phase to a
+different scope is refused until the headings are restored or a new
+run is started.
 
 **Transitions.** When a phase's build session starts, each scope it
 names moves `uphill → downhill` (the change rides the phase's build
@@ -368,7 +371,8 @@ and then journaled as `artifact_skipped` without parking, since the
 next build commit or the final summary commit stages the file anyway.
 The driver never moves a scope backwards and never re-stamps one that
 is already at or past the target, so a scope you set with `/hill`
-keeps its note.
+keeps its note. A chart the driver cannot write at all parks the run
+as `hill_chart_error`; a run never finishes over a stale chart.
 
 **At the end** the automation summary carries `Hill chart: S1=done
 S2=done S3=uphill` and the journal a `hill_final` event with the same
