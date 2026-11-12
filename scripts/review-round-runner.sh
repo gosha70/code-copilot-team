@@ -433,6 +433,12 @@ else
     echo "Error: state.json not found. Create it via /review-submit." >&2
     exit 1
 fi
+# A Shape-Up pitch keeps its SDD artifacts under specs/pitches/<id>/
+# (#405); resolve a bare id the way the driver and the spec gates do.
+SPEC_SUBDIR="specs/${FEATURE_ID:-}"
+if [[ -n "${FEATURE_ID:-}" && ! -d "$PROJECT_DIR/specs/$FEATURE_ID" && -d "$PROJECT_DIR/specs/pitches/$FEATURE_ID" ]]; then
+    SPEC_SUBDIR="specs/pitches/$FEATURE_ID"
+fi
 
 NEXT_ROUND=$((CURRENT_ROUND + 1))
 
@@ -724,12 +730,12 @@ fi)
 
 ## Spec Artifacts
 
-$(if [[ -d "$SANDBOX_DIR/specs/$FEATURE_ID" ]]; then
-    find "$SANDBOX_DIR/specs/$FEATURE_ID" -name '*.md' -not -path '*/collaboration/*' | sort | while read -r f; do
+$(if [[ -d "$SANDBOX_DIR/$SPEC_SUBDIR" ]]; then
+    find "$SANDBOX_DIR/$SPEC_SUBDIR" -name '*.md' -not -path '*/collaboration/*' | sort | while read -r f; do
         echo "- ${f#$SANDBOX_DIR/}"
     done
 else
-    echo "- No spec artifacts found at specs/$FEATURE_ID/"
+    echo "- No spec artifacts found at $SPEC_SUBDIR/"
 fi)
 
 $(required_output_format)
@@ -1402,7 +1408,7 @@ if [[ "$VERDICT" == "PASS" ]]; then
         MODE="review"
     fi
 
-    COLLAB_DIR="${CCT_REVIEW_COLLAB_DIR:-$PROJECT_DIR/specs/$FEATURE_ID/collaboration}"
+    COLLAB_DIR="${CCT_REVIEW_COLLAB_DIR:-$PROJECT_DIR/$SPEC_SUBDIR/collaboration}"
     mkdir -p "$COLLAB_DIR"
     cat > "$COLLAB_DIR/$ARTIFACT_NAME" << ARTIFACT_EOF
 ---
@@ -1468,7 +1474,7 @@ if [[ "$PHASE" == "plan" ]]; then
           target_ref: $target_ref, findings: $findings, cost: $cost}' \
         > "$REVIEW_DIR/loop-summary.json"
 
-    COLLAB_DIR="${CCT_REVIEW_COLLAB_DIR:-$PROJECT_DIR/specs/$FEATURE_ID/collaboration}"
+    COLLAB_DIR="${CCT_REVIEW_COLLAB_DIR:-$PROJECT_DIR/$SPEC_SUBDIR/collaboration}"
     mkdir -p "$COLLAB_DIR"
     cat > "$COLLAB_DIR/plan-consult.md" << ARTIFACT_EOF
 ---

@@ -27,6 +27,8 @@ Otherwise read `hill.json` for the active pitch:
 - Some `done`, some not → suggest `shipped` (partial) or `shelved`. Ask the user.
 - No scopes `done` → suggest `shelved`. Ask the user to confirm.
 
+A driver-built cycle arrives here with its scopes already moved by the auto-build driver (phase landed = scope `done`); its automation summary ends with a `Hill chart:` line stating the final state, and a scope no phase named is left where the driver found it.
+
 Use AskUserQuestion: "Was the bet `<pitch-id>` shipped or shelved?" — `shipped | shelved`.
 
 ### 4. Update pitch frontmatter

@@ -46,3 +46,5 @@ Print:
 - Transition (e.g. `uphill → downhill`)
 - Current state of all scopes (one-line summary like `S1=done S2=downhill S3=uphill`)
 - If all scopes are `done`: "All scopes complete. Run `/cooldown` to close the cycle."
+
+In a driver-built cycle (`claude-code build <pitch-id>`), the auto-build driver moves a scope to `downhill` when a phase naming it starts and to `done` when the last phase naming it lands through the driver's review, verifier and coverage gates; `/hill` remains the manual path for session-driven cycles and for corrections.

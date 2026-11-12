@@ -152,6 +152,18 @@ if ! command -v jq &>/dev/null; then
 fi
 
 SPEC_DIR="$PROJECT_DIR/specs/$FEATURE_ID"
+# A Shape-Up pitch keeps its SDD artifacts under specs/pitches/<id>/ (#405).
+# Resolve a bare id the way validate-spec.sh and check-origin-alignment.sh
+# already do; FEATURE_ID stays the bare id everywhere else (ledger, branch,
+# commit messages, notifications).
+if [[ ! -d "$SPEC_DIR" && -d "$PROJECT_DIR/specs/pitches/$FEATURE_ID" ]]; then
+    SPEC_DIR="$PROJECT_DIR/specs/pitches/$FEATURE_ID"
+fi
+SPEC_REL="${SPEC_DIR#"$PROJECT_DIR"/}"
+# Hill-chart automation (#405) is active exactly when the pitch has a chart.
+HILL_JSON=""
+[[ -f "$SPEC_DIR/hill.json" ]] && HILL_JSON="$SPEC_DIR/hill.json"
+HILL_MAP=""
 CONFIG_PATH="${CONFIG_PATH:-$SPEC_DIR/automation.json}"
 
 # ── --detach: start an unattended run that survives the terminal ──────
@@ -3443,6 +3455,158 @@ enumerate_phases() {
     ' "$SPEC_DIR/tasks.md"
 }
 
+# ── Hill chart (#405) ─────────────────────────────────────────
+#
+# A pitch run (specs/pitches/<id>/ with a hill.json from /cycle-start)
+# moves its scopes as phases start and land. The phase→scope mapping is
+# a PLANNING FACT the SDD states explicitly: every phase names its
+# scope(s) with (S<n>) tokens in its '## US<n>:' heading. The driver
+# never infers one — a phase with no token, or naming a scope the chart
+# does not have, is refused at preflight before anything is built, so
+# the planner fixes tasks.md. A scope no phase names is allowed and is
+# left untouched (its state is reported at the end for /cooldown).
+#
+# Transitions: a mapped scope moves uphill→downhill when its phase's
+# build session starts (the change rides the phase's own build commit)
+# and →done when the LAST phase that names it lands — after the review
+# rounds, the phase gate and the coverage gate, where the ledger marks
+# the phase done. The driver's gates are the verification; the scope
+# executor's "a human marks done" rule applies to session-driven
+# cycles. Never backwards, never re-stamped: a scope already at or past
+# the target is left alone, note included.
+hill_active() { [[ -n "$HILL_JSON" ]]; }
+
+hill_scopes_of_title() {
+    # <title> -> space-separated scope ids from (S1) / (S1, S2) / (S1)(S2)
+    printf '%s' "$1" | grep -oE '\(S[0-9]+([ ,]+S[0-9]+)*\)' | grep -oE 'S[0-9]+' \
+        | tr '\n' ' ' | sed 's/ $//'
+}
+
+hill_map() {
+    # -> "<n>\t<scope ids>" per phase, from the enumerated PHASES.
+    printf '%s\n' "$PHASES" | while IFS=$'\t' read -r n title _ms; do
+        printf '%s\t%s\n' "$n" "$(hill_scopes_of_title "$title")"
+    done
+}
+
+hill_scopes_of_phase() {  # <n> -> the mapped scope ids of phase n
+    printf '%s\n' "$HILL_MAP" | awk -F'\t' -v n="$1" '$1 == n { print $2 }'
+}
+
+hill_preflight() {
+    # Print the mapping, refuse on a gap. Runs right after phase
+    # enumeration — before the dry run and before any ledger — so a dry
+    # run predicts the refusal and a refusal leaves no durable state.
+    hill_active || return 0
+    local known gaps="" n scopes s
+    if ! known=$(jq -r '.scopes[].id' "$HILL_JSON" 2>/dev/null); then
+        echo "Error: $HILL_JSON is not a readable hill chart (see shared/templates/sdd/hill-chart.json)." >&2
+        exit 1
+    fi
+    HILL_MAP=$(hill_map)
+    while IFS=$'\t' read -r n scopes; do
+        if [[ -z "$scopes" ]]; then
+            echo "[auto-build] hill: phase $n -> (no scope)" >&2
+            gaps="$gaps phase $n names no scope;"
+            continue
+        fi
+        echo "[auto-build] hill: phase $n -> $scopes" >&2
+        for s in $scopes; do
+            if ! grep -qx "$s" <<< "$known"; then
+                echo "[auto-build] hill: phase $n -> $s not in hill.json" >&2
+                gaps="$gaps phase $n names $s, which hill.json does not have;"
+            fi
+        done
+    done <<< "$HILL_MAP"
+    if [[ -n "$gaps" ]]; then
+        echo "Error: hill chart mapping is incomplete —${gaps%;}." >&2
+        echo "Every phase of a pitch run must name its scope(s) with an (S<n>) token in its '## US<n>:' heading in $SPEC_REL/tasks.md (or in the phases.phases override). Fix the plan, then rerun." >&2
+        exit 1
+    fi
+}
+
+hill_rank() { case "$1" in downhill) echo 1 ;; done) echo 2 ;; *) echo 0 ;; esac; }
+
+hill_set() {
+    # hill_set <scope> <status> <note> -> 0 wrote; 1 already at or past
+    # the target (left alone); 2 write failed (journaled).
+    local id="$1" target="$2" note="$3" cur tmp
+    cur=$(jq -r --arg id "$id" '.scopes[] | select(.id == $id) | .status' "$HILL_JSON" 2>/dev/null)
+    [[ $(hill_rank "$cur") -ge $(hill_rank "$target") ]] && return 1
+    tmp=$(mktemp "$(dirname "$HILL_JSON")/.hill.XXXXXX") || return 2
+    # mktemp creates 0600; the chart is a tracked file, keep its mode.
+    local mode
+    mode=$(stat -f '%Lp' "$HILL_JSON" 2>/dev/null || stat -c '%a' "$HILL_JSON" 2>/dev/null || echo 644)
+    if jq --arg id "$id" --arg st "$target" --arg note "$note" --arg ts "$(now_iso)" \
+        '.updated_at = $ts
+         | .scopes |= map(if .id == $id then .status = $st | .last_updated = $ts | .note = $note else . end)' \
+        "$HILL_JSON" > "$tmp"; then
+        chmod "$mode" "$tmp" 2>/dev/null || true
+        mv "$tmp" "$HILL_JSON"
+    else
+        rm -f "$tmp"
+        journal "hill_write_failed" "$id -> $target"
+        return 2
+    fi
+    journal "hill_scope" "$id -> $target ($note)"
+}
+
+hill_phase_start() {  # <n>: mapped scopes uphill -> downhill
+    hill_active || return 0
+    local s
+    for s in $(hill_scopes_of_phase "$1"); do
+        hill_set "$s" downhill "auto-build: phase $1 started" || true
+    done
+}
+
+hill_phase_landed() {
+    # <n>: mapped scopes -> done unless a phase not yet landed also
+    # names them; then the chart's own scoped commit, retried once.
+    hill_active || return 0
+    local n="$1" sha s m scopes pending moved=0
+    sha=$(git -C "$PROJECT_DIR" rev-parse --short HEAD 2>/dev/null || echo "")
+    for s in $(hill_scopes_of_phase "$n"); do
+        pending=0
+        while IFS=$'\t' read -r m scopes; do
+            [[ "$m" == "$n" ]] && continue
+            [[ " $scopes " == *" $s "* ]] || continue
+            [[ "$(state_get ".phases[\"$m\"].status // empty")" == "done" ]] || pending=1
+        done <<< "$HILL_MAP"
+        [[ $pending -eq 1 ]] && continue
+        hill_set "$s" done "auto-build: phase $n landed $sha" && moved=1
+    done
+    [[ $moved -eq 1 ]] || return 0
+    local rc=0
+    driver_commit "docs($FEATURE_ID): phase $n hill chart [auto-build]" "$HILL_JSON" || rc=$?
+    if [[ $rc -ge 2 ]]; then
+        # One retry clears a transient index lock; a second failure is
+        # journaled, not parked — the dirty hill.json rides the next build
+        # commit or the final summary commit (both stage the spec dir).
+        sleep "${CCT_HILL_COMMIT_RETRY_SEC:-2}"
+        rc=0
+        driver_commit "docs($FEATURE_ID): phase $n hill chart [auto-build]" "$HILL_JSON" || rc=$?
+        if [[ $rc -ge 2 ]]; then
+            journal "artifact_skipped" "phase $n hill chart not committed (git failure after one retry, journaled, not blocking)"
+            return 0
+        fi
+        journal "hill_commit_retried" "phase $n hill chart committed on retry"
+    fi
+    [[ $rc -eq 0 && -n "$COMMIT_SHA" ]] && state_set '.phases[$p].commits += [$sha]' --arg p "$n" --arg sha "$COMMIT_SHA"
+    return 0
+}
+
+hill_summary() {  # -> "S1=done S2=uphill" from the chart
+    jq -r '[.scopes[] | "\(.id)=\(.status)"] | join(" ")' "$HILL_JSON" 2>/dev/null
+}
+
+hill_final() {  # prints the summary line (for automation-summary.md) and journals it
+    hill_active || return 0
+    local line
+    line=$(hill_summary)
+    echo "Hill chart: $line"
+    journal "hill_final" "$line"
+}
+
 # ── Ledger init (FR-3) ───────────────────────────────────────
 
 # Atomic per-feature ledger lock. `mkdir` is the POSIX create-if-absent
@@ -4306,9 +4470,9 @@ archive_phase_review_artifact() {
 # to PASS; it was accepted by a human, and the line says so.
 phase_review_line() {
     local n="$1" summary="$LEDGER_DIR/phase-$n/review/loop-summary.json"
-    local artifact="specs/$FEATURE_ID/collaboration/build-review-phase-$n.md"
+    local artifact="$SPEC_REL/collaboration/build-review-phase-$n.md"
     [[ -f "$SPEC_DIR/collaboration/build-review-phase-$n.md" ]] \
-        || artifact="specs/$FEATURE_ID/collaboration/build-review.md"
+        || artifact="$SPEC_REL/collaboration/build-review.md"
     if [[ -f "$summary" && "$(jq -r '.bypass // false' "$summary" 2>/dev/null)" == "true" ]]; then
         local esc when
         esc=$(state_get ".phases[\"$n\"].bypass_approved // empty")
@@ -4617,6 +4781,7 @@ run_review_loop() {
         ( cd "$PROJECT_DIR" && CCT_REVIEW_BASE_REF="$base_ref" \
             CCT_REVIEW_TIMEOUT_SEC="${CCT_REVIEW_TIMEOUT_SEC:-$REVIEW_LOOP_TIMEOUT_SEC}" \
             CCT_REVIEW_MAX_ROUNDS="${CCT_REVIEW_MAX_ROUNDS:-$REVIEW_MAX_ROUNDS}" \
+            CCT_REVIEW_COLLAB_DIR="${CCT_REVIEW_COLLAB_DIR:-$SPEC_DIR/collaboration}" \
             bash "$SCRIPT_DIR/review-round-runner.sh" "$PROJECT_DIR" ) >&2 || rc=$?
         local round
         round=$(jq -r '.current_round // 0' "$PROJECT_DIR/.cct/review/state.json" 2>/dev/null || echo 0)
@@ -4914,6 +5079,7 @@ run_phase() {
     build_commit=$(state_get ".phases[\"$n\"].build_commit // empty")
     if [[ -z "$build_commit" ]]; then
         local prompt="$phase_dir/build-prompt.md" result="$phase_dir/build-result-1.json"
+        hill_phase_start "$n"
         compose_build_prompt "$n" "$title" "$prompt"
         run_session "$prompt" "$result"
         if [[ "$SESSION_SUBTYPE" == "error_max_turns" ]]; then
@@ -5001,6 +5167,7 @@ run_phase() {
     state_set '.phases[$p].status = "done" | .phases[$p].last_reviewed_ref = $sha' \
         --arg p "$n" --arg sha "$(git -C "$PROJECT_DIR" rev-parse HEAD)"
     journal "phase_done" "phase $n"
+    hill_phase_landed "$n"
     report_phase_spend "$n"
 
     # Publish the branch after each phase (pr/merge) so progress — including
@@ -5088,6 +5255,7 @@ if [[ "$PHASE_COUNT" -eq 0 ]]; then
     echo "Error: no phases found (no '## US<n>:' groups in tasks.md and no config override)." >&2
     exit 1
 fi
+hill_preflight
 
 if [[ "$DRY_RUN" == "true" ]]; then
     echo "auto-build-loop DRY RUN — $FEATURE_ID (profile: $PROFILE)"
@@ -6141,6 +6309,7 @@ flush_pending_events
 MAX=$((MAX_PHASES))
 DONE_COUNT=0
 printf '%s\n' "$PHASES" > "$LEDGER_DIR/phases.tsv"
+hill_active && printf '%s\n' "$HILL_MAP" > "$LEDGER_DIR/hill-map.tsv"
 START_AT="${START_PHASE_ARG:-1}"
 
 while IFS=$'\t' read -r n title ms; do
@@ -6194,7 +6363,8 @@ set_status "finalizing"
     else
         echo "Profile: advisory — nothing was pushed. Branch: $BRANCH_NAME."
     fi
-    echo "Review artifacts: specs/$FEATURE_ID/collaboration/."
+    echo "Review artifacts: $SPEC_REL/collaboration/."
+    hill_final
 } >> "$SUMMARY_MD"
 # rc 1 (no diff) is fine; rc 2 (git failure) must not let the run push and
 # report done with its required summary artifact uncommitted.

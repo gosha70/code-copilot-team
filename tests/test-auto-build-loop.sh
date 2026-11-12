@@ -9003,6 +9003,250 @@ assert_eq "#403: ...and no phase commit was made" "0" \
     "$(grep -c '"event":"phase_commit"' "$L403/events.jsonl" 2>/dev/null)"
 rm -rf "$P"
 
+# ── Hill chart (#405) ─────────────────────────────────────────
+# A pitch run (specs/pitches/<id>/ with hill.json) moves its scopes:
+# downhill when a phase starts, done when the last phase naming the
+# scope lands; a mapping gap refuses at preflight; a feature run (no
+# hill.json) is untouched.
+setup_pitch() {
+    # setup_pitch [default|no-token|unknown-scope] — three phases:
+    # US1 (S1), US2 (S2), US3 (S2); S3 is named by no phase.
+    local variant="${1:-default}" dir
+    dir=$(mktemp -d)
+    git -C "$dir" init -q -b main-dev
+    git -C "$dir" config user.email "test@test.local"
+    git -C "$dir" config user.name "Test"
+    mkdir -p "$dir/specs/pitches/demo-pitch"
+    cat > "$dir/specs/pitches/demo-pitch/plan.md" << 'PLAN'
+---
+spec_mode: lightweight
+feature_id: demo-pitch
+status: approved
+date: 2026-11-11
+origin:
+  type: internal
+  reason: driver test fixture
+  origin_claim: |
+    Toy pitch for hill-chart automation tests.
+---
+# Plan: demo pitch
+PLAN
+    cat > "$dir/specs/pitches/demo-pitch/spec.md" << 'SPEC'
+# Spec: demo pitch
+
+## Requirements
+- FR-1: demo.sh prints ok.
+- FR-2: extra.sh prints more.
+- FR-3: fixes.log records the third phase.
+
+## Constraints
+- None.
+SPEC
+    cat > "$dir/specs/pitches/demo-pitch/pitch.md" << 'PITCH'
+---
+pitch_id: demo-pitch
+title: "Demo pitch"
+appetite: 2w
+bet_status: building
+cycle: "01"
+circuit_breaker: "none"
+shaped_by: "test"
+shaped_date: 2026-11-11
+---
+# Demo pitch
+
+## Scopes
+
+### S1: One
+### S2: Two
+### S3: Three
+PITCH
+    local h2="## US2: Two (S2)" h3="## US3: Three (S2)"
+    case "$variant" in
+        no-token) h2="## US2: Two" ;;
+        unknown-scope) h3="## US3: Three (S9)" ;;
+    esac
+    cat > "$dir/specs/pitches/demo-pitch/tasks.md" << TASKS
+# Tasks: demo pitch
+
+## US1: One (S1)
+
+| # | Task | File(s) |
+|---|------|---------|
+| 1 | Create demo.sh printing ok | demo.sh |
+
+$h2
+
+| # | Task | File(s) |
+|---|------|---------|
+| 2 | Create extra.sh printing more | extra.sh |
+
+$h3
+
+| # | Task | File(s) |
+|---|------|---------|
+| 3 | Record the third phase | fixes.log |
+TASKS
+    cat > "$dir/specs/pitches/demo-pitch/hill.json" << 'HILL'
+{
+  "pitch_id": "demo-pitch",
+  "cycle": "01",
+  "updated_at": "2026-11-11T00:00:00Z",
+  "scopes": [
+    {"id": "S1", "name": "One", "status": "uphill", "last_updated": "2026-11-11T00:00:00Z"},
+    {"id": "S2", "name": "Two", "status": "uphill", "last_updated": "2026-11-11T00:00:00Z"},
+    {"id": "S3", "name": "Three", "status": "uphill", "last_updated": "2026-11-11T00:00:00Z"}
+  ]
+}
+HILL
+    cat > "$dir/specs/pitches/demo-pitch/automation.json" << 'CFG'
+{
+  "schema_version": 1,
+  "profile": "advisory",
+  "branch": {"name": "feature/demo-pitch", "base": "main-dev"},
+  "phases": {"milestone_every": 0, "max_phases": 8},
+  "build": {"max_turns": 10, "max_fix_sessions_per_phase": 2},
+  "test": {"command": "bash ./project-test.sh", "timeout_sec": 60},
+  "review": {"reviewers": [{"provider": "mock", "specialization": "correctness", "scope": "both", "gating": true}]},
+  "caps": {"wall_clock_sec": 3600, "cost_usd": 5}
+}
+CFG
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$dir/project-test.sh"
+    chmod +x "$dir/project-test.sh"
+    printf '.cct/\n' > "$dir/.gitignore"
+    git -C "$dir" add -A
+    git -C "$dir" commit -q -m "init"
+    echo "$dir"
+}
+
+run_driver_id() {  # run_driver_id <project> <feature-id> [driver args...]
+    local project="$1" id="$2"; shift 2
+    local counter
+    counter=$(mktemp)
+    rm -f "$MOCK_REVIEWED_MARKER"
+    RC=0
+    OUTPUT=$(cd "$project" && \
+        CCT_PROJECT_DIR="$project" \
+        CCT_CLAUDE_BIN="$MOCK_BIN/claude" \
+        MOCK_CLAUDE_COUNTER="$counter" \
+        CCT_PROVIDER_PROFILE="${REVIEW_PROFILE:-$PASS_PROFILE}" \
+        bash "$DRIVER" "$id" "$@" 2>&1) || RC=$?
+}
+
+hill_state() { jq -r '[.scopes[] | "\(.id)=\(.status)"] | join(" ")' "$1"; }
+
+echo "--- #405: a pitch run moves its hill chart"
+P=$(setup_pitch)
+run_driver_id "$P" demo-pitch
+HJ="$P/specs/pitches/demo-pitch/hill.json"
+LH="$P/.cct/auto-build/demo-pitch"
+assert_exit "#405: a pitch id resolves to specs/pitches/<id> and the run completes" 0 "$RC"
+assert_eq "#405: scopes after the run" "S1=done S2=done S3=uphill" "$(hill_state "$HJ")"
+assert_contains "#405: preflight prints the mapping" "$OUTPUT" "hill: phase 3 -> S2"
+assert_matches "#405: S1's note names phase 1 and the landed sha" "$(jq -r '.scopes[0].note' "$HJ")" '^auto-build: phase 1 landed [0-9a-f]{7,}$'
+assert_matches "#405: S2 is done by the last phase naming it (phase 3)" "$(jq -r '.scopes[1].note' "$HJ")" '^auto-build: phase 3 landed'
+assert_eq "#405: S3, named by no phase, is untouched" "null" "$(jq -r '.scopes[2].note' "$HJ")"
+assert_eq "#405: S2 went downhill when phase 2 started" "1" \
+    "$(grep -c 'S2 -> downhill (auto-build: phase 2 started)' "$LH/events.jsonl")"
+assert_eq "#405: hill commits for phases 1 and 3 only" "2" \
+    "$(git -C "$P" log --format=%s | grep -c 'hill chart \[auto-build\]')"
+assert_eq "#405: a hill commit touches only hill.json" "specs/pitches/demo-pitch/hill.json" \
+    "$(git -C "$P" log -1 --format= --name-only --grep='phase 3 hill chart')"
+assert_contains "#405: the summary carries the final chart" \
+    "$(cat "$P/specs/pitches/demo-pitch/automation-summary.md")" "Hill chart: S1=done S2=done S3=uphill"
+assert_eq "#405: hill_final journaled" "1" "$(grep -c '"event":"hill_final"' "$LH/events.jsonl")"
+assert_eq "#405: the ledger records the mapping" "$(printf '1\tS1\n2\tS2\n3\tS2')" "$(cat "$LH/hill-map.tsv")"
+assert_contains "#405: review artifacts follow the pitch directory" \
+    "$(git -C "$P" log --format= --name-only)" "specs/pitches/demo-pitch/collaboration/"
+rm -rf "$P"
+
+echo "--- #405: a mapping gap refuses before anything is built"
+P=$(setup_pitch no-token)
+run_driver_id "$P" demo-pitch
+assert_exit "#405: a phase without a scope token refuses" 1 "$RC"
+assert_contains "#405: ...naming the phase" "$OUTPUT" "phase 2 names no scope"
+assert_contains "#405: ...and the file to fix" "$OUTPUT" "specs/pitches/demo-pitch/tasks.md"
+assert_eq "#405: ...nothing built (HEAD unmoved)" "$(git -C "$P" rev-parse main-dev)" "$(git -C "$P" rev-parse HEAD)"
+assert_eq "#405: ...chart untouched" "S1=uphill S2=uphill S3=uphill" "$(hill_state "$P/specs/pitches/demo-pitch/hill.json")"
+assert_eq "#405: ...no ledger created" "absent" "$([[ -d "$P/.cct/auto-build/demo-pitch" ]] && echo present || echo absent)"
+run_driver_id "$P" demo-pitch --dry-run
+assert_exit "#405: a dry run predicts the refusal" 1 "$RC"
+rm -rf "$P"
+P=$(setup_pitch unknown-scope)
+run_driver_id "$P" demo-pitch
+assert_exit "#405: a phase naming an unknown scope refuses" 1 "$RC"
+assert_contains "#405: ...naming the scope" "$OUTPUT" "phase 3 names S9, which hill.json does not have"
+run_driver_id "$P" no-such-feature
+assert_eq "#405: an unknown id still refuses" "refused" "$([[ $RC -ne 0 ]] && echo refused || echo ran)"
+rm -rf "$P"
+
+echo "--- #405: parked before landing stays downhill; resume lands once"
+P=$(setup_pitch)
+REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver_id "$P" demo-pitch
+assert_exit "#405: the review breaker parks phase 1 before it lands" 4 "$RC"
+assert_eq "#405: ...S1 is downhill, not done" "downhill" "$(jq -r '.scopes[0].status' "$P/specs/pitches/demo-pitch/hill.json")"
+fake_review_decide "$P" approve
+REVIEW_PROFILE="$PASS_PROFILE" run_driver_id "$P" demo-pitch --resume
+assert_exit "#405: resume completes the run" 0 "$RC"
+assert_eq "#405: ...S1 landed exactly once" "1" "$(grep -c 'S1 -> done' "$P/.cct/auto-build/demo-pitch/events.jsonl")"
+assert_eq "#405: ...final chart" "S1=done S2=done S3=uphill" "$(hill_state "$P/specs/pitches/demo-pitch/hill.json")"
+rm -rf "$P"
+
+echo "--- #405: a scope already done is never re-stamped"
+P=$(setup_pitch)
+jq '.scopes[0].status = "done" | .scopes[0].note = "manual"' "$P/specs/pitches/demo-pitch/hill.json" > "$P/h.tmp" \
+    && mv "$P/h.tmp" "$P/specs/pitches/demo-pitch/hill.json"
+git -C "$P" commit -qam "fixture: S1 already done"
+run_driver_id "$P" demo-pitch
+assert_exit "#405: a run with a pre-set done scope completes" 0 "$RC"
+assert_eq "#405: ...its note is untouched" "manual" "$(jq -r '.scopes[0].note' "$P/specs/pitches/demo-pitch/hill.json")"
+assert_eq "#405: ...no S1 transition journaled" "0" "$(grep -c 'S1 -> ' "$P/.cct/auto-build/demo-pitch/events.jsonl")"
+rm -rf "$P"
+
+echo "--- #405: a failed hill commit is retried once, then journaled"
+HILL_GIT_SHIM=$(mktemp -d)
+HILL_REAL_GIT=$(command -v git)
+cat > "$HILL_GIT_SHIM/git" << SHIM
+#!/usr/bin/env bash
+# Refuse 'git commit' of a hill-chart message while the budget file is > 0.
+if [[ "\$*" == *" commit "* && "\$*" == *"hill chart [auto-build]"* ]]; then
+    left=\$(cat "\$HILL_FAIL_BUDGET" 2>/dev/null || echo 0)
+    if [[ "\$left" -gt 0 ]]; then
+        echo \$((left - 1)) > "\$HILL_FAIL_BUDGET"
+        echo "git shim: commit refused" >&2
+        exit 1
+    fi
+fi
+exec "$HILL_REAL_GIT" "\$@"
+SHIM
+chmod +x "$HILL_GIT_SHIM/git"
+P=$(setup_pitch); HILL_FAIL_BUDGET=$(mktemp); echo 1 > "$HILL_FAIL_BUDGET"
+HILL_FAIL_BUDGET="$HILL_FAIL_BUDGET" PATH="$HILL_GIT_SHIM:$PATH" CCT_HILL_COMMIT_RETRY_SEC=0 run_driver_id "$P" demo-pitch
+assert_exit "#405: one failed hill commit is retried and the run completes" 0 "$RC"
+assert_eq "#405: ...the retry is journaled" "1" "$(grep -c '"event":"hill_commit_retried"' "$P/.cct/auto-build/demo-pitch/events.jsonl")"
+assert_eq "#405: ...both hill commits landed" "2" "$(git -C "$P" log --format=%s | grep -c 'hill chart \[auto-build\]')"
+rm -rf "$P"
+P=$(setup_pitch); HILL_FAIL_BUDGET=$(mktemp); echo 99 > "$HILL_FAIL_BUDGET"
+HILL_FAIL_BUDGET="$HILL_FAIL_BUDGET" PATH="$HILL_GIT_SHIM:$PATH" CCT_HILL_COMMIT_RETRY_SEC=0 run_driver_id "$P" demo-pitch
+assert_exit "#405: a persistent hill-commit failure does not park" 0 "$RC"
+assert_eq "#405: ...journaled as artifact_skipped per affected phase" "2" \
+    "$(grep -c 'hill chart not committed' "$P/.cct/auto-build/demo-pitch/events.jsonl")"
+assert_eq "#405: ...no hill commit landed" "0" "$(git -C "$P" log --format=%s | grep -c 'hill chart \[auto-build\]')"
+assert_contains "#405: ...the summary commit carries hill.json" \
+    "$(git -C "$P" log -1 --format= --name-only --grep='automation summary')" "hill.json"
+assert_eq "#405: ...the chart still ends complete" "S1=done S2=done S3=uphill" "$(hill_state "$P/specs/pitches/demo-pitch/hill.json")"
+rm -rf "$P"
+
+echo "--- #405: a feature run (no hill.json) is untouched"
+P=$(setup_project); single_phase "$P"
+run_driver "$P"
+assert_exit "#405: a feature run still completes" 0 "$RC"
+assert_eq "#405: ...no hill event in its journal" "0" "$(grep -c '"event":"hill' "$P/.cct/auto-build/demo-feat/events.jsonl")"
+assert_eq "#405: ...no hill.json created, no hill commit" "absent 0" \
+    "$([[ -f "$P/specs/demo-feat/hill.json" ]] && echo present || echo absent) $(git -C "$P" log --format=%s | grep -c 'hill chart')"
+assert_eq "#405: ...no hill line in its summary" "0" "$(grep -c 'Hill chart:' "$P/specs/demo-feat/automation-summary.md")"
+rm -rf "$P"
+
 echo "========================================="
 echo "  Results: $PASS passed, $FAIL failed"
 echo "========================================="
