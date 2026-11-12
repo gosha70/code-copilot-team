@@ -3511,6 +3511,7 @@ hill_preflight() {
             continue
         fi
         echo "[auto-build] hill: phase $n -> $scopes" >&2
+        journal_or_hold "hill_map" "phase $n -> $scopes"
         for s in $scopes; do
             if ! grep -qx "$s" <<< "$known"; then
                 echo "[auto-build] hill: phase $n -> $s not in hill.json" >&2
@@ -3528,6 +3529,14 @@ hill_preflight() {
     # The ledger keeps the map the first attempt computed; a live map that
     # differs refuses (restore the headings, or start a new run).
     local frozen="$LEDGER_DIR/hill-map.tsv" drift=""
+    if [[ -e "$frozen" ]] && ! hill_frozen_map_valid "$frozen"; then
+        echo "Error: the frozen hill map ${frozen#"$PROJECT_DIR"/} is corrupt (not a regular file of 'phase<TAB>scopes' rows) — durable state cannot be trusted; inspect the ledger or start a new run." >&2
+        exit 1
+    fi
+    if [[ ! -e "$frozen" && "${RESUME:-false}" == "true" && -f "$STATE" ]]; then
+        echo "Error: this run's ledger has no frozen hill map (${frozen#"$PROJECT_DIR"/}) — a resume cannot prove which scopes its phases were started against; start a new run." >&2
+        exit 1
+    fi
     if [[ -f "$frozen" ]]; then
         drift=$(awk -F'\t' 'NR==FNR { was[$1]=$2; next }
             { if (!($1 in was)) printf "phase %s is new (was absent); ", $1;
@@ -3543,37 +3552,75 @@ hill_preflight() {
     fi
 }
 
+hill_frozen_map_valid() {  # <path>: a regular file of non-empty 'phase<TAB>S.. S..' rows
+    [[ -f "$1" && -s "$1" ]] || return 1
+    ! grep -qvE $'^[0-9]+\tS[0-9]+( S[0-9]+)*$' "$1"
+}
+
+hill_freeze_map() {
+    # Write the frozen map ONCE, checked and atomic (same-directory temp,
+    # then rename). An existing map was validated at preflight and is
+    # never rewritten — a resume must not truncate the evidence it relies
+    # on. A failed first write is corrupted durable state: park.
+    hill_active || return 0
+    local frozen="$LEDGER_DIR/hill-map.tsv" tmp
+    [[ -e "$frozen" ]] && return 0
+    if ! tmp=$(mktemp "$LEDGER_DIR/.hill-map.XXXXXX") \
+       || ! printf '%s\n' "$HILL_MAP" > "$tmp" \
+       || ! hill_frozen_map_valid "$tmp" \
+       || ! mv "$tmp" "$frozen"; then
+        rm -f "${tmp:-}" 2>/dev/null
+        dispose "hill_chart_error" "the frozen hill map could not be written to ${frozen#"$PROJECT_DIR"/}" \
+            "$(jq -n --arg f "$frozen" --arg h "$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "")" '{frozen_map: $f, parked_head: $h}')"
+    fi
+    journal "hill_map_frozen" "${frozen#"$PROJECT_DIR"/}"
+}
+
 hill_rank() { case "$1" in downhill) echo 1 ;; done) echo 2 ;; *) echo 0 ;; esac; }
 
 hill_set() {
     # hill_set <scope> <status> <note> -> 0 wrote; 1 already at or past
     # the target (left alone); 2 write failed (journaled).
-    local id="$1" target="$2" note="$3" cur tmp
+    local id="$1" target="$2" note="$3" cur matches tmp mode
+    # Exactly one scope with that id, in a known status — a chart the
+    # build changed under the driver (scope removed, status rewritten)
+    # is a failure, never a silent no-op.
+    matches=$(jq -r --arg id "$id" '[.scopes[]? | select(.id == $id)] | length' "$HILL_JSON" 2>/dev/null) || matches=""
+    if [[ "$matches" != "1" ]]; then
+        journal "hill_write_failed" "$id -> $target (scope matches: ${matches:-unreadable chart})"
+        return 2
+    fi
     cur=$(jq -r --arg id "$id" '.scopes[] | select(.id == $id) | .status' "$HILL_JSON" 2>/dev/null)
+    case "$cur" in uphill|downhill|done) ;; *)
+        journal "hill_write_failed" "$id -> $target (current status '$cur' is not uphill|downhill|done)"
+        return 2 ;;
+    esac
     [[ $(hill_rank "$cur") -ge $(hill_rank "$target") ]] && return 1
-    tmp=$(mktemp "$(dirname "$HILL_JSON")/.hill.XXXXXX") || return 2
+    tmp=$(mktemp "$(dirname "$HILL_JSON")/.hill.XXXXXX") || { journal "hill_write_failed" "$id -> $target (mktemp)"; return 2; }
     # mktemp creates 0600; the chart is a tracked file, keep its mode.
-    local mode
     mode=$(stat -f '%Lp' "$HILL_JSON" 2>/dev/null || stat -c '%a' "$HILL_JSON" 2>/dev/null || echo 644)
+    # Every step checked: the rewrite, the written file (parses and holds
+    # the scope at the target), the mode, the rename.
     if jq --arg id "$id" --arg st "$target" --arg note "$note" --arg ts "$(now_iso)" \
         '.updated_at = $ts
          | .scopes |= map(if .id == $id then .status = $st | .last_updated = $ts | .note = $note else . end)' \
-        "$HILL_JSON" > "$tmp"; then
-        chmod "$mode" "$tmp" 2>/dev/null || true
-        mv "$tmp" "$HILL_JSON"
-    else
-        rm -f "$tmp"
-        journal "hill_write_failed" "$id -> $target"
-        return 2
+        "$HILL_JSON" > "$tmp" \
+       && jq -e --arg id "$id" --arg st "$target" '[.scopes[] | select(.id == $id and .status == $st)] | length == 1' "$tmp" >/dev/null 2>&1 \
+       && chmod "$mode" "$tmp" \
+       && mv "$tmp" "$HILL_JSON"; then
+        journal "hill_scope" "$id -> $target ($note)"
+        return 0
     fi
-    journal "hill_scope" "$id -> $target ($note)"
+    rm -f "$tmp" 2>/dev/null
+    journal "hill_write_failed" "$id -> $target"
+    return 2
 }
 
 hill_write_failed() {  # <n> <scope> <status>: a chart that cannot be written parks the run
     # A commit failure self-heals (the written file rides a later commit,
     # D4); a WRITE failure leaves nothing to heal from, so the run stops.
-    dispose "hill_chart_error" "phase $1: hill.json could not be written ($2 -> $3)" \
-        "$(jq -n --arg f "$HILL_JSON" '{hill_json: $f}')"
+    dispose "hill_chart_error" "phase $1: hill.json could not be written ($2 -> $3) — repair ${HILL_JSON#"$PROJECT_DIR"/} (restore it from git or re-add the scope), commit, then --resume" \
+        "$(jq -n --arg f "$HILL_JSON" --arg h "$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "")" '{hill_json: $f, parked_head: $h}')"
 }
 
 hill_phase_start() {  # <n>: mapped scopes uphill -> downhill
@@ -5193,10 +5240,15 @@ run_phase() {
     # --resume would skip straight past the very enforcement that parked.
     coverage_gate phase "$n"
 
+    # Hill chart BEFORE the durable phase-done transition: a chart write
+    # that parks leaves the phase at coverage-gate, so --resume re-enters
+    # here (after the repair commit's own review) and lands it; a phase
+    # marked done first could never be reached again.
+    hill_phase_landed "$n"
+
     state_set '.phases[$p].status = "done" | .phases[$p].last_reviewed_ref = $sha' \
         --arg p "$n" --arg sha "$(git -C "$PROJECT_DIR" rev-parse HEAD)"
     journal "phase_done" "phase $n"
-    hill_phase_landed "$n"
     report_phase_spend "$n"
 
     # Publish the branch after each phase (pr/merge) so progress — including
@@ -5722,14 +5774,17 @@ resume_parked() {
             crash_findings=$(jq -r '.history.findings_file // empty' "$esc_file" 2>/dev/null || echo "")
             refuse_resume "runner crash is not resumable because review state may be inconsistent (attempted round $crash_round; findings: ${crash_findings:-none}). Resolve the runner error and start a fresh attended run"
             ;;
-        coverage_gate|conformance_gate)
-            # Human raised the coverage, fixed the tooling, or fixed the app
-            # (#242: one arm, two reason labels — the recovery contract is
-            # identical and both gates re-run on the resumed path).
-            # The gate itself re-runs on the resumed path — landing parks
-            # re-reach the landing gate, phase parks re-enter at the gate.
+        coverage_gate|conformance_gate|hill_chart_error)
+            # Human raised the coverage, fixed the tooling, fixed the app,
+            # or repaired the hill chart (#242: one arm, several reason
+            # labels — the recovery contract is identical and the parked
+            # step re-runs on the resumed path). The gate itself re-runs on
+            # the resumed path — landing parks re-reach the landing gate,
+            # phase parks re-enter at the gate; a hill_chart_error park
+            # (#405) re-enters at the coverage gate and the chart write runs
+            # again, skipping scopes it had already moved.
             [[ -z "$(git -C "$PROJECT_DIR" status --porcelain | grep -v '^?? \.cct/')" ]] \
-                || refuse_resume "worktree is dirty — commit your coverage fix first, then --resume"
+                || refuse_resume "worktree is dirty — commit your fix first, then --resume"
             # Review binds to COMMITS, not phases. The park recorded the
             # HEAD carrying the last PASS; anything committed past it —
             # the coverage fix, or whatever rode along with it — needs its
@@ -6338,7 +6393,7 @@ flush_pending_events
 MAX=$((MAX_PHASES))
 DONE_COUNT=0
 printf '%s\n' "$PHASES" > "$LEDGER_DIR/phases.tsv"
-hill_active && printf '%s\n' "$HILL_MAP" > "$LEDGER_DIR/hill-map.tsv"
+hill_freeze_map
 START_AT="${START_PHASE_ARG:-1}"
 
 while IFS=$'\t' read -r n title ms; do

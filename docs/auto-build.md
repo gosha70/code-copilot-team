@@ -372,7 +372,10 @@ next build commit or the final summary commit stages the file anyway.
 The driver never moves a scope backwards and never re-stamps one that
 is already at or past the target, so a scope you set with `/hill`
 keeps its note. A chart the driver cannot write at all parks the run
-as `hill_chart_error`; a run never finishes over a stale chart.
+as `hill_chart_error`; a run never finishes over a stale chart. The
+park leaves the phase at its coverage gate: repair `hill.json`, commit,
+and `--resume`; the repair is reviewed like any coverage recovery and
+the remaining scopes land once.
 
 **At the end** the automation summary carries `Hill chart: S1=done
 S2=done S3=uphill` and the journal a `hill_final` event with the same

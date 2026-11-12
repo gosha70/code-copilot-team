@@ -9062,15 +9062,16 @@ shaped_date: 2026-11-11
 ### S2: Two
 ### S3: Three
 PITCH
-    local h2="## US2: Two (S2)" h3="## US3: Three (S2)"
+    local h1="## US1: One (S1)" h2="## US2: Two (S2)" h3="## US3: Three (S2)"
     case "$variant" in
         no-token) h2="## US2: Two" ;;
         unknown-scope) h3="## US3: Three (S9)" ;;
+        multi-scope) h1="## US1: One (S1, S3)" ;;
     esac
     cat > "$dir/specs/pitches/demo-pitch/tasks.md" << TASKS
 # Tasks: demo pitch
 
-## US1: One (S1)
+$h1
 
 | # | Task | File(s) |
 |---|------|---------|
@@ -9229,6 +9230,102 @@ assert_eq "#405: ...with reason hill_chart_error" "hill_chart_error" \
     "$(jq -r '.reason' "$(ls "$P"/.cct/auto-build/demo-pitch/escalations/esc-*.json 2>/dev/null | head -1)" 2>/dev/null)"
 assert_eq "#405: ...naming the scope and status" "1" "$(grep -c 'S1 -> done' "$P/.cct/auto-build/demo-pitch/escalations/esc-1.json")"
 assert_eq "#405: ...the run did not land" "0" "$(grep -c '"outcome":"landed"' "$P/.cct/auto-build/demo-pitch/state.json")"
+rm -rf "$P"
+
+echo "--- #405: the frozen map is written once; a corrupt map refuses a resume"
+P=$(setup_pitch)
+REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver_id "$P" demo-pitch
+assert_exit "#405: park before landing (frozen-map fixture)" 4 "$RC"
+FM="$P/.cct/auto-build/demo-pitch/hill-map.tsv"
+assert_eq "#405: ...the map was frozen once" "1" "$(grep -c '"event":"hill_map_frozen"' "$P/.cct/auto-build/demo-pitch/events.jsonl")"
+assert_eq "#405: ...preflight journaled the mapping" "3" "$(grep -c '"event":"hill_map"' "$P/.cct/auto-build/demo-pitch/events.jsonl")"
+FM_BEFORE=$(cat "$FM")
+printf '1\tS1\n2\t' > "$FM"
+fake_review_decide "$P" approve
+REVIEW_PROFILE="$PASS_PROFILE" run_driver_id "$P" demo-pitch --resume
+assert_exit "#405: a truncated frozen map refuses the resume" 1 "$RC"
+assert_contains "#405: ...as corrupt durable state" "$OUTPUT" "frozen hill map"
+assert_eq "#405: ...and is not rewritten by the refusal" "$(printf '1\tS1\n2\t')" "$(cat "$FM")"
+printf '%s\n' "$FM_BEFORE" > "$FM"
+REVIEW_PROFILE="$PASS_PROFILE" run_driver_id "$P" demo-pitch --resume
+assert_exit "#405: the restored map lets the resume land" 0 "$RC"
+assert_eq "#405: ...the map was not rewritten by the resume (frozen once)" "1" "$(grep -c '"event":"hill_map_frozen"' "$P/.cct/auto-build/demo-pitch/events.jsonl")"
+rm -f "$FM"
+REVIEW_PROFILE="$PASS_PROFILE" run_driver_id "$P" demo-pitch --resume
+assert_exit "#405: a resume with no frozen map refuses" 1 "$RC"
+assert_contains "#405: ...naming the missing evidence" "$OUTPUT" "no frozen hill map"
+rm -rf "$P"
+
+echo "--- #405: a chart write that fails at the rename parks and leaves no temp file"
+HILL_MV_SHIM=$(mktemp -d)
+HILL_REAL_MV=$(command -v mv)
+cat > "$HILL_MV_SHIM/mv" << SHIM
+#!/usr/bin/env bash
+# Refuse to rename onto hill.json while the budget file is > 0.
+if [[ "\${@: -1}" == *"/hill.json" ]]; then
+    left=\$(cat "\$HILL_FAIL_BUDGET" 2>/dev/null || echo 0)
+    if [[ "\$left" -gt 0 ]]; then
+        echo \$((left - 1)) > "\$HILL_FAIL_BUDGET"
+        echo "mv shim: rename refused" >&2
+        exit 1
+    fi
+fi
+exec "$HILL_REAL_MV" "\$@"
+SHIM
+chmod +x "$HILL_MV_SHIM/mv"
+P=$(setup_pitch); HILL_FAIL_BUDGET=$(mktemp); echo 1 > "$HILL_FAIL_BUDGET"
+HILL_FAIL_BUDGET="$HILL_FAIL_BUDGET" PATH="$HILL_MV_SHIM:$PATH" run_driver_id "$P" demo-pitch
+assert_exit "#405: a failed rename parks (exit 4)" 4 "$RC"
+assert_eq "#405: ...with reason hill_chart_error" "hill_chart_error" \
+    "$(jq -r '.reason' "$P/.cct/auto-build/demo-pitch/escalations/esc-1.json" 2>/dev/null)"
+assert_eq "#405: ...no temp file left beside the chart" "0" "$(ls "$P/specs/pitches/demo-pitch"/.hill.* 2>/dev/null | wc -l | tr -d ' ')"
+assert_eq "#405: ...the chart is unchanged (S1 still uphill)" "S1=uphill S2=uphill S3=uphill" "$(hill_state "$P/specs/pitches/demo-pitch/hill.json")"
+rm -rf "$P"
+
+echo "--- #405: a mapped scope missing from the chart is a failure, not a no-op"
+HILL_DROP_SCRIPT=$(mktemp)
+cat > "$HILL_DROP_SCRIPT" << 'SCRIPTLET'
+# Phase 1's build session removes S1 from the chart; the landing write must fail, not succeed vacuously.
+printf '#!/usr/bin/env bash\necho ok\n' > demo.sh
+jq 'del(.scopes[] | select(.id == "S1"))' specs/pitches/demo-pitch/hill.json > h.tmp && mv h.tmp specs/pitches/demo-pitch/hill.json
+SCRIPTLET
+P=$(setup_pitch)
+MOCK_CLAUDE_SCRIPT="$HILL_DROP_SCRIPT" run_driver_id "$P" demo-pitch
+assert_exit "#405: a missing mapped scope parks (exit 4)" 4 "$RC"
+assert_eq "#405: ...with reason hill_chart_error" "hill_chart_error" \
+    "$(jq -r '.reason' "$P/.cct/auto-build/demo-pitch/escalations/esc-1.json" 2>/dev/null)"
+assert_eq "#405: ...journaled as a write failure naming the match count" "1" \
+    "$(grep -c 'S1 -> done (scope matches: 0)' "$P/.cct/auto-build/demo-pitch/events.jsonl")"
+rm -rf "$P"
+
+echo "--- #405: a chart failure on a second scope is recoverable by repair and --resume"
+HILL_DROP3_SCRIPT=$(mktemp)
+cat > "$HILL_DROP3_SCRIPT" << 'SCRIPTLET'
+# Phase 1 names S1 and S3; its build session removes S3 so S1 lands and S3 fails.
+if [[ ! -f demo.sh ]]; then
+    printf '#!/usr/bin/env bash\necho ok\n' > demo.sh
+    jq 'del(.scopes[] | select(.id == "S3"))' specs/pitches/demo-pitch/hill.json > h.tmp && mv h.tmp specs/pitches/demo-pitch/hill.json
+elif [[ ! -f extra.sh ]]; then
+    printf '#!/usr/bin/env bash\necho more\n' > extra.sh
+else
+    echo "fix pass $MOCK_SESSION_N" >> fixes.log
+fi
+SCRIPTLET
+P=$(setup_pitch multi-scope)
+MOCK_CLAUDE_SCRIPT="$HILL_DROP3_SCRIPT" run_driver_id "$P" demo-pitch
+assert_exit "#405: the second scope's failure parks" 4 "$RC"
+assert_eq "#405: ...S1 was already moved to done" "done" "$(jq -r '.scopes[] | select(.id=="S1") | .status' "$P/specs/pitches/demo-pitch/hill.json")"
+assert_eq "#405: ...the phase is NOT marked done in the ledger" "coverage-gate" "$(jq -r '.phases["1"].status' "$P/.cct/auto-build/demo-pitch/state.json")"
+# Repair: re-add S3 to the chart and commit, then resume.
+jq '.scopes += [{"id":"S3","name":"Three","status":"uphill","last_updated":"2026-11-11T00:00:00Z"}]' \
+    "$P/specs/pitches/demo-pitch/hill.json" > "$P/h.tmp" && mv "$P/h.tmp" "$P/specs/pitches/demo-pitch/hill.json"
+git -C "$P" commit -qam "repair: restore S3 to the hill chart"
+REVIEW_PROFILE="$PASS_PROFILE" run_driver_id "$P" demo-pitch --resume
+assert_exit "#405: --resume after the repair completes the run" 0 "$RC"
+assert_eq "#405: ...final chart has every scope done" "S1=done S2=done S3=done" "$(hill_state "$P/specs/pitches/demo-pitch/hill.json")"
+assert_eq "#405: ...S1 landed exactly once across park and resume" "1" "$(grep -c '"event":"hill_scope","detail":"S1 -> done' "$P/.cct/auto-build/demo-pitch/events.jsonl")"
+assert_eq "#405: ...S3 landed exactly once, on the resume" "1" "$(grep -c '"event":"hill_scope","detail":"S3 -> done' "$P/.cct/auto-build/demo-pitch/events.jsonl")"
+assert_eq "#405: ...the repair commit was reviewed before the gate reran" "1" "$(grep -c '"event":"coverage_recovery_reviewed"' "$P/.cct/auto-build/demo-pitch/events.jsonl")"
 rm -rf "$P"
 
 echo "--- #405: a scope already done is never re-stamped"
