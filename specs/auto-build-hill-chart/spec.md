@@ -93,7 +93,11 @@ headings. This feature connects the two and nothing more.
   in the ledger (`hill-map.tsv`) by the attempt that starts the run; a
   `--resume` whose live mapping differs from the frozen one refuses
   with exit 1 naming each changed phase, so a phase started against one
-  scope can never credit another.
+  scope can never credit another. A ledger with no map refuses a resume
+  only once a phase has started; before any phase there is nothing to
+  prove and the resuming attempt writes the map, so a first write that
+  failed and parked is recoverable. In an unattended run the park is a
+  policy termination (exit 6) and needs a fresh run.
 - **FR-5 Transitions.** When a phase's build session is about to start,
   each mapped scope at `uphill` moves to `downhill` with
   `note = "auto-build: phase <n> started"`. When a phase lands, which

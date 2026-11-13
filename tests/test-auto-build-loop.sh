@@ -9256,6 +9256,29 @@ assert_exit "#405: a resume with no frozen map refuses" 1 "$RC"
 assert_contains "#405: ...naming the missing evidence" "$OUTPUT" "no frozen hill map"
 rm -rf "$P"
 
+echo "--- #405: a frozen map that cannot be written on the first attempt is recoverable by --resume"
+FREEZE_MV_SHIM=$(mktemp -d)
+FREEZE_REAL_MV=$(command -v mv)
+cat > "$FREEZE_MV_SHIM/mv" << SHIM
+#!/usr/bin/env bash
+if [[ "\${@: -1}" == *"/hill-map.tsv" && -f "\$FREEZE_FAIL_FLAG" ]]; then
+    echo "mv shim: refused the frozen map rename" >&2
+    exit 1
+fi
+exec "$FREEZE_REAL_MV" "\$@"
+SHIM
+chmod +x "$FREEZE_MV_SHIM/mv"
+P=$(setup_pitch); FREEZE_FAIL_FLAG=$(mktemp)
+FREEZE_FAIL_FLAG="$FREEZE_FAIL_FLAG" PATH="$FREEZE_MV_SHIM:$PATH" run_driver_id "$P" demo-pitch
+assert_exit "#405: a frozen map that cannot be written parks (exit 4)" 4 "$RC"
+assert_eq "#405: ...with reason hill_chart_error" "hill_chart_error" \
+    "$(jq -r '.reason' "$P/.cct/auto-build/demo-pitch/escalations/esc-1.json" 2>/dev/null)"
+rm -f "$FREEZE_FAIL_FLAG"
+REVIEW_PROFILE="$PASS_PROFILE" run_driver_id "$P" demo-pitch --resume
+assert_exit "#405: ...and --resume after the cause is fixed completes the run" 0 "$RC"
+assert_eq "#405: ...with the map frozen once" "1" "$(grep -c '"event":"hill_map_frozen"' "$P/.cct/auto-build/demo-pitch/events.jsonl")"
+rm -rf "$P"
+
 echo "--- #405: a chart write that fails at the rename parks and leaves no temp file"
 HILL_MV_SHIM=$(mktemp -d)
 HILL_REAL_MV=$(command -v mv)

@@ -3533,8 +3533,14 @@ hill_preflight() {
         echo "Error: the frozen hill map ${frozen#"$PROJECT_DIR"/} is corrupt (not a regular file of 'phase<TAB>scopes' rows) — durable state cannot be trusted; inspect the ledger or start a new run." >&2
         exit 1
     fi
-    if [[ ! -e "$frozen" && "${RESUME:-false}" == "true" && -f "$STATE" ]]; then
-        echo "Error: this run's ledger has no frozen hill map (${frozen#"$PROJECT_DIR"/}) — a resume cannot prove which scopes its phases were started against; start a new run." >&2
+    # A ledger with no map is corrupted evidence ONLY once a phase has
+    # started: the map is what those phases were started against. Before
+    # any phase (a first write that failed and parked, a run that predates
+    # hill tracking and never built) there is nothing to prove, and
+    # hill_freeze_map writes the map on this attempt (review of PR #449).
+    if [[ ! -e "$frozen" && "${RESUME:-false}" == "true" && -f "$STATE" ]] \
+       && jq -e '(.phases // {}) | length > 0' "$STATE" >/dev/null 2>&1; then
+        echo "Error: this run's ledger has no frozen hill map (${frozen#"$PROJECT_DIR"/}) but phases have already started (or the run predates hill tracking) — a resume cannot prove which scopes they were started against; start a new run." >&2
         exit 1
     fi
     if [[ -f "$frozen" ]]; then

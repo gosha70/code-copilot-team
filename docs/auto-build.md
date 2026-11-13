@@ -375,7 +375,8 @@ keeps its note. A chart the driver cannot write at all parks the run
 as `hill_chart_error`; a run never finishes over a stale chart. The
 park leaves the phase at its coverage gate: repair `hill.json`, commit,
 and `--resume`; the repair is reviewed like any coverage recovery and
-the remaining scopes land once.
+the remaining scopes land once. An unattended run terminates instead
+(exit 6) and needs a fresh run.
 
 **At the end** the automation summary carries `Hill chart: S1=done
 S2=done S3=uphill` and the journal a `hill_final` event with the same
