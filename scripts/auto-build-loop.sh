@@ -3598,7 +3598,13 @@ hill_set() {
     [[ $(hill_rank "$cur") -ge $(hill_rank "$target") ]] && return 1
     tmp=$(mktemp "$(dirname "$HILL_JSON")/.hill.XXXXXX") || { journal "hill_write_failed" "$id -> $target (mktemp)"; return 2; }
     # mktemp creates 0600; the chart is a tracked file, keep its mode.
-    mode=$(stat -f '%Lp' "$HILL_JSON" 2>/dev/null || stat -c '%a' "$HILL_JSON" 2>/dev/null || echo 644)
+    # GNU stat first (`-c '%a'`); BSD stat rejects -c and falls through to
+    # `-f '%Lp'`. The order matters: on GNU, `stat -f` is FILESYSTEM status
+    # and succeeds with a multi-line report that chmod then rejects (the
+    # Linux-only failure of PR #449's first CI run). Anything that is not
+    # an octal mode falls back to 644.
+    mode=$(stat -c '%a' "$HILL_JSON" 2>/dev/null || stat -f '%Lp' "$HILL_JSON" 2>/dev/null || echo 644)
+    [[ "$mode" =~ ^[0-7]{3,4}$ ]] || mode=644
     # Every step checked: the rewrite, the written file (parses and holds
     # the scope at the target), the mode, the rename.
     if jq --arg id "$id" --arg st "$target" --arg note "$note" --arg ts "$(now_iso)" \
