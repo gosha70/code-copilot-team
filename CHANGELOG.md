@@ -153,11 +153,17 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   `session-analytics graph` exited 3 on every Windows machine. The path
   now goes in as `as_posix()`, which Kùzu reads on every platform, and a
   test pins the statement for a Windows path on any OS (#434).
-- **`CCT_HARNESS_STAMPS` reaches the analytics as written.** The value was
-  rebuilt through `Path`, so on Windows `/tmp/elsewhere.jsonl` became
-  `\tmp\elsewhere.jsonl` and the analytics could read a different ledger
-  from the one the Git Bash hook writes. Only a leading `~` is expanded
-  now, and the default is spelled with forward slashes (#434).
+- **`CCT_HARNESS_STAMPS` can no longer split the ledger.** The hook writes
+  to the value as Bash reads it and the analytics opened it as Python
+  reads it, so the two could be reading different files: on Windows
+  `/tmp/x` and `/c/Users/x` are other folders to Git Bash than to Python,
+  a `~` was expanded by the analytics only, and the repo `.env` moved the
+  reader while the hook never read it. The variable is now read from the
+  process environment only and kept exactly as written; a value the two
+  sides read differently (`~`, a relative path, and on Windows a path
+  without a drive) is refused with the form to use, such as
+  `C:/Users/you/.cct/harness-stamps.jsonl`. The default is spelled with
+  forward slashes (#434).
 - **auto-build finalize never writes onto a closed PR.** The driver looked
   the branch's PR up with `gh pr view <branch>`, which also returns closed
   and merged PRs, and updated it without reading its state; a run landed

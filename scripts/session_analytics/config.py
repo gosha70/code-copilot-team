@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
@@ -84,6 +85,22 @@ ENV_SOURCE_PREFIX = "CCT_SA_SOURCE_"  # + COPILOT (e.g. CCT_SA_SOURCE_CLAUDE_COD
 # the API never serves the raw paths (only {configured, root_count}).
 ENV_ROUTING_EVIDENCE_ROOTS = "CCT_SA_ROUTING_EVIDENCE_ROOTS"  # os.pathsep-separated
 ENV_CALIBRATION_PREFIX = "CCT_SA_CALIBRATION_"
+
+
+_WINDOWS_ABSOLUTE = re.compile(r"^(?:[A-Za-z]:[\\/]|(?:\\\\|//)[^\\/])")
+
+
+def shared_ledger_path(value: str, *, windows: bool) -> str:
+    absolute = bool(_WINDOWS_ABSOLUTE.match(value)) if windows else value.startswith("/")
+    if absolute:
+        return value
+    example = "C:/Users/you/.cct/harness-stamps.jsonl" if windows else "/home/you/.cct/harness-stamps.jsonl"
+    raise ValueError(
+        f"{ENV_HARNESS_STAMPS}={value!r} would send the hook and Session Analytics "
+        f"to different files. Set it to an absolute path such as {example}; "
+        "a ~, a relative path, or on Windows a path without a drive "
+        "(/tmp/..., /c/...) means different folders to Bash and to Python."
+    )
 
 
 def _coerce_like(template: Any, raw: str) -> Any:
@@ -905,8 +922,11 @@ def load_config(
         resolved_kuzu = resolved_kuzu / C.KUZU_STORE_NAME
     raw_runs_root = env(ENV_BENCHMARK_RUNS_ROOT) or data.get(C.CFG_BENCHMARK_RUNS_ROOT) or ""
     runs_root = str(Path(raw_runs_root).expanduser()) if raw_runs_root else ""
-    harness_stamps_path = os.path.expanduser(
-        env(ENV_HARNESS_STAMPS) or (Path.home() / ".cct" / C.HARNESS_STAMPS_FILENAME).as_posix()
+    stamps_override = os.environ.get(ENV_HARNESS_STAMPS)
+    harness_stamps_path = (
+        shared_ledger_path(stamps_override, windows=os.name == "nt")
+        if stamps_override
+        else (Path.home() / ".cct" / C.HARNESS_STAMPS_FILENAME).as_posix()
     )
     resolved_redaction = (
         redaction_mode or env(ENV_REDACTION) or data.get(C.CFG_REDACTION) or C.REDACT_CODE

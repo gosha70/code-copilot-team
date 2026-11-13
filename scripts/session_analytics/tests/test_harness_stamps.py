@@ -34,6 +34,7 @@ SHA_B = "b" * 40
 DIG_1 = "1" * 64
 DIG_2 = "2" * 64
 FIXTURE_SESSION = "sess-tiny-001"
+_ABSENT_LEDGER = (Path(tempfile.gettempdir()) / "cct-sa-no-such-dir" / "ledger.jsonl").as_posix()
 
 
 def _line(session_id: str, recorded_at: str, **facts) -> str:
@@ -345,7 +346,7 @@ class TestStore(RegistryResetTestCase):
         self._ingest(ledger)
         # The ledger was pruned (or CCT_HARNESS_STAMPS points elsewhere):
         # the next ingest finds no line, and the stamp stays.
-        self._ingest("/nonexistent/ledger.jsonl")
+        self._ingest(_ABSENT_LEDGER)
         db = Database.connect(self.dsn)
         self.assertEqual(db.query("SELECT cct_sha, instructions_digest, harness_mixed FROM copilot_session"),
                          [(SHA_A, DIG_1, 0)])
@@ -354,13 +355,13 @@ class TestStore(RegistryResetTestCase):
         with open(ledger, "a", encoding="utf-8") as fh:
             fh.write(_line(FIXTURE_SESSION, "2026-01-02T00:00:00Z", cct_sha=SHA_B, instructions_digest=DIG_1) + "\n")
         self._ingest(ledger)
-        self._ingest("/nonexistent/ledger.jsonl")
+        self._ingest(_ABSENT_LEDGER)
         db = Database.connect(self.dsn)
         self.assertEqual(db.query("SELECT cct_sha, harness_mixed FROM copilot_session"), [(SHA_A, 1)])
         db.close()
 
     def test_unstamped_when_no_ledger(self) -> None:
-        self._ingest("/nonexistent/ledger.jsonl")
+        self._ingest(_ABSENT_LEDGER)
         db = Database.connect(self.dsn)
         row = db.query_one("SELECT cli_version, cct_sha, harness_mixed FROM copilot_session")
         # The fixture carries a CLI version, so that alone is stamped, unmixed.
@@ -375,20 +376,111 @@ class TestLedgerPathControl(unittest.TestCase):
         not see."""
         from unittest import mock
         from session_analytics.config import ENV_HARNESS_STAMPS, load_config
-        with mock.patch.dict("os.environ", {ENV_HARNESS_STAMPS: "/tmp/elsewhere.jsonl"}):
-            self.assertEqual(load_config().harness_stamps_path, "/tmp/elsewhere.jsonl")
+        elsewhere = (Path(tempfile.gettempdir()) / "elsewhere.jsonl").as_posix()
+        with mock.patch.dict("os.environ", {ENV_HARNESS_STAMPS: elsewhere}):
+            self.assertEqual(load_config().harness_stamps_path, elsewhere)
         with mock.patch.dict("os.environ", {}, clear=False):
             os.environ.pop(ENV_HARNESS_STAMPS, None)
             self.assertTrue(load_config().harness_stamps_path.endswith("/.cct/harness-stamps.jsonl"))
         self.assertNotIn("harness_stamps_path", (_REPO / "scripts/session_analytics/config_data/defaults.json").read_text(encoding="utf-8"))
         self.assertIn('LEDGER="${CCT_HARNESS_STAMPS:-', _HOOK.read_text(encoding="utf-8"))
 
-    def test_the_environment_value_reaches_the_reader_as_written(self) -> None:
+    def test_the_environment_value_is_kept_verbatim(self) -> None:
         from unittest import mock
         from session_analytics.config import ENV_HARNESS_STAMPS, load_config
-        written = "/tmp//stamps/./ledger.jsonl"
+        written = Path(tempfile.gettempdir()).as_posix() + "//stamps/./ledger.jsonl"
         with mock.patch.dict("os.environ", {ENV_HARNESS_STAMPS: written}):
             self.assertEqual(load_config().harness_stamps_path, written)
+
+    def test_the_repo_env_file_cannot_move_the_ledger(self) -> None:
+        from unittest import mock
+        from session_analytics import config as cfgmod
+        elsewhere = (Path(tempfile.gettempdir()) / "elsewhere.jsonl").as_posix()
+        with mock.patch.dict("os.environ", {}, clear=False):
+            os.environ.pop(cfgmod.ENV_HARNESS_STAMPS, None)
+            with mock.patch.object(cfgmod, "parse_env_file", return_value={cfgmod.ENV_HARNESS_STAMPS: elsewhere}):
+                self.assertTrue(cfgmod.load_config().harness_stamps_path.endswith("/.cct/harness-stamps.jsonl"))
+
+    def test_a_form_the_hook_and_the_reader_read_differently_is_refused_with_the_remedy(self) -> None:
+        from session_analytics.config import ENV_HARNESS_STAMPS, shared_ledger_path
+        refused = {
+            True: ["/tmp/x/l.jsonl", "/c/Users/me/l.jsonl", "\\tmp\\l.jsonl", "~/l.jsonl", "l.jsonl", "./l.jsonl", "C:l.jsonl"],
+            False: ["~/l.jsonl", "l.jsonl", "./l.jsonl"],
+        }
+        accepted = {
+            True: ["C:/Users/me/l.jsonl", "c:\\Users\\me\\l.jsonl", "//host/share/l.jsonl", "\\\\host\\share\\l.jsonl"],
+            False: ["/tmp/l.jsonl", "/tmp//a/./l.jsonl"],
+        }
+        for windows, values in refused.items():
+            for value in values:
+                with self.subTest(windows=windows, refused=value):
+                    with self.assertRaises(ValueError) as caught:
+                        shared_ledger_path(value, windows=windows)
+                    message = str(caught.exception)
+                    self.assertIn(ENV_HARNESS_STAMPS, message)
+                    self.assertIn("C:/Users/you/.cct/harness-stamps.jsonl" if windows else "/home/you/.cct/harness-stamps.jsonl", message)
+        for windows, values in accepted.items():
+            for value in values:
+                with self.subTest(windows=windows, accepted=value):
+                    self.assertEqual(shared_ledger_path(value, windows=windows), value)
+
+
+@unittest.skipUnless(shutil.which("jq"), "jq not installed")
+class TestLedgerPathEndToEnd(unittest.TestCase):
+    SESSION = "e2e-session"
+
+    def setUp(self) -> None:
+        self.home = Path(tempfile.mkdtemp(prefix="cct-sa-e2e-home-"))
+        self.work = Path(tempfile.mkdtemp(prefix="cct-sa-e2e-cwd-"))
+        self.tag = self.home.name
+        self.addCleanup(shutil.rmtree, self.home, True)
+        self.addCleanup(shutil.rmtree, self.work, True)
+        self.addCleanup(shutil.rmtree, Path(tempfile.gettempdir()) / self.tag, True)
+
+    def _forms(self) -> list[str]:
+        base = Path(tempfile.gettempdir()).as_posix() + "/" + self.tag
+        forms = [
+            base + "/plain/ledger.jsonl",
+            base + "//doubled/./ledger.jsonl",
+            "/tmp/" + self.tag + "/posix/ledger.jsonl",
+            "~/" + self.tag + "/tilde/ledger.jsonl",
+            self.tag + "/relative/ledger.jsonl",
+        ]
+        if os.name == "nt":
+            backslash = chr(92)
+            forms += [
+                base.replace("/", backslash) + backslash + "native" + backslash + "ledger.jsonl",
+                "/" + base[0].lower() + base[2:] + "/gitbash/ledger.jsonl",
+            ]
+        return forms
+
+    def _run_hook(self, value: str) -> None:
+        env = dict(os.environ, HOME=str(self.home), CCT_HARNESS_STAMPS=value,
+                   CCT_PROVIDER_PROFILE="/nonexistent/providers.toml")
+        env.pop("CLAUDE_CONFIG_DIR", None)
+        proc = subprocess.run(
+            ["bash", str(_HOOK)], input=json.dumps({"session_id": self.SESSION, "cwd": "/p"}),
+            capture_output=True, text=True, env=env, cwd=self.work,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_every_form_the_config_accepts_is_the_file_the_hook_wrote(self) -> None:
+        from unittest import mock
+        from session_analytics.config import ENV_HARNESS_STAMPS, load_config
+        forms = self._forms()
+        accepted = []
+        for value in forms:
+            with self.subTest(value=value):
+                self._run_hook(value)
+                with mock.patch.dict("os.environ", {ENV_HARNESS_STAMPS: value}):
+                    try:
+                        path = load_config().harness_stamps_path
+                    except ValueError:
+                        continue
+                accepted.append(value)
+                self.assertIn(self.SESSION, hs.read_ledger(path))
+        self.assertIn(forms[0], accepted)
+        self.assertNotIn(forms[3], accepted)
 
 
 class TestSchemaRefusal(unittest.TestCase):

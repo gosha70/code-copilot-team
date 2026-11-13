@@ -487,7 +487,13 @@ The first four are captured **when the session starts**, not at ingest,
 by the `SessionStart` hook `harness-stamp.sh` (installed by `setup.sh`
 beside the other hooks), which appends one JSON line per session start
 to `~/.cct/harness-stamps.jsonl` (`CCT_HARNESS_STAMPS` moves it for the
-hook and the reader alike). Ingest joins that ledger by session id and
+hook and the reader alike). The variable is read from the process
+environment only, never from `.env` (the hook cannot see that file), and
+must be an absolute path the hook and the reader open as the same file:
+`/home/you/ledger.jsonl`, or on Windows `C:/Users/you/ledger.jsonl`
+(`~`, a relative path and a drive-less `/tmp/...` mean different
+folders to Bash and to Python, so the reader refuses them and says so).
+Ingest joins that ledger by session id and
 writes the columns on `copilot_session`. Capturing at ingest would stamp
 every `--full` re-ingest of an old transcript with today's instructions;
 capturing at session start cannot.
