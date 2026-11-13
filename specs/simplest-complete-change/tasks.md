@@ -28,7 +28,7 @@ date: 2026-11-10
 
 | # | [P] | Task | File(s) | Owner | Done |
 |---|-----|------|---------|-------|------|
-| 3 | | Add selective high-value decision template (when MemKernel is configured) covering Requirement, Selected Option, Rejected Alternatives with Evidence, Verification, and Revisit Triggers (FR-005) | `shared/skills/memkernel-memory/SKILL.md` | build | [ ] |
+| 3 | | Verify the existing Decision Records section (#445) against FR-005 and add only the "selective, high-value decisions when MemKernel is configured" qualification; no new fields (FR-005) | `shared/skills/memkernel-memory/SKILL.md` | build | [ ] |
 
 **Checkpoint US3** — verify before continuing:
 - [ ] Explicitly qualifies retention as selective, high-value decisions when MemKernel is configured (not logging every small choice)

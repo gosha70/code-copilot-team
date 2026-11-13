@@ -63,10 +63,10 @@ Incorporate a native Simplest Complete Change (reuse-first) policy into Code Cop
 
 ## Architecture Decisions
 
-### ADR-1: Native CCT Ownership vs Ponytail Dependency
-- **Context**: Upstream Ponytail provides simplicity guidance via a standalone plugin and SessionStart hooks. Making Ponytail an installation or runtime dependency would couple CCT to external plugin lifecycles and conflicting persona rules.
-- **Decision**: CCT owns the Simplest Complete Change policy natively within its instruction architecture. Users remain free to install Ponytail independently, but CCT has zero installation, runtime, or release dependency on Ponytail.
-- **Consequences**: Full autonomy across all 7 adapters (`Aider`, `Claude Code`, `Codex`, `Cursor`, `GitHub Copilot`, `Pi`, `Windsurf`), deterministic parity testing, and zero external plugin drift.
+### ADR-1: Native CCT Policy Without a Ponytail Dependency
+- **Context**: Ponytail helped motivate the reuse-first ladder and can be installed alongside CCT. CCT must still provide its core policy consistently across supported harnesses without requiring another plugin, repository, release lifecycle or runtime component.
+- **Decision**: Implement the policy natively in CCT's shared instruction architecture. Ponytail is neither an installation nor a runtime dependency. CCT does not import Ponytail hooks, commands, personas or mutable upstream instruction files.
+- **Consequences**: CCT owns the wording, compatibility, tests, delivery and release lifecycle, and works when Ponytail is absent or changed. Users may install Ponytail independently; combined installs are not guaranteed compatible unless separately tested. Upstream ideas are re-expressed under CCT's requirements with licence and provenance reviewed; upstream changes do not flow into CCT automatically.
 
 ### ADR-2: Single Home for the Reuse Ladder (`copilot-conventions`) vs Config Boundary (`coding-standards`)
 - **Context**: Both `copilot-conventions` and `coding-standards` are always-loaded rules. Putting the reuse ladder in both would bloat prompt context and create maintenance drift.
@@ -75,7 +75,7 @@ Incorporate a native Simplest Complete Change (reuse-first) policy into Code Cop
 
 ### ADR-3: Selective Decision Memory via Existing MemKernel Interfaces
 - **Context**: Recording every trivial implementation choice creates noise, whereas losing high-impact architectural reuse decisions causes future sessions to re-litigate rejected designs.
-- **Decision**: Qualify `shared/skills/memkernel-memory/SKILL.md` so that when MemKernel is configured, agents selectively retain high-value implementation decisions (requirement, selected option, rejected alternatives with evidence, verification, and revisit triggers) using existing MemKernel interfaces.
+- **Decision**: The decision-record contract already exists on master (#445: `decision`, `requirement`, `chosen`, `rejected`, `evidence`, `revisit-when`; recall before building, check evidence before reuse, ask on conflict). Implementation verifies it against FR-005 and adds only the "selective, high-value" qualification, with no new fields and no MemKernel API change.
 - **Consequences**: High signal-to-noise ratio in memory without any MemKernel schema or API changes.
 
 ## Project Structure

@@ -24,6 +24,10 @@ Mismatches / resolved divergences:
   recommendation. This is intentional and resolved by the later owner ruling.
 - Ponytail remains inspiration and evidence, not an installation, runtime, or
   release dependency.
+- A3 (decision memory) landed early on master via #445, before this bundle was
+  approved, contrary to #389's approval-first rule. Reconciled: the bundle
+  treats #445 as pre-existing and limits #389's A3 work to verifying it against
+  FR-005 and adding the missing "selective, high-value" qualification.
 
 Verdict: aligned
 Confidence: high
