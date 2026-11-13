@@ -46,8 +46,8 @@ This specification introduces a native Simplest Complete Change policy owned dir
 ### US5: Multi-Adapter and Reviewer Setup Delivery Parity (Priority: HIGH)
 
 **Given** updates to canonical skills in `shared/skills/` and review rules in `shared/review/CODE_REVIEW.md`  
-**When** running `scripts/generate.sh` and `scripts/setup-reviewer.sh`  
-**Then** shared skill updates propagate cleanly to all 7 supported adapters (**Aider**, **Claude Code**, **Codex**, **Cursor**, **GitHub Copilot**, **Pi**, and **Windsurf**) via `scripts/generate.sh`, `CODE_REVIEW.md` reaches reviewer installations via `scripts/setup-reviewer.sh`, and the test suites (`test-shared-structure.sh`, `test-generate.sh`, `test-setup-reviewer.sh`) pass with zero drift.
+**When** running `scripts/generate.sh`, `adapters/claude-code/setup.sh` and `scripts/setup-reviewer.sh`  
+**Then** each changed artifact reaches exactly the adapters that consume it today, through that adapter's existing mechanism (see the delivery matrix in plan.md): the two always-loaded skills reach all seven adapters, `memkernel-memory` reaches the adapters that already carry it, `CODE_REVIEW.md` reaches Codex reviewer installs via `scripts/setup-reviewer.sh`, and `test-shared-structure.sh`, `test-generate.sh` and `test-setup-reviewer.sh` pass with zero drift.
 
 ## Requirements
 
@@ -57,8 +57,8 @@ This specification introduces a native Simplest Complete Change policy owned dir
 - **FR-004**: **Configuration vs Non-Configurable Constant Boundary in `coding-standards`.** `shared/skills/coding-standards/SKILL.md` MUST clarify that real schema, fallback, and operator defaults remain externalized, while in-code named constants apply strictly to values that genuinely cannot be configured—ensuring the reuse ladder lives only in `copilot-conventions` and does not weaken configuration rules.
 - **FR-005**: **Selective Decision Memory Retention.** `shared/skills/memkernel-memory/SKILL.md` already defines the decision-record form and its three rules (#445). FR-005 adds only the missing qualification: when MemKernel is configured, retain selective, high-value decisions, not every small implementation choice. Field names stay as #445 defined them.
 - **FR-006**: **Evidence-Backed Code Review.** `shared/review/CODE_REVIEW.md` MUST mandate that any review finding recommending removal or replacement of code/abstractions identify the viable replacement and cite the requirement(s) that remain satisfied.
-- **FR-007**: **Precision Delivery Across Adapters and Reviewer Setup.** Canonical skill changes in `shared/skills/` MUST propagate to **Aider**, **Claude Code**, **Codex**, **Cursor**, **GitHub Copilot**, **Pi**, and **Windsurf** via `scripts/generate.sh`, while `shared/review/CODE_REVIEW.md` delivery MUST be verified through `scripts/setup-reviewer.sh`.
-- **FR-008**: **Concrete Collision and Parity Assertions.** `tests/test-shared-structure.sh`, `tests/test-generate.sh`, and `tests/test-setup-reviewer.sh` MUST include regression checks that fail if the precedence rule ("tiny default vs configuration policy"), completeness rule ("small local fix misses another caller"), adapter sync, or reviewer setup delivery are broken.
+- **FR-007**: **Artifact-Specific Delivery.** Each changed artifact MUST reach the adapters that consume it today, through that adapter's existing mechanism, and MUST NOT change any adapter's catalog support level. `copilot-conventions` and `coding-standards` (always loaded) reach all seven adapters: Claude Code via `adapters/claude-code/setup.sh` plus the generated plugin copy, the other six via `scripts/generate.sh`. `memkernel-memory` (on demand) reaches Claude Code, Cursor, GitHub Copilot and Pi (copied resource; Pi stays `unsupported` in the catalog), and Codex as a reference row in `AGENTS.md`; Windsurf and Aider receive no new delivery. `shared/review/CODE_REVIEW.md` reaches Codex reviewer installs via `scripts/setup-reviewer.sh --codex`.
+- **FR-008**: **Concrete Collision and Parity Assertions.** `tests/test-shared-structure.sh`, `tests/test-generate.sh`, and `tests/test-setup-reviewer.sh` MUST include text-presence regression checks that fail if the precedence rule ("tiny default vs configuration policy") or the completeness rule ("small local fix misses another caller") is removed from its source or from any delivered copy, or if reviewer setup stops delivering `CODE_REVIEW.md`. These checks prove the rules ship; they do not prove agent behaviour.
 
 ## Constraints
 
@@ -83,6 +83,6 @@ This specification introduces a native Simplest Complete Change policy owned dir
 2. US2 is codified in `shared/skills/coding-standards/SKILL.md`, preserving externalized schema/fallback/operator defaults.
 3. US3 is codified in `shared/skills/memkernel-memory/SKILL.md` with selective high-value qualification.
 4. US4 is codified in `shared/review/CODE_REVIEW.md` and verified via `tests/test-setup-reviewer.sh`.
-5. US5 is verified across Aider, Claude Code, Codex, Cursor, GitHub Copilot, Pi, and Windsurf via `scripts/generate.sh` and `tests/test-generate.sh`.
+5. US5 is verified per artifact: the always-loaded skills in all seven adapters, `memkernel-memory` in the adapters FR-007 lists, and `CODE_REVIEW.md` in a Codex reviewer install, via `tests/test-generate.sh`, `tests/test-shared-structure.sh` and `tests/test-setup-reviewer.sh`.
 6. `tests/test-shared-structure.sh` explicitly tests both collision cases ("tiny default vs configuration policy" and "small local fix misses another caller").
 7. `bash scripts/validate-spec.sh --feature-id simplest-complete-change` and `bash scripts/check-origin-alignment.sh simplest-complete-change` exit 0.

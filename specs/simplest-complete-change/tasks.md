@@ -52,12 +52,12 @@ date: 2026-11-10
 
 | # | [P] | Task | File(s) | Owner | Done |
 |---|-----|------|---------|-------|------|
-| 5 | | Run `scripts/generate.sh` to propagate canonical shared skills across Aider, Claude Code, Codex, Cursor, GitHub Copilot, Pi, and Windsurf (FR-007) | `scripts/generate.sh`, `adapters/**` | build | [ ] |
+| 5 | | Regenerate adapters with `scripts/generate.sh` and confirm `adapters/claude-code/setup.sh` installs the updated always-loaded rules; delivery follows the plan's matrix, with no catalog support-level changes (FR-007) | `adapters/**` | build | [ ] |
 | 6 | [P] | Add concrete assertions for the two collision cases ("tiny default vs configuration policy" and "small local fix misses another caller") that fail if the precedence or completeness rule is removed (FR-008) | `tests/test-shared-structure.sh` | build | [ ] |
 | 7 | [P] | Verify adapter generation parity and reviewer installation path coverage (FR-007, FR-008) | `tests/test-generate.sh`, `tests/test-setup-reviewer.sh` | build | [ ] |
 
 **Checkpoint US5** — verify before continuing:
-- [ ] `scripts/generate.sh` produces zero uncommitted diff across all 7 adapters (`Aider`, `Claude Code`, `Codex`, `Cursor`, `GitHub Copilot`, `Pi`, `Windsurf`)
+- [ ] `scripts/generate.sh` leaves zero uncommitted diff, and each artifact appears in exactly the adapters the delivery matrix lists (always-loaded skills in all seven; `memkernel-memory` in Claude Code, Cursor, GitHub Copilot, Pi, and as a reference row in Codex)
 - [ ] `tests/test-shared-structure.sh` explicitly tests the "tiny default vs configuration policy" precedence rule and fails if removed
 - [ ] `tests/test-shared-structure.sh` explicitly tests the "small local fix misses another caller" completeness rule and fails if removed
 - [ ] `tests/test-generate.sh` and `tests/test-setup-reviewer.sh` pass 100%

@@ -18,12 +18,12 @@ origin:
 
 # Implementation Plan: Simplest Complete Change (#389)
 
-**Branch**: `feat/simplest-complete-change`
+**Branch**: `feat/windows-hill-reuse-hardening`
 **Input**: `specs/simplest-complete-change/spec.md`
 
 ## Summary
 
-Incorporate a native Simplest Complete Change (reuse-first) policy into Code Copilot Team (CCT). The policy embeds an ordered decision ladder into `copilot-conventions` (under Target Alignment and Complexity Control), resolves the boundary between externalized configuration defaults and non-configurable named constants in `coding-standards`, integrates selective high-value decision memory into `memkernel-memory`, requires code review removal findings in `CODE_REVIEW.md` to cite viable replacements, and verifies delivery across all 7 adapters (**Aider**, **Claude Code**, **Codex**, **Cursor**, **GitHub Copilot**, **Pi**, and **Windsurf**) plus the reviewer setup path.
+Incorporate a native Simplest Complete Change (reuse-first) policy into Code Copilot Team (CCT). The policy embeds an ordered decision ladder into `copilot-conventions` (under Target Alignment and Complexity Control), resolves the boundary between externalized configuration defaults and non-configurable named constants in `coding-standards`, integrates selective high-value decision memory into `memkernel-memory`, requires code review removal findings in `CODE_REVIEW.md` to cite viable replacements, and verifies delivery through each adapter's existing path (see the matrix below) plus the Codex reviewer setup path.
 
 ## Technical Context
 
@@ -48,10 +48,10 @@ Incorporate a native Simplest Complete Change (reuse-first) policy into Code Cop
 
 | Canonical Source | Role / Content | Delivery Mechanism | Target Adapters / Consumers | Verification Suite |
 |---|---|---|---|---|
-| `shared/skills/copilot-conventions/SKILL.md` | Ordered reuse-first decision ladder & completeness invariants (§ Target Alignment and Complexity Control) | `scripts/generate.sh` | Aider, Claude Code, Codex, Cursor, GitHub Copilot, Pi, Windsurf | `tests/test-generate.sh`, `tests/test-shared-structure.sh` |
-| `shared/skills/coding-standards/SKILL.md` | Boundary between externalized schema/fallback/operator defaults and non-configurable named constants | `scripts/generate.sh` | Aider, Claude Code, Codex, Cursor, GitHub Copilot, Pi, Windsurf | `tests/test-generate.sh`, `tests/test-shared-structure.sh` |
-| `shared/skills/memkernel-memory/SKILL.md` | Selective, high-value decision memory retention format with revisit triggers (when MemKernel is configured) | `scripts/generate.sh` | Claude Code, Cursor, GitHub Copilot, Windsurf, Pi, Codex (on-demand skill) | `tests/test-generate.sh`, `tests/test-shared-structure.sh` |
-| `shared/review/CODE_REVIEW.md` | Evidence-backed review rule (cite replacement + non-weakened requirement) | `scripts/setup-reviewer.sh` (and direct repo reference) | Reviewer assistant / `.github/copilot-review-instructions.md` & target repos | `tests/test-setup-reviewer.sh`, `tests/test-shared-structure.sh` |
+| `shared/skills/copilot-conventions/SKILL.md` | Ordered reuse-first decision ladder & completeness invariants (§ Target Alignment and Complexity Control) | Always loaded. Claude Code: `adapters/claude-code/setup.sh` writes `~/.claude/rules/` (plugin copy via `scripts/generate.sh`). Others: `scripts/generate.sh` | All seven (unchanged) | `tests/test-generate.sh`, `tests/test-shared-structure.sh` |
+| `shared/skills/coding-standards/SKILL.md` | Boundary between externalized schema/fallback/operator defaults and non-configurable named constants | Always loaded, same paths as above | All seven (unchanged) | `tests/test-generate.sh`, `tests/test-shared-structure.sh` |
+| `shared/skills/memkernel-memory/SKILL.md` | Selective, high-value decision memory retention format with revisit triggers (when MemKernel is configured) | On demand: Claude Code skill (setup + plugin), Cursor `.mdc`, Copilot `instructions/`, Pi copied resource, Codex reference row in `AGENTS.md` | Claude Code, Cursor, GitHub Copilot, Pi, Codex (reference only). Windsurf and Aider: not delivered today, unchanged. Catalog levels unchanged | `tests/test-generate.sh`, `tests/test-shared-structure.sh` |
+| `shared/review/CODE_REVIEW.md` | Evidence-backed review rule (cite replacement + non-weakened requirement) | `scripts/setup-reviewer.sh --codex` installs `docs/CODE_REVIEW.md`, `docs/CODE_REVIEW_PROJECT.md` and an `AGENTS.md` loader | Codex reviewer installs | `tests/test-setup-reviewer.sh`, `tests/test-shared-structure.sh` |
 
 ## Constitution Check
 
@@ -111,7 +111,7 @@ specs/simplest-complete-change/origin-alignment-2026-11-10-0100.md — Origin al
 ### Task 3: Multi-Adapter Delivery & Concrete Collision Tests (Implementation Phase)
 **Files**: `adapters/**`, `tests/test-shared-structure.sh`, `tests/test-generate.sh`, `tests/test-setup-reviewer.sh`
 **Acceptance criteria**:
-- [ ] `scripts/generate.sh` propagates skill updates across Aider, Claude Code, Codex, Cursor, GitHub Copilot, Pi, and Windsurf.
+- [ ] Each artifact reaches its consumers per the delivery matrix: `scripts/generate.sh` regenerates the generated adapters and the Claude Code plugin with zero drift, and `adapters/claude-code/setup.sh` installs the updated always-loaded rules.
 - [ ] `tests/test-shared-structure.sh` explicitly asserts the two collision cases ("tiny default vs configuration policy" and "small local fix misses another caller") so tests fail if precedence or completeness rules are removed.
 - [ ] `tests/test-setup-reviewer.sh` verifies that `setup-reviewer.sh` delivers the updated `CODE_REVIEW.md` guidance.
 
