@@ -56,7 +56,7 @@ class TestAiderAdapter(RegistryResetTestCase):
             shutil.copy(src, d / ".aider.chat.history.md")
         refs = AiderAdapter().discover(tmp)
         self.assertEqual(
-            [str(r.source_files[0].parent.relative_to(tmp)) for r in refs], ["work/proj"]
+            [r.source_files[0].parent.relative_to(tmp).as_posix() for r in refs], ["work/proj"]
         )
 
     def _load(self):
