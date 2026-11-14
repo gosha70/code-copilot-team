@@ -407,6 +407,75 @@ done
 assert "every feature title links to its guide" "[[ \$(grep -c '^| \\[' <<<\"\$OUT\") -eq $N ]]"
 assert "index links the maturity definitions" "grep -q '(maturity.md)' <<<\"\$OUT\""
 
+# ── a claimed adapter reach is a shipped one ─────────────────
+# `advisory` means the adapter receives the feature as content it reads, and
+# `enforced` adds a gate on top. For a feature that rests on skills, then, the
+# adapter's generated output under adapters/<a>/ must carry at least one of
+# them. memkernel-memory claimed advisory for windsurf and aider while
+# neither file mentioned MemKernel at all.
+#
+# A skill counts as delivered when its id appears in a file's path or text
+# (Cursor .mdc, Copilot .instructions.md, the Codex on-demand table, Pi and
+# plugin skill copies), or when its body's first H1 does (always-on skills are
+# concatenated without their id into windsurf/aider/codex rules).
+#
+# Prints one "feature adapter" line per claim with no shipped skill.
+delivery_gaps() {
+  LANG=C.UTF-8 LC_ALL=C.UTF-8 ruby -ryaml -e '
+    catalog, adapters_dir, skills_dir = ARGV
+    files = Hash.new do |h, a|
+      h[a] = Dir.glob(File.join(adapters_dir, a, "**", "*"), File::FNM_DOTMATCH)
+                .select { |p| File.file?(p) }
+                .map { |p| [p, File.read(p, encoding: "UTF-8").scrub] }
+    end
+    (YAML.load_file(catalog)["features"] || []).each do |f|
+      skills = f["skills"] || []
+      next if skills.empty?
+      (f["adapters"] || {}).each do |a, v|
+        next unless %w[advisory enforced].include?(v)
+        shipped = skills.any? do |s|
+          h1 = File.read(File.join(skills_dir, s, "SKILL.md"), encoding: "UTF-8")[/^# .+$/]
+          files[a].any? { |p, text| p.include?(s) || text.include?(s) || (h1 && text.include?(h1)) }
+        end
+        puts "#{f["id"]} #{a}" unless shipped
+      end
+    end
+  ' "$1" "$REPO_DIR/adapters" "$REPO_DIR/shared/skills" | sort
+}
+
+# Pre-existing claims with the same gap: generate.sh gives windsurf and aider
+# only the always-on skills, so these on-demand skills never reach them. Each
+# needs its own decision (downgrade, or widen delivery) and is out of scope for
+# the memkernel fix. The list is exact both ways: a new gap fails, and so does
+# closing one without deleting its line here.
+KNOWN_DELIVERY_GAPS=$(sort <<'GAPS'
+ralph-loop windsurf
+ralph-loop aider
+project-templates windsurf
+project-templates aider
+ui-design-harness windsurf
+ui-design-harness aider
+GAPS
+)
+GAPS_OUT=$(delivery_gaps "$CATALOG")
+assert "every advisory/enforced claim on a skill-backed feature ships a skill (beyond the known gaps)" \
+  "[[ \"\$GAPS_OUT\" == \"\$KNOWN_DELIVERY_GAPS\" ]]"
+if [[ "$GAPS_OUT" != "$KNOWN_DELIVERY_GAPS" ]]; then
+  diff <(echo "$KNOWN_DELIVERY_GAPS") <(echo "$GAPS_OUT") | sed -n 's/^[<>]/    &/p' || true
+  echo "    (> unshipped claim not in KNOWN_DELIVERY_GAPS; < listed gap that no longer exists)"
+fi
+# The check must bite: restoring the old memkernel claim is caught.
+sed '/^  - id: memkernel-memory$/,/^  - id: /s/^      windsurf: unsupported$/      windsurf: advisory/' \
+  "$CATALOG" > "$TMP/advisory-windsurf.yaml"
+assert "fixture flips memkernel-memory windsurf back to advisory" \
+  "! diff -q '$CATALOG' '$TMP/advisory-windsurf.yaml' >/dev/null"
+assert "an advisory claim with no shipped skill is reported (memkernel-memory windsurf)" \
+  "delivery_gaps '$TMP/advisory-windsurf.yaml' | grep -qx 'memkernel-memory windsurf'"
+# …and unsupported is never questioned, even when content ships (Pi carries
+# the memkernel-memory body but cannot activate it).
+assert "an unsupported adapter that carries the skill body is not reported" \
+  "! grep -q '^memkernel-memory ' <<<\"\$GAPS_OUT\""
+
 # ── the feature table never degrades silently ────────────────
 # A missing catalog must fail the render (and so --check), not print an
 # index with the headline table quietly gone.

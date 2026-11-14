@@ -66,7 +66,7 @@ that the feature runs outside any adapter.
 | Session analytics | n/a | n/a | — | — | — | n/a | — |
 | Studio web UI | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
 | LLM routing profiles | — | enforced | enforced | — | — | enforced | — |
-| MemKernel persistent memory | advisory | enforced | advisory | advisory | advisory | — | advisory |
+| MemKernel persistent memory | — | enforced | advisory | advisory | advisory | — | — |
 | cct command-line front door | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
 
 ## Slash commands
