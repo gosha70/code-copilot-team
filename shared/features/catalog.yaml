@@ -214,14 +214,16 @@ features:
       the iteration cap is reached, with no delegation.
     maturity: stable
     since: v1.1.0
+    # windsurf, aider: their generated rules carry only the always-on skills;
+    #   this feature's on-demand skills never reach them, so it is unsupported there.
     adapters:
       claude-code: enforced
       pi: advisory
       codex: advisory
       cursor: advisory
       github-copilot: advisory
-      windsurf: advisory
-      aider: advisory
+      windsurf: unsupported
+      aider: unsupported
     guide: shared/docs/ralph-loop-guide.md
     commands: [ralph-start]
     skills: [ralph-loop]
@@ -234,14 +236,16 @@ features:
       re-synced to the latest template.
     maturity: stable
     since: v1.1.0
+    # windsurf, aider: their generated rules carry only the always-on skills;
+    #   this feature's on-demand skills never reach them, so it is unsupported there.
     adapters:
       claude-code: enforced
       pi: advisory
       codex: advisory
       cursor: advisory
       github-copilot: advisory
-      windsurf: advisory
-      aider: advisory
+      windsurf: unsupported
+      aider: unsupported
     guide: docs/project-templates.md
     skills: [stack-constraints, environment-setup]
     capabilities: [config.layered]
@@ -254,14 +258,16 @@ features:
       anti-slop rubric.
     maturity: stable
     since: v1.1.0
+    # windsurf, aider: their generated rules carry only the always-on skills;
+    #   this feature's on-demand skills never reach them, so it is unsupported there.
     adapters:
       claude-code: enforced
       pi: advisory
       codex: advisory
       cursor: advisory
       github-copilot: advisory
-      windsurf: advisory
-      aider: advisory
+      windsurf: unsupported
+      aider: unsupported
     prerequisites: [node, Playwright for screenshots (degrades to an HTTP smoke without it)]
     guide: shared/templates/ui-harness/DESIGN.md
     skills: [design-system, visual-review]
@@ -374,14 +380,23 @@ features:
       installed.
     maturity: experimental
     since: v1.1.0
+    # The schema has no notes field, so the reasoning lives here.
+    # pi: generate.sh copies the skill into adapters/pi/resources/skills/ as an
+    #   Agent Skill Pi reads, and the Pi runtime's MCP provider
+    #   (adapters/pi/runtime/policy/mcp.ts, opt-in via integrations.mcp.enabled)
+    #   declares MemKernel as its first backend, so the skill's self-guard can
+    #   be met. Content the tool reads with no runtime gate is advisory
+    #   (docs/maturity.md); the gate is Claude Code's alone.
+    # windsurf, aider: their generated rules carry only the always-on skills;
+    #   this on-demand skill never reaches them, so it is unsupported there.
     adapters:
       claude-code: enforced
-      pi: unsupported
+      pi: advisory
       codex: advisory
       cursor: advisory
       github-copilot: advisory
-      windsurf: advisory
-      aider: advisory
+      windsurf: unsupported
+      aider: unsupported
     prerequisites: [MemKernel installed]
     guide: shared/skills/memkernel-memory/SKILL.md
     skills: [memkernel-memory]
