@@ -58,15 +58,15 @@ that the feature runs outside any adapter.
 | Coverage contract | — | enforced | enforced | — | — | enforced | — |
 | Runtime conformance evaluator | — | enforced | enforced | — | — | enforced | — |
 | Visual verification gate | — | enforced | enforced | — | — | enforced | — |
-| Ralph Loop single-agent iteration | advisory | enforced | advisory | advisory | advisory | advisory | advisory |
-| Project templates and sync | advisory | enforced | advisory | advisory | advisory | advisory | advisory |
-| UI design harness | advisory | enforced | advisory | advisory | advisory | advisory | advisory |
+| Ralph Loop single-agent iteration | — | enforced | advisory | advisory | advisory | advisory | — |
+| Project templates and sync | — | enforced | advisory | advisory | advisory | advisory | — |
+| UI design harness | — | enforced | advisory | advisory | advisory | advisory | — |
 | LLM wiki maintainer | advisory | enforced | advisory | advisory | advisory | advisory | advisory |
 | Benchmark harness | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
 | Session analytics | n/a | n/a | — | — | — | n/a | — |
 | Studio web UI | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
 | LLM routing profiles | — | enforced | enforced | — | — | enforced | — |
-| MemKernel persistent memory | — | enforced | advisory | advisory | advisory | — | — |
+| MemKernel persistent memory | — | enforced | advisory | advisory | advisory | advisory | — |
 | cct command-line front door | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
 
 ## Slash commands

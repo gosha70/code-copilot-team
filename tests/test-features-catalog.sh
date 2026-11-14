@@ -409,24 +409,38 @@ assert "index links the maturity definitions" "grep -q '(maturity.md)' <<<\"\$OU
 
 # ── a claimed adapter reach is a shipped one ─────────────────
 # `advisory` means the adapter receives the feature as content it reads, and
-# `enforced` adds a gate on top. For a feature that rests on skills, then, the
-# adapter's generated output under adapters/<a>/ must carry at least one of
-# them. memkernel-memory claimed advisory for windsurf and aider while
-# neither file mentioned MemKernel at all.
+# `enforced` adds a gate on top (docs/maturity.md). For a feature that rests on
+# skills, then, the artifacts the adapter actually delivers must carry at least
+# one of them. memkernel-memory claimed advisory for windsurf and aider while
+# neither generated rules file mentioned MemKernel at all.
 #
-# A skill counts as delivered when its id appears in a file's path or text
+# Only DELIVERED artifacts count — what generate.sh and the installers hand to
+# the tool — never setup scripts, docs or comments under adapters/<a>/ (a
+# mention there satisfied an earlier draft of this guard; review of PR #454).
+# A skill counts as delivered when its id appears in an artifact's path or text
 # (Cursor .mdc, Copilot .instructions.md, the Codex on-demand table, Pi and
 # plugin skill copies), or when its body's first H1 does (always-on skills are
-# concatenated without their id into windsurf/aider/codex rules).
+# concatenated without their id into windsurf/aider/codex/copilot rules).
 #
-# Prints one "feature adapter" line per claim with no shipped skill.
+# delivery_gaps <catalog> [<adapters-dir>] — one "feature adapter" line per
+# advisory/enforced claim on a skill-backed feature with no shipped skill.
 delivery_gaps() {
   LANG=C.UTF-8 LC_ALL=C.UTF-8 ruby -ryaml -e '
     catalog, adapters_dir, skills_dir = ARGV
+    delivered = {
+      "claude-code"    => ["plugin/skills/**/*"],
+      "codex"          => ["AGENTS.md", ".agents/skills/**/*"],
+      "cursor"         => [".cursor/rules/*.mdc"],
+      "github-copilot" => [".github/copilot-instructions.md", ".github/instructions/*.instructions.md"],
+      "windsurf"       => [".windsurf/rules/*.md"],
+      "aider"          => ["CONVENTIONS.md"],
+      "pi"             => ["resources/skills/**/*", "resources/prompts/**/*", "resources/context/**/*"],
+    }
     files = Hash.new do |h, a|
-      h[a] = Dir.glob(File.join(adapters_dir, a, "**", "*"), File::FNM_DOTMATCH)
-                .select { |p| File.file?(p) }
-                .map { |p| [p, File.read(p, encoding: "UTF-8").scrub] }
+      globs = delivered.fetch(a) { abort "delivery_gaps: no delivered-artifact map for adapter #{a}" }
+      h[a] = globs.flat_map { |g| Dir.glob(File.join(adapters_dir, a, g), File::FNM_DOTMATCH) }
+                  .select { |p| File.file?(p) }
+                  .map { |p| [p, File.read(p, encoding: "UTF-8").scrub] }
     end
     (YAML.load_file(catalog)["features"] || []).each do |f|
       skills = f["skills"] || []
@@ -440,30 +454,12 @@ delivery_gaps() {
         puts "#{f["id"]} #{a}" unless shipped
       end
     end
-  ' "$1" "$REPO_DIR/adapters" "$REPO_DIR/shared/skills" | sort
+  ' "$1" "${2:-$REPO_DIR/adapters}" "$REPO_DIR/shared/skills" | sort
 }
 
-# Pre-existing claims with the same gap: generate.sh gives windsurf and aider
-# only the always-on skills, so these on-demand skills never reach them. Each
-# needs its own decision (downgrade, or widen delivery) and is out of scope for
-# the memkernel fix. The list is exact both ways: a new gap fails, and so does
-# closing one without deleting its line here.
-KNOWN_DELIVERY_GAPS=$(sort <<'GAPS'
-ralph-loop windsurf
-ralph-loop aider
-project-templates windsurf
-project-templates aider
-ui-design-harness windsurf
-ui-design-harness aider
-GAPS
-)
 GAPS_OUT=$(delivery_gaps "$CATALOG")
-assert "every advisory/enforced claim on a skill-backed feature ships a skill (beyond the known gaps)" \
-  "[[ \"\$GAPS_OUT\" == \"\$KNOWN_DELIVERY_GAPS\" ]]"
-if [[ "$GAPS_OUT" != "$KNOWN_DELIVERY_GAPS" ]]; then
-  diff <(echo "$KNOWN_DELIVERY_GAPS") <(echo "$GAPS_OUT") | sed -n 's/^[<>]/    &/p' || true
-  echo "    (> unshipped claim not in KNOWN_DELIVERY_GAPS; < listed gap that no longer exists)"
-fi
+assert "every advisory/enforced claim on a skill-backed feature ships a skill" "[[ -z \"\$GAPS_OUT\" ]]"
+[[ -n "$GAPS_OUT" ]] && sed 's/^/    unshipped claim: /' <<<"$GAPS_OUT"
 # The check must bite: restoring the old memkernel claim is caught.
 sed '/^  - id: memkernel-memory$/,/^  - id: /s/^      windsurf: unsupported$/      windsurf: advisory/' \
   "$CATALOG" > "$TMP/advisory-windsurf.yaml"
@@ -471,10 +467,20 @@ assert "fixture flips memkernel-memory windsurf back to advisory" \
   "! diff -q '$CATALOG' '$TMP/advisory-windsurf.yaml' >/dev/null"
 assert "an advisory claim with no shipped skill is reported (memkernel-memory windsurf)" \
   "delivery_gaps '$TMP/advisory-windsurf.yaml' | grep -qx 'memkernel-memory windsurf'"
-# …and unsupported is never questioned, even when content ships (Pi carries
-# the memkernel-memory body but cannot activate it).
-assert "an unsupported adapter that carries the skill body is not reported" \
-  "! grep -q '^memkernel-memory ' <<<\"\$GAPS_OUT\""
+# …only a DELIVERED artifact can satisfy it: a mention in the adapter's setup
+# script changes nothing, the skill's H1 in the generated rules file does.
+MUT="$TMP/adapters-mut"
+cp -R "$REPO_DIR/adapters" "$MUT"
+printf '\n# memkernel-memory\n' >> "$MUT/windsurf/setup.sh"
+assert "a mention outside the delivered artifacts (setup.sh) does not satisfy the guard" \
+  "delivery_gaps '$TMP/advisory-windsurf.yaml' '$MUT' | grep -qx 'memkernel-memory windsurf'"
+MK_H1=$(grep -m1 '^# ' "$REPO_DIR/shared/skills/memkernel-memory/SKILL.md")
+printf '\n%s\n' "$MK_H1" >> "$MUT/windsurf/.windsurf/rules/rules.md"
+assert "the skill's H1 in the delivered rules file satisfies it" \
+  "! delivery_gaps '$TMP/advisory-windsurf.yaml' '$MUT' | grep -q '^memkernel-memory windsurf'"
+# Pi carries the skill as a copied Agent Skill resource, so its advisory claim is shipped.
+assert "pi's copied skill resource is the delivered artifact (memkernel-memory pi)" \
+  "[[ -f '$REPO_DIR/adapters/pi/resources/skills/memkernel-memory/SKILL.md' ]]"
 
 # ── the feature table never degrades silently ────────────────
 # A missing catalog must fail the render (and so --check), not print an

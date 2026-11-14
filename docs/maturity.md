@@ -44,13 +44,13 @@ how that adapter delivers the feature, not how good the adapter is:
 <!-- generated:begin enforcement-tiers -->
 | Adapter | Tier | Enforced | Advisory | Unsupported | Outside adapters |
 |---|---|---|---|---|---|
-| `aider` | Advisory | 0 | 8 | 7 | 4 |
+| `aider` | Advisory | 0 | 5 | 10 | 4 |
 | `claude-code` | **Enforced** | 15 | 0 | 0 | 4 |
 | `codex` | **Enforced** | 6 | 9 | 1 | 3 |
 | `cursor` | Advisory | 0 | 9 | 7 | 3 |
 | `github-copilot` | Advisory | 0 | 9 | 7 | 3 |
-| `pi` | **Enforced** | 8 | 6 | 1 | 4 |
-| `windsurf` | Advisory | 0 | 8 | 8 | 3 |
+| `pi` | **Enforced** | 8 | 7 | 0 | 4 |
+| `windsurf` | Advisory | 0 | 5 | 11 | 3 |
 <!-- generated:end enforcement-tiers -->
 
 An adapter is **Enforced** when at least one feature names it `enforced`, and
