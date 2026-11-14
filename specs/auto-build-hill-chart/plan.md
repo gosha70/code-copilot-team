@@ -37,10 +37,13 @@ one new test block; one doc section and three one-sentence notes.
 2. `hill_*` helpers, defined only in terms of `jq`, `now_iso` and the
    existing `journal`/`driver_commit`: `hill_active`, `hill_map`
    (phase → scope ids from `enumerate_phases` titles), `hill_preflight`
-   (FR-4: prints the map, refuses on a gap with exit 2), `hill_set
-   <scope> <status> <note>` (atomic write, forward only, idempotent),
-   `hill_phase_start <n>`, `hill_phase_landed <n> <sha>` (last-phase
-   rule, scoped commit with one retry, FR-5/6), `hill_final` (FR-7).
+   (FR-4: prints and journals the map, refuses on a gap with exit 1,
+   validates the frozen map and refuses on drift), `hill_freeze_map`
+   (writes `hill-map.tsv` once, checked and atomic), `hill_set <scope>
+   <status> <note>` (atomic write, forward only, idempotent, every step
+   checked; a failure parks), `hill_phase_start <n>`, `hill_phase_landed
+   <n>` (last-phase rule, scoped commit with one retry, FR-5/6, run
+   before the ledger marks the phase done), `hill_final` (FR-7).
 3. Call sites: `hill_preflight` at the end of preflight;
    `hill_phase_start` in `run_phase` before the build session;
    `hill_phase_landed` right after the ledger's `.phases[p].status =
@@ -54,9 +57,10 @@ one new test block; one doc section and three one-sentence notes.
 
 ## Interfaces
 
-- `hill_map` output: `<n>\t<S-ids space-separated or empty>` per phase,
-  computed once at preflight and stored in the ledger as
-  `.hill.map` so `--resume` uses the same mapping.
+- `hill_map` output: `<n>\t<S-ids space-separated>` per phase, computed
+  at preflight, frozen in the ledger as `hill-map.tsv` by the first
+  attempt (written once, never rewritten) and compared on every later
+  attempt; a difference refuses the resume.
 - `hill_set` returns 0 when it wrote, 1 when the scope was already at
   or past the target; an unknown scope cannot reach it because
   preflight refused the mapping.
@@ -72,8 +76,9 @@ In `tests/test-auto-build-loop.sh`, a `setup_pitch` helper beside
 spec, tasks (`## US1: One (S1)`, `## US2: Two (S2)`, `## US3: Three
 (S2)`), a `pitch.md` with `bet_status: building`, and a `hill.json`
 with S1–S3 `uphill`; the driver runs as `demo-pitch`. Cases: full run
-ends `S1=done S2=done S3=uphill` with three hill commits; no-token
-phase and unknown-scope token each refuse at preflight (exit 2, no
+ends `S1=done S2=done S3=uphill` with a hill commit for each phase that
+completes a scope (phases 1 and 3; phase 2 leaves S2 downhill); no-token
+phase and unknown-scope token each refuse at preflight (exit 1, no
 phase run); coverage-gate park then resume; pre-set `done` scope
 untouched; hill-commit failure retried once (one-shot failing `git`
 stub) and journaled on persistent failure with `hill.json` carried by

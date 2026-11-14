@@ -70,9 +70,10 @@ headings. This feature connects the two and nothing more.
   resolved collaboration directory to it, so a pitch run never creates
   a stray `specs/<id>/` beside the pitch.
 - **FR-2 Activation.** Hill-chart automation is active when
-  `$SPEC_DIR/hill.json` exists. With no `hill.json` the driver's
-  behaviour, journal, commits and outputs are byte-for-byte unchanged
-  (the existing suite's fixtures prove it).
+  `$SPEC_DIR/hill.json` exists. With no `hill.json` the driver writes
+  no hill event, file, commit or summary line, and the pre-existing
+  suite fixtures pass unchanged at their pins; a stronger byte-for-byte
+  comparison against the previous driver is not claimed.
 - **FR-3 Mapping.** A phase maps to every scope id named by `(S<n>)`
   tokens in its title, as `enumerate_phases` already produces it from
   `## US<n>:` headings or the `phases.phases` override; several tokens,
@@ -92,7 +93,11 @@ headings. This feature connects the two and nothing more.
   in the ledger (`hill-map.tsv`) by the attempt that starts the run; a
   `--resume` whose live mapping differs from the frozen one refuses
   with exit 1 naming each changed phase, so a phase started against one
-  scope can never credit another.
+  scope can never credit another. A ledger with no map refuses a resume
+  only once a phase has started; before any phase there is nothing to
+  prove and the resuming attempt writes the map, so a first write that
+  failed and parked is recoverable. In an unattended run the park is a
+  policy termination (exit 6) and needs a fresh run.
 - **FR-5 Transitions.** When a phase's build session is about to start,
   each mapped scope at `uphill` moves to `downhill` with
   `note = "auto-build: phase <n> started"`. When a phase lands, which
@@ -107,7 +112,13 @@ headings. This feature connects the two and nothing more.
   A chart the driver cannot write (unparseable JSON, no temp file)
   parks the run with reason `hill_chart_error`: unlike a failed
   commit (FR-6), a failed write leaves nothing a later commit could
-  heal, and a run must not finish over a stale chart.
+  heal, and a run must not finish over a stale chart. A write is
+  exactly one matching scope in a known status, a rewrite that parses
+  and holds the scope at the target, a checked mode and a checked
+  rename; the chart is written before the ledger marks the phase done,
+  so the park leaves the phase at its coverage gate and a repair commit
+  plus `--resume` re-enters there, reviews the repair, and lands the
+  remaining scopes once.
 - **FR-6 Commit.** The `downhill` change rides in the phase's own build
   commit, since `driver_commit` without paths stages everything. The
   `done` change is committed on its own, scoped to `hill.json`, with
@@ -181,8 +192,8 @@ headings. This feature connects the two and nothing more.
 | Criterion | Proof |
 |---|---|
 | A driver-built cycle reaches `/cooldown` with its scopes moved | suite: two-phase pitch fixture ends `S1=done S2=done`, hill commit present per phase |
-| Features without a hill chart are unchanged | suite: existing fixtures produce no hill journal line, no hill commit; a byte-for-byte assertion on the journal and commit list |
-| A phase without a scope, or naming an unknown scope, stops the run before it builds | suite: preflight exit 2 with the gap named, no phase run, no commit; a scope named by no phase is allowed |
+| Features without a hill chart are unchanged | suite: a feature fixture produces no hill event, file, commit or summary line, and every pre-existing fixture passes unchanged at its pin |
+| A phase without a scope, or naming an unknown scope, stops the run before it builds | suite: preflight exit 1 with the gap named, no phase run, no commit; a scope named by no phase is allowed |
 | A failed hill commit retries once, then is journaled and self-heals | suite: a one-shot failing git stub makes the retry succeed; a persistent failure journals `artifact_skipped`, the run completes, and the final summary commit carries `hill.json` |
 | Parked before landing leaves `downhill`; resume lands once | suite: coverage-gate park fixture, then `--resume` |
 | Shared scope completes on its last phase | suite: `(S2)` on phases 2 and 3 |
