@@ -529,7 +529,9 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return C.EXIT_USAGE
-    cfg = load_config(dsn=args.dsn)
+    cfg = _load_config(args, dsn=args.dsn)
+    if cfg is None:
+        return C.EXIT_USAGE
     if not cfg.dsn:
         print(
             "error: no database configured. Run setup, pass --db, or set CCT_SA_DB. "
@@ -578,7 +580,9 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
 def _cmd_doctor(args: argparse.Namespace) -> int:
     from .relational.db import Database, apply_ddl
 
-    cfg = load_config(dsn=args.dsn)
+    cfg = _load_config(args, dsn=args.dsn)
+    if cfg is None:
+        return C.EXIT_USAGE
     report: dict = {"sources": {}, "store": {}}
     for copilot, _ in cfg.sources.items():
         root = cfg.source_root(copilot)
@@ -623,7 +627,9 @@ def _cmd_graph(args: argparse.Namespace) -> int:
     from .graph.schema import GraphDatabase
     from .relational.db import Database
 
-    cfg = load_config(dsn=args.dsn, kuzu_path=args.db_path)
+    cfg = _load_config(args, dsn=args.dsn, kuzu_path=args.db_path)
+    if cfg is None:
+        return C.EXIT_USAGE
     if not cfg.dsn:
         print("error: no database configured (see --db or run setup).", file=sys.stderr)
         return C.EXIT_USAGE
@@ -693,7 +699,9 @@ def _cmd_export(args: argparse.Namespace) -> int:
         )
         return C.EXIT_USAGE
 
-    cfg = load_config(dsn=args.dsn)
+    cfg = _load_config(args, dsn=args.dsn)
+    if cfg is None:
+        return C.EXIT_USAGE
     if not cfg.dsn:
         print("error: no database configured (see --db or run setup).", file=sys.stderr)
         return C.EXIT_USAGE
@@ -758,7 +766,9 @@ def _cmd_threads(args: argparse.Namespace) -> int:
         return C.EXIT_USAGE
     if not ensure_initialized(args.dsn):
         return C.EXIT_USAGE
-    cfg = load_config(dsn=args.dsn)
+    cfg = _load_config(args, dsn=args.dsn)
+    if cfg is None:
+        return C.EXIT_USAGE
     if not cfg.dsn:
         print(
             "error: no database configured. Run setup, pass --db, or set CCT_SA_DB.",
@@ -807,7 +817,9 @@ def _cmd_expectations(args: argparse.Namespace) -> int:
 
     if not ensure_initialized(args.dsn):
         return C.EXIT_USAGE
-    cfg = load_config(dsn=args.dsn)
+    cfg = _load_config(args, dsn=args.dsn)
+    if cfg is None:
+        return C.EXIT_USAGE
     if not cfg.dsn:
         print(
             "error: no database configured. Run setup, pass --db, or set CCT_SA_DB.",
@@ -853,7 +865,9 @@ def _cmd_correlate(args: argparse.Namespace) -> int:
 
     if not ensure_initialized(args.dsn):
         return C.EXIT_USAGE
-    cfg = load_config(dsn=args.dsn)
+    cfg = _load_config(args, dsn=args.dsn)
+    if cfg is None:
+        return C.EXIT_USAGE
     if not cfg.dsn:
         print(
             "error: no database configured. Run setup, pass --db, or set CCT_SA_DB. "
@@ -921,7 +935,9 @@ def _cmd_watch(args: argparse.Namespace) -> int:
 
     if not ensure_initialized(args.dsn):
         return C.EXIT_USAGE
-    cfg = load_config(dsn=args.dsn)
+    cfg = _load_config(args, dsn=args.dsn)
+    if cfg is None:
+        return C.EXIT_USAGE
     if not cfg.dsn:
         print(
             "error: no database configured. Run setup, pass --db, or set CCT_SA_DB. "
@@ -997,7 +1013,9 @@ def _cmd_archive(args: argparse.Namespace) -> int:
 
     if not ensure_initialized(args.dsn):
         return C.EXIT_USAGE
-    cfg = load_config(dsn=args.dsn)
+    cfg = _load_config(args, dsn=args.dsn)
+    if cfg is None:
+        return C.EXIT_USAGE
     if not cfg.dsn:
         print(
             "error: no database configured. Run setup, pass --db, or set CCT_SA_DB.",
@@ -1047,7 +1065,9 @@ def _cmd_search(args: argparse.Namespace) -> int:
         return C.EXIT_USAGE
     if not ensure_initialized(args.dsn):
         return C.EXIT_USAGE
-    cfg = load_config(dsn=args.dsn)
+    cfg = _load_config(args, dsn=args.dsn)
+    if cfg is None:
+        return C.EXIT_USAGE
     if not cfg.dsn:
         print(
             "error: no database configured. Run setup, pass --db, or set CCT_SA_DB.",
@@ -1086,7 +1106,9 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
     from .judge.runner import run_default_by_copilot, run_judge
     from .relational.db import Database, apply_ddl
 
-    cfg = load_config(dsn=args.dsn)
+    cfg = _load_config(args, dsn=args.dsn)
+    if cfg is None:
+        return C.EXIT_USAGE
     if not cfg.dsn:
         print("error: no database configured (see --db or run setup).", file=sys.stderr)
         return C.EXIT_USAGE
@@ -1136,7 +1158,9 @@ def _cmd_labels(args: argparse.Namespace) -> int:
     from .judge.label_sources import UnknownLabelSourceError
     from .relational.db import Database, apply_ddl
 
-    cfg = load_config(dsn=args.dsn)
+    cfg = _load_config(args, dsn=args.dsn)
+    if cfg is None:
+        return C.EXIT_USAGE
     if not cfg.dsn:
         print("error: no database configured (see --db or run setup).", file=sys.stderr)
         return C.EXIT_USAGE
@@ -1226,7 +1250,9 @@ def _cmd_team(args: argparse.Namespace) -> int:
     from .api import team as team_mod
     from .relational.db import Database, apply_ddl
 
-    cfg = load_config(dsn=args.dsn)
+    cfg = _load_config(args, dsn=args.dsn)
+    if cfg is None:
+        return C.EXIT_USAGE
     if not cfg.dsn:
         print("error: no database configured (see --db or run setup).", file=sys.stderr)
         return C.EXIT_USAGE
@@ -1280,7 +1306,9 @@ def _cmd_runs(args: argparse.Namespace) -> int:
     from .api import auto_build as auto_build_mod
     from .relational.db import Database, apply_ddl
 
-    cfg = load_config(dsn=args.dsn)
+    cfg = _load_config(args, dsn=args.dsn)
+    if cfg is None:
+        return C.EXIT_USAGE
     if not cfg.dsn:
         print("error: no database configured (see --db or run setup).", file=sys.stderr)
         return C.EXIT_USAGE
@@ -1395,7 +1423,9 @@ def _cmd_clusters(args: argparse.Namespace) -> int:
     from .graph.schema import GraphDatabase
 
     try:
-        cfg = load_config(dsn=args.dsn, kuzu_path=args.db_path)
+        cfg = _load_config(args, dsn=args.dsn, kuzu_path=args.db_path)
+        if cfg is None:
+            return C.EXIT_USAGE
     except ValueError as exc:
         # a refused knob (nan threshold, fractional top_k, …) is a
         # usage error with a named setting — never a traceback. The
@@ -1459,7 +1489,9 @@ def _cmd_kpis(args: argparse.Namespace) -> int:
     from .judge.rubric import load_rubric
     from .relational.db import Database, apply_ddl
 
-    cfg = load_config(dsn=args.dsn)
+    cfg = _load_config(args, dsn=args.dsn)
+    if cfg is None:
+        return C.EXIT_USAGE
     if not cfg.dsn:
         print("error: no database configured (see --db or run setup).", file=sys.stderr)
         return C.EXIT_USAGE
@@ -1489,7 +1521,9 @@ def _cmd_gaps(args: argparse.Namespace) -> int:
     if any(m <= 0 for m in cutoffs):
         print("error: --cutoff must be a positive number of minutes.", file=sys.stderr)
         return C.EXIT_USAGE
-    cfg = load_config(dsn=args.dsn)
+    cfg = _load_config(args, dsn=args.dsn)
+    if cfg is None:
+        return C.EXIT_USAGE
     if not cfg.dsn:
         print("error: no database configured (see --db or run setup).", file=sys.stderr)
         return C.EXIT_USAGE
@@ -1519,7 +1553,9 @@ def _cmd_calibrate(args: argparse.Namespace) -> int:
         # ValueError here, and that is a usage condition with a
         # message that already names the offending key — never a
         # traceback.
-        cfg = load_config()
+        cfg = _load_config(args, )
+        if cfg is None:
+            return C.EXIT_USAGE
         summary = run_evaluation(cfg)
     except (CalibrationError, ValueError) as exc:
         # a configuration or corpus condition, not a crash — the
@@ -1539,7 +1575,9 @@ def _cmd_calibrate(args: argparse.Namespace) -> int:
 def _cmd_mcp(args: argparse.Namespace) -> int:
     from .mcp import server
 
-    cfg = load_config(dsn=args.dsn)
+    cfg = _load_config(args, dsn=args.dsn)
+    if cfg is None:
+        return C.EXIT_USAGE
     if not cfg.dsn:
         print("error: no database configured (see --db or run setup).", file=sys.stderr)
         return C.EXIT_USAGE
@@ -1612,6 +1650,15 @@ _HANDLERS = {
 
 
 # ── entrypoint ─────────────────────────────────────────────────────────
+
+
+def _load_config(args, **overrides):
+    """Config errors are usage errors, not crashes: one line on stderr, then None."""
+    try:
+        return load_config(**overrides)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return None
 
 
 def main(argv: Sequence[str]) -> int:
