@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from importlib import resources
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -195,18 +196,24 @@ class Database:
             import sqlite3
 
             target = sqlite_target(dsn)
-            if sqlite_mode and target != SQLITE_MEMORY:
-                conn = sqlite3.connect(
-                    f"{_sqlite_uri(target)}?mode={sqlite_mode}", uri=True
-                )
-            else:
-                conn = sqlite3.connect(target)
-            conn.execute("PRAGMA foreign_keys = ON")
+            try:
+                if sqlite_mode and target != SQLITE_MEMORY:
+                    conn = sqlite3.connect(
+                        f"{_sqlite_uri(target)}?mode={sqlite_mode}", uri=True
+                    )
+                else:
+                    conn = sqlite3.connect(target)
+                conn.execute("PRAGMA foreign_keys = ON")
+            except sqlite3.Error as exc:
+                raise StoreUnavailable(f"{target}: {exc}") from exc
             return cls(conn, DIALECT_SQLITE)
 
         import psycopg  # imported lazily so sqlite-only test runs need no psycopg
 
-        conn = psycopg.connect(dsn)
+        try:
+            conn = psycopg.connect(dsn)
+        except psycopg.Error as exc:
+            raise StoreUnavailable(f"{_dsn_without_secret(dsn)}: {exc}") from exc
         return cls(conn, DIALECT_POSTGRES)
 
     # ── helpers ────────────────────────────────────────────────────────
@@ -267,6 +274,20 @@ def _statements(sql_text: str) -> list[str]:
     lines = [ln for ln in sql_text.splitlines() if not ln.strip().startswith("--")]
     body = "\n".join(lines)
     return [s.strip() for s in body.split(";") if s.strip()]
+
+
+def _dsn_without_secret(dsn: str) -> str:
+    """The DSN with its password removed: this string reaches the terminal."""
+    return re.sub(r"://([^:/@]+):[^@]*@", r"://\1:***@", dsn)
+
+
+class StoreUnavailable(RuntimeError):
+    """The store could not be opened at all: a directory that does not exist, a file the
+    process may not read, an unreachable or refusing server.
+
+    A runtime condition the person must fix. It is raised at the boundary so every command
+    reports it as one line, instead of each handler meeting a driver traceback on its own.
+    """
 
 
 class SchemaMismatch(RuntimeError):
