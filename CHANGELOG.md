@@ -213,6 +213,16 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Changed
 
+- **CONTRIBUTING.md states the spec-first process.** A "Spec-First for
+  Features" section says to agree on scope in the issue, to create
+  `specs/<feature-id>/` from the SDD templates with `status: draft` and
+  the `origin:` block, to validate it with `scripts/validate-spec.sh`, and
+  to open the spec PR before the implementation PR; the stale "README
+  test-count lines" item now names `docs/repo-structure.md` and
+  `tests/test-counts.env`. The PR template asks for the linked issue and
+  the approved plan; the feature-request template asks for the
+  `spec_mode` (#441).
+
 - **memkernel decision records in the `memkernel-memory` skill.** The skill
   carries the decision record form (`requirement`, `chosen`, `rejected`,
   `evidence`, `revisit-when`) and the three rules (recall before building,

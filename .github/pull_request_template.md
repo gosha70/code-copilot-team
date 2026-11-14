@@ -16,6 +16,7 @@ Briefly describe what this pull request changes and why.
 
 ## Checklist
 
+- [ ] Linked issue, and for a feature, the approved `specs/<feature-id>/plan.md` (see CONTRIBUTING.md, "Spec-First for Features")
 - [ ] Scope is focused and does not mix unrelated changes
 - [ ] Documentation updated where needed
 - [ ] Security-sensitive findings were handled privately per `SECURITY.md`
