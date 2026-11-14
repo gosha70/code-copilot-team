@@ -449,6 +449,7 @@ class TestProbeDoesNotCreateFiles(unittest.TestCase):
         from session_analytics.relational.db import (
             SQLITE_MODE_RW,
             Database,
+            StoreUnavailable,
         )
 
         tmp = tempfile.mkdtemp(prefix="cct-connmode-")
@@ -456,8 +457,11 @@ class TestProbeDoesNotCreateFiles(unittest.TestCase):
         guarded = os.path.join(tmp, "guarded.db")
         created = os.path.join(tmp, "created.db")
 
-        with self.assertRaises(sqlite3.OperationalError):
+        # StoreUnavailable is the caller-facing type since the boundary guard:
+        # the driver error is still the cause, and the file is still never created.
+        with self.assertRaises(StoreUnavailable) as refused:
             Database.connect(f"sqlite:///{guarded}", sqlite_mode=SQLITE_MODE_RW)
+        self.assertIsInstance(refused.exception.__cause__, sqlite3.OperationalError)
         self.assertFalse(os.path.exists(guarded), "rw mode created the file")
 
         # Default behaviour is untouched.
