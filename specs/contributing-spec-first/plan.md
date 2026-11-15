@@ -35,11 +35,15 @@ the PR review is its approval.
 ## Changes
 
 1. `CONTRIBUTING.md`: a "Spec-First for Features" section after "How to
-   Contribute", 10–15 lines in the file's tone, covering: agree on scope in
-   the issue first for anything beyond a bug fix, a docs change or a small
-   single-file tweak; features follow SDD with `specs/<feature-id>/` from
-   `shared/templates/sdd/` (`plan.md`, plus `spec.md` for `lightweight`,
-   plus `tasks.md` for `full`), `status: draft` and the `origin:` block;
+   Contribute", 10–15 lines in the file's tone, covering: the `none` path
+   (non-security bug fixes, docs-only and trivial changes: `plan.md` only,
+   PR review as approval) and risk-based classification for everything
+   else (security, schema and integration are `full` regardless of file
+   count); agree on scope in the issue first; features follow SDD with
+   `specs/<feature-id>/` from `shared/templates/sdd/`, the artifacts per
+   mode being `none` = `plan.md`, `lightweight` = `plan.md` + `spec.md`,
+   `full` = `plan.md` + `spec.md` + `tasks.md`, with `status: draft` and
+   the `origin:` block;
    validate with `scripts/validate-spec.sh --feature-id <id>`; the spec PR
    comes first, a maintainer sets `status: approved`, the implementation
    PR follows; an issue that says a specification is required is not open
