@@ -50,7 +50,7 @@ editing its source, never the page.
 - [Repo Structure](repo-structure.md) — Where everything lives in this repository, for contributors
 - [Configuration Layers](configuration-layers.md) — Where each rule, skill, agent and hook is installed, and which layer wins when two of them say different things. **More specific always wins:** a project's `CLAUDE.md` overrides the global manifest, and `CLAUDE.local.md` overrides both
 - [Install Options](install.md) — Every install path, for every tool
-- [The CCT home](cct-home.md) — `${CCT_HOME:-~/.cct}`, the one override, the 2.1.x legacy fallback and `cct home migrate`
+- [The CCT home](cct-home.md) — Everything CCT keeps for a user lives in one directory, the **CCT home** `${CCT_HOME:-~/.cct}`, with the legacy `~/.code-copilot-team` read as a fallback through 2.1.x and `cct home migrate` to move what is left there
 
 ### Analytics & benchmarks
 

@@ -1,6 +1,6 @@
 # The CCT home
 
-Everything CCT keeps for a user lives in one directory, the **CCT home**:
+Everything CCT keeps for a user lives in one directory, the **CCT home** `${CCT_HOME:-~/.cct}`, with the legacy `~/.code-copilot-team` read as a fallback through 2.1.x and `cct home migrate` to move what is left there.
 
 ```
 ${CCT_HOME:-~/.cct}
