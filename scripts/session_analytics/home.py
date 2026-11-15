@@ -1,8 +1,9 @@
 """The one place in Python that knows where CCT keeps a user's files (#411).
 
-The home is ``${CCT_HOME:-~/.cct}``. Through the 2.1.x line a file that is
-absent from the home but present in the legacy home ``~/.code-copilot-team``
-is read from there (a read-only fallback); the first 2.2 change removes the
+The home is ``${CCT_HOME:-~/.cct}``. Through the 2.1.x line a top-level
+entry that is absent from the home but present in the legacy home
+``~/.code-copilot-team`` is served from there, reads and writes alike, so a
+directory is never split between the two; the first 2.2 change removes the
 fallback. Nothing here moves a file: ``cct home migrate`` is the only mover.
 
 Mirrors ``scripts/lib/cct-home.sh`` (bash) and
@@ -15,7 +16,7 @@ from pathlib import Path
 
 ENV_HOME = "CCT_HOME"
 HOME_DEFAULT_REL = ".cct"
-HOME_LEGACY_REL = ".code-copilot-team"  # read-only fallback through 2.1.x; removed in 2.2
+HOME_LEGACY_REL = ".code-copilot-team"  # served as a fallback through 2.1.x; removed in 2.2
 
 
 def cct_home() -> Path:
@@ -29,21 +30,17 @@ def legacy_home() -> Path:
 
 
 def cct_home_path(relative: str) -> Path:
-    """The path to read ``relative`` from, or to create it at under the home.
+    """The path to read, write or create ``relative`` at.
 
-    ``CCT_HOME`` set: that directory, no fallback. Otherwise the home when the
-    entry exists there, the legacy home when it exists only there, and the
-    home as the place to create it.
+    ``CCT_HOME`` set: that directory, no fallback. Otherwise the TOP-LEVEL
+    entry (the first segment of ``relative``) decides: the legacy home when
+    that entry exists only there, else the home. ``pi/audit.log`` therefore
+    goes wherever ``pi/`` lives and never splits the directory.
     """
-    new = cct_home() / relative
-    if os.environ.get(ENV_HOME):
-        return new
-    if new.exists():
-        return new
-    legacy = legacy_home() / relative
-    if legacy.exists():
-        return legacy
-    return new
+    entry = Path(relative).parts[0]
+    if not os.environ.get(ENV_HOME) and not (cct_home() / entry).exists() and (legacy_home() / entry).exists():
+        return legacy_home() / relative
+    return cct_home() / relative
 
 
 def legacy_hits() -> list[str]:

@@ -2118,7 +2118,7 @@ assert_eq "it refuses a Type line it cannot parse rather than skipping its comma
 # ══════════════════════════════════════════════════════════════
 # The CCT home has one resolver per language (#411)
 # ══════════════════════════════════════════════════════════════
-# ${CCT_HOME:-~/.cct} with a read-only fallback to ~/.code-copilot-team is
+# ${CCT_HOME:-~/.cct} with ~/.code-copilot-team served as a fallback is
 # decided in scripts/lib/cct-home.sh, session_analytics/home.py and
 # adapters/pi/runtime/config/home.ts, and nowhere else. Installed scripts
 # that run without a checkout carry the bash block verbatim; any other code
@@ -2134,28 +2134,85 @@ for copy in adapters/claude-code/.claude/hooks/harness-stamp.sh adapters/claude-
   rc=0; [[ "$(home_block "$REPO_DIR/$copy")" == "$HOME_BLOCK" ]] || rc=1
   assert_ok "$copy carries the resolver block verbatim" "$rc"
 done
-# The predicate: a code line (not a comment) that spells a home as a path.
-# Allowed files are the three resolvers, their verbatim copies, and the two
-# commands that print the legacy name on purpose (cct home, cct doctor).
-HOME_ALLOWED='^(scripts/lib/cct-home\.sh|scripts/session_analytics/home\.py|adapters/pi/runtime/config/home\.ts|adapters/claude-code/\.claude/hooks/harness-stamp\.sh|adapters/claude-code/claude-code|adapters/pi/bin/pi-code|scripts/cct-home\.sh|scripts/lib/cct_doctor\.py):'
-home_stray_lines() {  # stdin: "<file>:<line>:<text>" lines → the offending ones
-  grep -E '(\$HOME|HOME\}|home\(\)|homedir\(\)|~)[[:space:]/\\"'"'"']*\.(code-copilot-team|cct)\b' \
-    | grep -vE "$HOME_ALLOWED" \
-    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(#|//|\*|/\*)' || true
+# The guard (FR-9): no code outside the resolvers spells a CCT home. A
+# candidate is a non-comment line naming either directory after a tilde
+# (~/.cct, ~/.code-copilot-team) or after a home construction ($HOME,
+# ${HOME}, Path.home(), homedir(), os.environ["HOME"], environ.get("HOME"),
+# getenv("HOME"), process.env.HOME, env["HOME"]). No file is exempt: the
+# resolvers spell both names through constants (CCT_HOME_DEFAULT_REL,
+# HOME_LEGACY_REL, ...), so their code produces no candidates, and any line
+# in them that does is compared like every other line. Only a line whose
+# FIRST non-blank characters are a comment marker (#, //, *, /*) is skipped;
+# a code line with a trailing comment is scanned like any other.
+#
+# Nothing is exempt by meaning either. Display-only occurrences (help text,
+# messages, docstrings, Studio copy) are listed one by one in
+# tests/fixtures/home-guard/baseline.txt as "<file><TAB><trimmed line>".
+# RULE: an entry there must be text a person reads, never a path the code
+# reads, writes, creates or passes on; a real path goes through a resolver.
+# Lines starting with # in the baseline are its own header, not entries. The
+# comparison is a multiset: a new occurrence anywhere, including a second
+# copy of a listed line in a listed file, fails until it is reviewed and
+# added; a listed occurrence that no longer exists fails too, so the list
+# stays exact.
+#
+# No \b: macOS `git grep -E` treats \b as matching nothing, which made an
+# earlier draft scan zero lines and pass. The candidate count proves the scan
+# reads something.
+HOME_END='([^[:alnum:]_-]|$)'
+HOME_SRC='(\$HOME|\$\{HOME\}|HOME\}|home\(\)|homedir\(\)|environ\[["'"'"']HOME["'"'"']\]|environ\.get\(["'"'"']HOME["'"'"']\)|getenv\(["'"'"']HOME["'"'"']\)|env\.HOME|env\[["'"'"']HOME["'"'"']\])'
+HOME_SEP='[[:space:]/\\"'"'"',)+!]*'
+HOME_SPELLING="(~/\.(code-copilot-team|cct)$HOME_END)|($HOME_SRC$HOME_SEP\.(code-copilot-team|cct)$HOME_END)"
+HOME_BASELINE="$REPO_DIR/tests/fixtures/home-guard/baseline.txt"
+home_baseline() { grep -v '^#' "$HOME_BASELINE" | LC_ALL=C sort; }   # entries only, sorted
+home_occurrences() {  # stdin: "<file>:<line>:<text>" → sorted "<file><TAB><trimmed text>", one per occurrence
+  grep -E "$HOME_SPELLING" \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(#|//|\*|/\*)' \
+    | sed -E 's/^([^:]+):[0-9]+:[[:space:]]*/\1	/; s/[[:space:]]+$//' \
+    | LC_ALL=C sort || true
 }
-STRAY=$(cd "$REPO_DIR" && git grep -n -E '\.(code-copilot-team|cct)\b' -- scripts adapters shared/scripts studio ':!*.md' ':!*/tests/*' ':!tests' 2>/dev/null | home_stray_lines)
+home_unreviewed() {  # stdin as above → occurrences not covered by the baseline (multiset)
+  LC_ALL=C comm -23 <(home_occurrences) <(home_baseline)
+}
+HOME_CANDIDATES=$(cd "$REPO_DIR" && git grep -n -E "\.(code-copilot-team|cct)$HOME_END" -- scripts adapters shared/scripts studio ':!*.md' ':!*.mdc' ':!*/tests/*' ':!tests' 2>/dev/null)
+rc=0; [[ $(grep -c . <<<"$HOME_CANDIDATES") -ge 20 ]] || rc=1
+assert_ok "the home guard's candidate scan reads lines (it is not a silent no-op)" "$rc"
+STRAY=$(home_unreviewed <<<"$HOME_CANDIDATES")
 rc=0; [[ -z "$STRAY" ]] || rc=1
-assert_ok "no code outside the resolvers spells a CCT home as a path${STRAY:+ (found: $(echo "$STRAY" | cut -d: -f1 | sort -u | tr '\n' ' '))}" "$rc"
-# The predicate bites: a planted spelling is caught, an allowed file and a comment are not.
-PLANTED=$(printf '%s\n' 'scripts/lib/routing-state.sh:41:RS_FILE="${CCT_ROUTING_STATE:-$HOME/.code-copilot-team/routing-state.json}"' | home_stray_lines)
-rc=0; [[ -n "$PLANTED" ]] || rc=1
-assert_ok "the home guard catches a planted \$HOME/.code-copilot-team spelling" "$rc"
-PLANTED=$(printf '%s\n' 'scripts/session_analytics/config.py:133:_USER_CONFIG = Path.home() / ".cct" / "session-analytics.json"' | home_stray_lines)
-rc=0; [[ -n "$PLANTED" ]] || rc=1
-assert_ok "...and a planted Path.home() / \".cct\" spelling" "$rc"
-PLANTED=$(printf '%s\n' 'scripts/lib/cct-home.sh:18:CCT_HOME_LEGACY_REL=".code-copilot-team"' 'scripts/setup.sh:3:# the legacy home is ~/.code-copilot-team' | home_stray_lines)
+assert_ok "no code outside the resolvers spells a CCT home beyond the reviewed baseline${STRAY:+ (unreviewed: $(cut -f1 <<<"$STRAY" | sort -u | tr '\n' ' '))}" "$rc"
+GONE=$(LC_ALL=C comm -13 <(home_occurrences <<<"$HOME_CANDIDATES") <(home_baseline))
+rc=0; [[ -z "$GONE" ]] || rc=1
+assert_ok "every baseline entry still occurs (the list is exact)${GONE:+ (stale: $(cut -f1 <<<"$GONE" | sort -u | tr '\n' ' '))}" "$rc"
+# The guard bites: each planted spelling is unreviewed, even in a listed file.
+FIRST_LISTED=$(home_baseline | head -1)
+for planted in \
+  'scripts/lib/routing-state.sh:41:RS_FILE="${CCT_ROUTING_STATE:-$HOME/.code-copilot-team/routing-state.json}"' \
+  'scripts/session_analytics/config.py:133:_USER_CONFIG = Path.home() / ".cct" / "session-analytics.json"' \
+  'scripts/x.sh:1:cat ~/.cct/providers.toml' \
+  'scripts/x.sh:2:FILE=~/.cct/providers.toml' \
+  'scripts/x.py:3:p = Path(os.environ["HOME"]) / ".cct" / "providers.toml"' \
+  'scripts/x.py:4:p = os.environ.get("HOME") + "/.cct/routing.toml"' \
+  'adapters/pi/runtime/x.ts:5:const p = path.join(process.env.HOME!, ".cct", "llms.toml");' \
+  'adapters/pi/runtime/x.ts:6:const p = path.join(os.homedir(), ".code-copilot-team");' \
+  'scripts/x.py:7:REG = os.path.expanduser("~/.cct/routing.toml")' \
+  'scripts/cct:999:cat ~/.cct/providers.toml' \
+  'scripts/lib/cct_doctor.py:999:p = Path.home() / ".cct" / "secret"' \
+  'adapters/pi/bin/pi-code:999:STATE="$HOME/.cct/state"' \
+  'scripts/lib/cct-home.sh:999:cat "$HOME/.code-copilot-team/providers.toml"' \
+  'scripts/session_analytics/home.py:999:LEGACY = Path.home() / ".code-copilot-team"' \
+  'scripts/x.sh:8:cat ~/.cct/providers.toml   # read the profile' \
+  'scripts/x.py:9:open(Path.home() / ".cct" / "llms.toml")  # the catalog' \
+  "${FIRST_LISTED%%	*}:999:${FIRST_LISTED#*	}"; do
+  rc=0; [[ -n "$(LC_ALL=C comm -23 <(printf '%s\n' "$HOME_CANDIDATES" "$planted" | home_occurrences) <(home_baseline))" ]] || rc=1
+  assert_ok "the home guard flags a planted spelling in ${planted%%:*}: ${planted#*:*:}" "$rc"
+done
+# The exactness check bites: a baseline entry with no occurrence is reported.
+rc=0; [[ -n "$(LC_ALL=C comm -13 <(home_occurrences <<<"$HOME_CANDIDATES") <(printf '%s\n' "$(home_baseline)" "scripts/x.sh	echo ~/.cct/removed" | LC_ALL=C sort))" ]] || rc=1
+assert_ok "the home guard reports a baseline entry that no longer occurs" "$rc"
+# ...while the resolver's constant (no home construction) and a comment are not candidates.
+PLANTED=$(printf '%s\n' 'scripts/lib/cct-home.sh:18:CCT_HOME_LEGACY_REL=".code-copilot-team"' 'scripts/setup.sh:3:# the legacy home is ~/.code-copilot-team' | home_occurrences)
 rc=0; [[ -z "$PLANTED" ]] || rc=1
-assert_ok "...while the resolver itself and a comment pass" "$rc"
+assert_ok "...while the resolver's name constant and a comment are not candidates" "$rc"
 
 if [[ "$PASS" -ne "$TEST_SHARED_STRUCTURE_EXPECTED_PASS" ]]; then
   echo "  FAIL: assertion-count drift (expected $TEST_SHARED_STRUCTURE_EXPECTED_PASS, got $PASS)"

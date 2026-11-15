@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # cct-home.sh — the one place that knows where CCT keeps a user's files (#411).
 #
-# The home is ${CCT_HOME:-~/.cct}. Through the 2.1.x line a file that is
-# absent from the home but present in the legacy home ~/.code-copilot-team
-# is read from there (a read-only fallback); the first 2.2 change removes
+# The home is ${CCT_HOME:-~/.cct}. Through the 2.1.x line a top-level entry
+# that is absent from the home but present in the legacy home
+# ~/.code-copilot-team is served from there, reads and writes alike, so a
+# directory is never split between the two; the first 2.2 change removes
 # the fallback. Nothing here moves a file: `cct home migrate` is the only
 # mover, and it never overwrites.
 #
@@ -15,20 +16,21 @@
 
 # >>> cct-home resolver (verbatim copies: adapters/claude-code/.claude/hooks/harness-stamp.sh, adapters/claude-code/claude-code, adapters/pi/bin/pi-code)
 CCT_HOME_DEFAULT_REL=".cct"
-CCT_HOME_LEGACY_REL=".code-copilot-team"   # read-only fallback through 2.1.x; removed in 2.2
+CCT_HOME_LEGACY_REL=".code-copilot-team"   # served as a fallback through 2.1.x; removed in 2.2
 
 cct_home() {  # -> the home directory (it may not exist yet)
   printf '%s\n' "${CCT_HOME:-$HOME/$CCT_HOME_DEFAULT_REL}"
 }
 
-cct_home_path() {  # <relative> -> the path to read, or to create under the home
-  local rel="$1" new legacy
-  new="$(cct_home)/$rel"
-  if [[ -n "${CCT_HOME:-}" ]]; then printf '%s\n' "$new"; return 0; fi
-  if [[ -e "$new" ]]; then printf '%s\n' "$new"; return 0; fi
-  legacy="$HOME/$CCT_HOME_LEGACY_REL/$rel"
-  if [[ -e "$legacy" ]]; then printf '%s\n' "$legacy"; return 0; fi
-  printf '%s\n' "$new"
+cct_home_path() {  # <relative> -> the path to read, write, or create
+  # The TOP-LEVEL ENTRY decides the home, never the full path: pi/audit.log
+  # goes wherever pi/ lives, so a first write can never create ~/.cct/pi and
+  # shadow a legacy pi/ that holds everything else.
+  local rel="$1" entry="${1%%/*}"
+  if [[ -z "${CCT_HOME:-}" && ! -e "$(cct_home)/$entry" && -e "$HOME/$CCT_HOME_LEGACY_REL/$entry" ]]; then
+    printf '%s\n' "$HOME/$CCT_HOME_LEGACY_REL/$rel"; return 0
+  fi
+  printf '%s\n' "$(cct_home)/$rel"
 }
 
 cct_home_legacy_hits() {  # -> entries still served from the legacy home, one per line

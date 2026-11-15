@@ -88,19 +88,24 @@ configuration from its own repository.
   commands print the legacy name on purpose (`cct home`, `cct doctor`,
   and the `cct` help for `home`). The structure guard's allow-list is
   exactly this set.
-- **FR-3 Precedence and fallback.** `CCT_HOME` set: that directory,
-  no fallback. Otherwise `~/.cct/<relative>` when it exists; otherwise
-  `~/.code-copilot-team/<relative>` when it exists (the legacy
-  fallback, read only); otherwise `~/.cct/<relative>` as the path to
-  create. A per-file override that exists today (`CCT_PROVIDER_PROFILE`,
-  `CCT_ROUTING_REGISTRY`, `CCT_ROUTING_STATE`,
+- **FR-3 Precedence and fallback.** The top-level entry of a relative
+  path (its first segment: `providers.toml`, or `pi` for `pi/audit.log`)
+  decides the home, never the full path. `CCT_HOME` set: that
+  directory, no fallback. Otherwise, through 2.1.x, the legacy
+  `~/.code-copilot-team/<relative>` when the entry exists in the legacy
+  home and not in `~/.cct`; else `~/.cct/<relative>`. The fallback
+  serves reads and writes alike, so a directory is never split between
+  the two homes. A per-file override that exists today
+  (`CCT_PROVIDER_PROFILE`, `CCT_ROUTING_REGISTRY`, `CCT_ROUTING_STATE`,
   `CCT_ROUTING_PROBE_LEDGER`, `CCT_HARNESS_STAMPS`) keeps its meaning
-  and wins over the home.
-- **FR-4 Writes go to the new home.** A tool that creates a file
-  creates it under `~/.cct/`; a tool that rewrites a file it found
-  through the fallback rewrites it in place and the doctor keeps
-  reporting it, so a half-migrated state is visible, never silently
-  completed.
+  and wins over the home. (Amended 2026-11-15; the reason is in
+  `origin-alignment-2026-11-15-1500.md`.)
+- **FR-4 Where writes land.** A new top-level entry is created under
+  `~/.cct/`. A write inside an entry the legacy home still serves,
+  whether it rewrites an existing file or creates a new child such as
+  `pi/audit.log` under a legacy `pi/`, lands in that legacy entry, and
+  the doctor keeps reporting the entry, so a half-migrated state is
+  visible, never silently completed and never split.
 - **FR-5 Nothing moves silently.** No setup, launcher or tool moves a
   file between homes on its own. `cct home migrate` is the one mover:
   it moves each legacy entry to `~/.cct/` when the target is absent,
@@ -127,6 +132,9 @@ configuration from its own repository.
   tracked code file outside the three resolvers spells
   `.code-copilot-team` or `~/.cct` as a path; docs, CHANGELOG, specs
   and fixtures that assert the legacy fallback are listed exceptions.
+  Display-only occurrences in code (help, messages, docstrings, Studio
+  copy) are listed one by one in `tests/fixtures/home-guard/baseline.txt`
+  and compared as a multiset, so any new occurrence needs review.
 - **FR-10 Docs and generated artifacts.** Every doc, template header,
   schema description, generated reference and golden fixture says
   `~/.cct/`; one page, `docs/cct-home.md`, states the home, the
@@ -161,7 +169,7 @@ configuration from its own repository.
 | Entity | Identity | Notes |
 |---|---|---|
 | home | `${CCT_HOME:-~/.cct}` | one per user |
-| legacy home | `~/.code-copilot-team` | read-only fallback through 2.1.x |
+| legacy home | `~/.code-copilot-team` | fallback through 2.1.x, per top-level entry, reads and writes |
 | resolver | one per language | the only code that spells either name |
 | `cct home` | CLI | show; `migrate` moves, never overwrites |
 | doctor Home section | `cct doctor` | per-file provenance, migrate hint |

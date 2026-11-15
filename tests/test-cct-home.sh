@@ -63,6 +63,13 @@ assert_eq "CCT_HOME set: that directory, even when the legacy home has the file"
 assert_eq "CCT_HOME set: the home is that directory" "/srv/cct" "$(HOME=$H CCT_HOME=/srv/cct bash -c 'source "'"$REPO_DIR"'/scripts/lib/cct-home.sh"; cct_home')"
 mkdir -p "$H/.code-copilot-team/pi"
 assert_eq "a directory resolves like a file (pi/)" "$H/.code-copilot-team/pi" "$(HOME=$H CCT_HOME= bash -c 'source "'"$REPO_DIR"'/scripts/lib/cct-home.sh"; cct_home_path pi')"
+# The top-level entry decides: a new file inside a legacy-served directory goes
+# into that directory, so a first write never creates ~/.cct/pi to shadow it.
+assert_eq "a nested path absent everywhere follows its legacy directory (pi/audit.log)" "$H/.code-copilot-team/pi/audit.log" "$(HOME=$H CCT_HOME= bash -c 'source "'"$REPO_DIR"'/scripts/lib/cct-home.sh"; cct_home_path pi/audit.log')"
+assert_eq "...and the home's pi/ is never created by resolving it" "no" "$([[ -e $H/.cct/pi ]] && echo yes || echo no)"
+mkdir -p "$H/.cct/pi"
+assert_eq "once the home has the directory, nested paths go there" "$H/.cct/pi/audit.log" "$(HOME=$H CCT_HOME= bash -c 'source "'"$REPO_DIR"'/scripts/lib/cct-home.sh"; cct_home_path pi/audit.log')"
+rmdir "$H/.cct/pi"
 
 echo "=== resolver: legacy hits ==="
 assert_eq "entries only in the legacy home are reported" "pi" "$(HOME=$H CCT_HOME= bash -c 'source "'"$REPO_DIR"'/scripts/lib/cct-home.sh"; cct_home_legacy_hits' | tr '\n' ' ' | sed 's/ $//')"

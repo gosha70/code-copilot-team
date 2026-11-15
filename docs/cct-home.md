@@ -43,10 +43,12 @@ reader applies one rule, in this order:
 
 1. `CCT_HOME` set: `$CCT_HOME/<entry>`, no fallback.
 2. `~/.cct/<entry>` exists: that.
-3. `~/.code-copilot-team/<entry>` exists: that (read-only fallback).
+3. `~/.code-copilot-team/<entry>` exists: that (the fallback; reads and writes both go there).
 4. Otherwise `~/.cct/<entry>` is where the entry is created.
 
-The fallback is per entry, so a half-migrated home still works, and the home
+`<entry>` is the top-level name: `pi/audit.log` goes wherever `pi/` lives, so a
+first write never creates a `~/.cct/pi` that would shadow a legacy `pi/`. The
+fallback is per entry, so a half-migrated home still works, and the home
 always wins when both have an entry. The rule lives in three resolvers,
 `scripts/lib/cct-home.sh`, `scripts/session_analytics/home.py` and
 `adapters/pi/runtime/config/home.ts`; installed scripts that run without a

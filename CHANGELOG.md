@@ -15,8 +15,9 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 - **One harness home: `~/.cct`.** Every reader in bash, Python and
   TypeScript resolves a user file through one rule,
   `${CCT_HOME:-~/.cct}/<entry>`, with `CCT_HOME` as the one override.
-  Through the 2.1.x line an entry absent from `~/.cct` but present in the
-  legacy `~/.code-copilot-team` is read from there; `cct doctor` and
+  Through the 2.1.x line a top-level entry absent from `~/.cct` but present
+  in the legacy `~/.code-copilot-team` is served from there, reads and
+  writes alike, so a directory is never split between the homes; `cct doctor` and
   `setup.sh` list what is still served that way, and `cct home migrate`
   (`--dry-run` to preview) moves it, never overwriting and never deleting.
   **2.2 removes the fallback**: a legacy file is then not found and the

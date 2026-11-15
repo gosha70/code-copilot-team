@@ -1,0 +1,29 @@
+# Home-guard baseline (#411 FR-9), read by tests/test-shared-structure.sh.
+# One line per occurrence: <file><TAB><trimmed line>. Compared as a multiset.
+# RULE: list only text a person reads (help, messages, docstrings, UI copy).
+# Never list a path the code reads, writes, creates or passes on: such a path
+# must go through scripts/lib/cct-home.sh, session_analytics/home.py or
+# adapters/pi/runtime/config/home.ts instead.
+adapters/pi/runtime/config/loader.ts	globalDir: string; // the CCT home: ${CCT_HOME:-~/.cct} (#411), resolved by the caller
+scripts/cct	home            Where CCT keeps this user's files (${CCT_HOME:-~/.cct}) and
+scripts/cct	what is still read from the legacy ~/.code-copilot-team:
+scripts/lib/analytics_layers.py	defaults.json  <  ~/.cct/session-analytics.json  <  .env  <  environment
+scripts/lib/cct_config.py	"source": "~/.cct/providers.toml",
+scripts/lib/cct_config.py	"source": "~/.cct/session-analytics.json",
+scripts/lib/cct_doctor.py	"""Where this user's files live (#411): ${CCT_HOME:-~/.cct}, and what is
+scripts/lib/cct_doctor.py	still read from the legacy ~/.code-copilot-team through the fallback."""
+scripts/lib/config_reference.py	Layered: `config_data/defaults.json`, then `~/.cct/session-analytics.json`,
+scripts/lib/config_reference.py	return (f"""## Session analytics — `~/.cct/session-analytics.json` and the environment
+scripts/lib/config_reference.py	return (f"""## `~/.cct/providers.toml`
+scripts/providers-health.sh	echo "Default profile: ~/.cct/providers.toml"
+scripts/routing-cli.sh	options: --registry <path> (default ~/.cct/routing.toml)
+scripts/session_analytics/api/server.py	continue          # hidden clutter, but keep ~/.cct
+scripts/session_analytics/config.py	"""~/.cct/session-analytics.json, or the legacy home's copy while the
+scripts/session_analytics/config_data/defaults.json	"block (or override it in ~/.cct/session-analytics.json) as list prices",
+scripts/session_analytics/home.py	The home is ``${CCT_HOME:-~/.cct}``. Through the 2.1.x line a top-level
+scripts/session_analytics/home.py	``~/.code-copilot-team`` is served from there, reads and writes alike, so a
+scripts/setup.sh	echo "  --pi              Install Pi adapter (pi-code + runtime) to ~/.cct/pi/"
+scripts/validate-automation-config.sh	violation "routing.$k: a repository cannot DEFINE execution profiles — repo configuration narrows user routing authority, never creates it (profiles live in ~/.cct/routing.toml)" ;;
+studio/app/routing/page.tsx	cp shared/templates/routing/routing.toml.example ~/.cct/routing.toml
+studio/app/routing/page.tsx	{`mkdir -p ~/.cct
+studio/app/settings/page.tsx	placeholder: "~/.cct",

@@ -48,6 +48,18 @@ test("a legacy-only entry is read from the legacy home; others still go to the h
   });
 });
 
+test("a nested path follows its top-level entry, never splitting a directory", () => {
+  withHome((tmp) => {
+    // A legacy pi/ and no pi/audit.log anywhere: the audit log goes into the
+    // legacy pi/, never into a new ~/.cct/pi that would shadow it.
+    fs.mkdirSync(path.join(tmp, HOME_LEGACY_REL, "pi"), { recursive: true });
+    assert.equal(cctHomePath(path.join("pi", "audit.log")), path.join(tmp, HOME_LEGACY_REL, "pi", "audit.log"));
+    assert.equal(fs.existsSync(path.join(tmp, HOME_DEFAULT_REL, "pi")), false);
+    fs.mkdirSync(path.join(tmp, HOME_DEFAULT_REL, "pi"), { recursive: true });
+    assert.equal(cctHomePath(path.join("pi", "audit.log")), path.join(tmp, HOME_DEFAULT_REL, "pi", "audit.log"));
+  });
+});
+
 test("the home wins when both have the entry", () => {
   withHome((tmp) => {
     for (const d of [HOME_DEFAULT_REL, HOME_LEGACY_REL]) {

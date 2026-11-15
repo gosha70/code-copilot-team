@@ -30,6 +30,15 @@ class TheHomeResolver(unittest.TestCase):
         # ...and an entry the legacy home lacks is still created under the home.
         self.assertEqual(H.cct_home_path("routing.toml"), self.tmp / ".cct" / "routing.toml")
 
+    def test_a_nested_path_follows_its_top_level_entry(self) -> None:
+        # A legacy pi/ and no pi/audit.log anywhere: the log goes into the
+        # legacy pi/, never into a new ~/.cct/pi that would shadow it.
+        (self.tmp / ".code-copilot-team" / "pi").mkdir(parents=True)
+        self.assertEqual(H.cct_home_path("pi/audit.log"), self.tmp / ".code-copilot-team" / "pi" / "audit.log")
+        self.assertFalse((self.tmp / ".cct" / "pi").exists())
+        (self.tmp / ".cct" / "pi").mkdir(parents=True)
+        self.assertEqual(H.cct_home_path("pi/audit.log"), self.tmp / ".cct" / "pi" / "audit.log")
+
     def test_the_home_wins_when_both_have_the_entry(self) -> None:
         for d in (".cct", ".code-copilot-team"):
             (self.tmp / d).mkdir()
