@@ -9,11 +9,17 @@ if [[ ! -f "$RV_LIB_DIR/lib/review-verdict.sh" ]]; then
 fi
 # shellcheck source=lib/review-verdict.sh
 source "$RV_LIB_DIR/lib/review-verdict.sh"
+if [[ ! -f "$RV_LIB_DIR/lib/cct-home.sh" ]]; then
+    echo "Error: missing $RV_LIB_DIR/lib/cct-home.sh (the CCT home resolver, #411)" >&2
+    exit 1
+fi
+# shellcheck source=lib/cct-home.sh
+source "$RV_LIB_DIR/lib/cct-home.sh"
 
 # peer-review-runner.sh — Executes peer provider review and writes collaboration artifact
 #
 # Reads the pending marker JSON, resolves the peer provider from the global
-# profile (~/.code-copilot-team/providers.toml), executes the provider's
+# profile (~/.cct/providers.toml), executes the provider's
 # review command, and writes the collaboration artifact under specs/.
 #
 # Usage: peer-review-runner.sh <pending-marker-path>
@@ -42,7 +48,7 @@ fi
 
 # ── Configuration ─────────────────────────────────────────────
 
-PROFILE="${CCT_PROVIDER_PROFILE:-$HOME/.code-copilot-team/providers.toml}"
+PROFILE="${CCT_PROVIDER_PROFILE:-$(cct_home_path providers.toml)}"
 
 if [[ ! -f "$PROFILE" ]]; then
     echo "Error: Provider profile not found: $PROFILE" >&2

@@ -3,7 +3,7 @@
 # increment B of #109; plan decision 4 + the frozen crash-ordering
 # contract of decision 5).
 #
-# Owns ~/.code-copilot-team/routing-state.json (override:
+# Owns ~/.cct/routing-state.json (override:
 # CCT_ROUTING_STATE — the same variable increment A's read-only
 # `cct routing status` honors). Properties this file guarantees:
 #
@@ -38,7 +38,9 @@
 #
 # bash 3.2; jq only (no new dependency).
 
-RS_FILE="${CCT_ROUTING_STATE:-$HOME/.code-copilot-team/routing-state.json}"
+# shellcheck source=cct-home.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cct-home.sh"   # the CCT home (#411)
+RS_FILE="${CCT_ROUTING_STATE:-$(cct_home_path routing-state.json)}"
 RS_LOCK_STALE_SEC="${CCT_ROUTING_LOCK_STALE_SEC:-60}"
 RS_TICK_LOCK="${CCT_ROUTING_TICK_LOCK:-${RS_FILE}.tick.lock}"
 RS_TICK_LOCK_HELD=0

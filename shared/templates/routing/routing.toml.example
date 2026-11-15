@@ -1,5 +1,5 @@
 # routing.toml — execution-profile registry for CCT build routing
-# (#109 increment A). Copy to ~/.code-copilot-team/routing.toml.
+# (#109 increment A). Copy to ~/.cct/routing.toml.
 #
 # This file accepts ONLY the TOML subset CCT implements: [policy],
 # [route_classes.<name>], [[profiles]] tables; key = value with basic

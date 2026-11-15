@@ -9,6 +9,7 @@
 #   cct list [--write]     browse every feature, slash command, skill, and capability
 #   cct doctor [...]       is this machine ready? tools, providers, adapters
 #   cct config <...>       validate the configuration, or explain one key
+#   cct home [migrate]     where CCT keeps this user's files; move a legacy home
 #   cct help               show this help
 set -euo pipefail
 
@@ -61,6 +62,11 @@ COMMANDS
                     cct config explain <key>            what it does, its default,
                                                         the value in effect, who owns it
                     cct config explain --list           every documented key
+  home            Where CCT keeps this user's files (${CCT_HOME:-~/.cct}) and
+                  what is still read from the legacy ~/.code-copilot-team:
+                    cct home                     show the home and any legacy entries
+                    cct home migrate             move legacy entries in; never overwrites
+                    cct home migrate --dry-run   preview the move
   help            Show this help.
 
 EXAMPLES
@@ -122,6 +128,9 @@ case "$cmd" in
   config)
     exec python3 "$SCRIPT_DIR/lib/cct_config.py" "$@"
     ;;
+  home)
+    exec bash "$SCRIPT_DIR/cct-home.sh" "$@"
+    ;;
   help|-h|--help) usage ;;
-  *) echo "cct: unknown command '$cmd'" >&2; echo "Did you mean: features, list, routing, doctor, config, start, help?" >&2; usage >&2; exit 2 ;;
+  *) echo "cct: unknown command '$cmd'" >&2; echo "Did you mean: features, list, routing, doctor, config, home, start, help?" >&2; usage >&2; exit 2 ;;
 esac

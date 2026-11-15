@@ -18,7 +18,7 @@ Options:
 
 ### 2. Configure Providers
 
-Providers are configured in `~/.code-copilot-team/providers.toml`. Run setup to create the default profile:
+Providers are configured in `~/.cct/providers.toml`. Run setup to create the default profile:
 
 ```bash
 bash adapters/claude-code/setup.sh

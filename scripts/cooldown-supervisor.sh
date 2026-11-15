@@ -30,7 +30,7 @@
 #     --on-incomplete <relaunch|park>  clean exit w/ tasks left (default: park)
 #     --routing                EXPLICIT opt-in to Tier-1 profile failover
 #                              (#251, increment B of #109): requires a
-#                              validating ~/.code-copilot-team/routing.toml
+#                              validating ~/.cct/routing.toml
 #                              and an effective-enabled policy, else REFUSES
 #                              with guidance. Without this flag, behavior is
 #                              unchanged — configuration existing is never
@@ -67,6 +67,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/supervisor-defaults.sh"
+# shellcheck source=lib/cct-home.sh
+source "$SCRIPT_DIR/lib/cct-home.sh"   # the CCT home (#411)
 
 err()  { echo "[$PROG] ERROR: $*" >&2; }
 info() { echo "[$PROG] $*"; }
@@ -371,7 +373,7 @@ if [[ "$ROUTING" == "1" ]]; then
   # shellcheck source=/dev/null
   source "$SCRIPT_DIR/lib/routing-select.sh"   # sources state + actions
 
-  RT_REGISTRY="${CCT_ROUTING_REGISTRY:-$HOME/.code-copilot-team/routing.toml}"
+  RT_REGISTRY="${CCT_ROUTING_REGISTRY:-$(cct_home_path routing.toml)}"
   if [[ ! -r "$RT_REGISTRY" ]]; then
     err "--routing requires a registry at $RT_REGISTRY — none found."
     err "Copy shared/templates/routing/routing.toml.example there, or run without --routing."
@@ -705,7 +707,7 @@ rt_reviewer_independence() {  # <profile-json>
   # independence=unevaluable so downstream evidence can never claim an
   # independent review occurred; only a POSITIVE collision blocks.
   local pj="$1" providers subject reviewer rmodel bmodel rprov bprov bid
-  providers="${CCT_PROVIDERS_PROFILE:-$HOME/.code-copilot-team/providers.toml}"
+  providers="${CCT_PROVIDERS_PROFILE:-$(cct_home_path providers.toml)}"
   bid=$(jq -r '.id' <<< "$pj")
   if [[ ! -f "$providers" ]]; then
     journal "routing_reviewer_independence" "independence=unevaluable reason=no_providers_profile detail='no providers profile at $providers — the driver review machinery still governs'"

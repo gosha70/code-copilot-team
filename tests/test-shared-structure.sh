@@ -1066,7 +1066,7 @@ assert_ok "test-counts has TEST_REVIEW_LOOP_EXPECTED_PASS numeric value" "$rc"
 COUNT_VARS=$(grep -Ec '^TEST_[A-Z_]+_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env")
 # 15 as of #239 C3 T4 (test-ui-harness.sh). Bump deliberately when a
 # suite is added, so a pin cannot go missing unnoticed.
-assert_eq "test-counts has exactly 27 expected-pass variables (the four wiki suites arrived with #384)" "27" "$COUNT_VARS"
+assert_eq "test-counts has exactly 28 expected-pass variables (the four wiki suites arrived with #384, cct-home with #411)" "28" "$COUNT_VARS"
 
 # ── #384 FR-10: assistant workflows keep their meaning after the engine swap ──
 # /promote-lesson stays a free-text, manual curator procedure that lints
@@ -2114,6 +2114,48 @@ assert_eq "the tape checker passes a tape whose commands work" "0" "$rc_good"
 assert_eq "it fails when a command in a pipeline breaks" "1" "$rc_broken"
 assert_eq "it fails when the output no longer contains what the tape expects" "1" "$rc_changed"
 assert_eq "it refuses a Type line it cannot parse rather than skipping its command" "1" "$rc_unparsed"
+
+# ══════════════════════════════════════════════════════════════
+# The CCT home has one resolver per language (#411)
+# ══════════════════════════════════════════════════════════════
+# ${CCT_HOME:-~/.cct} with a read-only fallback to ~/.code-copilot-team is
+# decided in scripts/lib/cct-home.sh, session_analytics/home.py and
+# adapters/pi/runtime/config/home.ts, and nowhere else. Installed scripts
+# that run without a checkout carry the bash block verbatim; any other code
+# that spells either home as a path would hide the move from the fallback
+# and the doctor.
+echo "=== CCT home: one resolver, verbatim copies, no stray spelling ==="
+HOME_LIB="$REPO_DIR/scripts/lib/cct-home.sh"
+home_block() { awk '/^# >>> cct-home resolver/{f=1} f{print} /^# <<< cct-home resolver/{f=0}' "$1"; }
+HOME_BLOCK=$(home_block "$HOME_LIB")
+rc=0; [[ -n "$HOME_BLOCK" ]] || rc=1
+assert_ok "scripts/lib/cct-home.sh has the marked resolver block" "$rc"
+for copy in adapters/claude-code/.claude/hooks/harness-stamp.sh adapters/claude-code/claude-code adapters/pi/bin/pi-code; do
+  rc=0; [[ "$(home_block "$REPO_DIR/$copy")" == "$HOME_BLOCK" ]] || rc=1
+  assert_ok "$copy carries the resolver block verbatim" "$rc"
+done
+# The predicate: a code line (not a comment) that spells a home as a path.
+# Allowed files are the three resolvers, their verbatim copies, and the two
+# commands that print the legacy name on purpose (cct home, cct doctor).
+HOME_ALLOWED='^(scripts/lib/cct-home\.sh|scripts/session_analytics/home\.py|adapters/pi/runtime/config/home\.ts|adapters/claude-code/\.claude/hooks/harness-stamp\.sh|adapters/claude-code/claude-code|adapters/pi/bin/pi-code|scripts/cct-home\.sh|scripts/lib/cct_doctor\.py):'
+home_stray_lines() {  # stdin: "<file>:<line>:<text>" lines → the offending ones
+  grep -E '(\$HOME|HOME\}|home\(\)|homedir\(\)|~)[[:space:]/\\"'"'"']*\.(code-copilot-team|cct)\b' \
+    | grep -vE "$HOME_ALLOWED" \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(#|//|\*|/\*)' || true
+}
+STRAY=$(cd "$REPO_DIR" && git grep -n -E '\.(code-copilot-team|cct)\b' -- scripts adapters shared/scripts studio ':!*.md' ':!*/tests/*' ':!tests' 2>/dev/null | home_stray_lines)
+rc=0; [[ -z "$STRAY" ]] || rc=1
+assert_ok "no code outside the resolvers spells a CCT home as a path${STRAY:+ (found: $(echo "$STRAY" | cut -d: -f1 | sort -u | tr '\n' ' '))}" "$rc"
+# The predicate bites: a planted spelling is caught, an allowed file and a comment are not.
+PLANTED=$(printf '%s\n' 'scripts/lib/routing-state.sh:41:RS_FILE="${CCT_ROUTING_STATE:-$HOME/.code-copilot-team/routing-state.json}"' | home_stray_lines)
+rc=0; [[ -n "$PLANTED" ]] || rc=1
+assert_ok "the home guard catches a planted \$HOME/.code-copilot-team spelling" "$rc"
+PLANTED=$(printf '%s\n' 'scripts/session_analytics/config.py:133:_USER_CONFIG = Path.home() / ".cct" / "session-analytics.json"' | home_stray_lines)
+rc=0; [[ -n "$PLANTED" ]] || rc=1
+assert_ok "...and a planted Path.home() / \".cct\" spelling" "$rc"
+PLANTED=$(printf '%s\n' 'scripts/lib/cct-home.sh:18:CCT_HOME_LEGACY_REL=".code-copilot-team"' 'scripts/setup.sh:3:# the legacy home is ~/.code-copilot-team' | home_stray_lines)
+rc=0; [[ -z "$PLANTED" ]] || rc=1
+assert_ok "...while the resolver itself and a comment pass" "$rc"
 
 if [[ "$PASS" -ne "$TEST_SHARED_STRUCTURE_EXPECTED_PASS" ]]; then
   echo "  FAIL: assertion-count drift (expected $TEST_SHARED_STRUCTURE_EXPECTED_PASS, got $PASS)"

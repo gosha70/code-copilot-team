@@ -43,10 +43,42 @@ SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null) || exit 0
 CWD=$(echo "$INPUT" | jq -r '.cwd // empty' 2>/dev/null) || CWD=""
 
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-CCT_DIR="$HOME/.cct"
-LEDGER="${CCT_HARNESS_STAMPS:-$CCT_DIR/harness-stamps.jsonl}"
-HARNESS_JSON="$CCT_DIR/harness.json"
-PROFILE="${CCT_PROVIDER_PROFILE:-$HOME/.code-copilot-team/providers.toml}"
+# The CCT home (#411): ${CCT_HOME:-~/.cct}, with a read-only fallback to the
+# legacy ~/.code-copilot-team through 2.1.x. This hook runs from its installed
+# copy with no checkout, so it carries the resolver verbatim.
+# >>> cct-home resolver (verbatim copies: adapters/claude-code/.claude/hooks/harness-stamp.sh, adapters/claude-code/claude-code, adapters/pi/bin/pi-code)
+CCT_HOME_DEFAULT_REL=".cct"
+CCT_HOME_LEGACY_REL=".code-copilot-team"   # read-only fallback through 2.1.x; removed in 2.2
+
+cct_home() {  # -> the home directory (it may not exist yet)
+  printf '%s\n' "${CCT_HOME:-$HOME/$CCT_HOME_DEFAULT_REL}"
+}
+
+cct_home_path() {  # <relative> -> the path to read, or to create under the home
+  local rel="$1" new legacy
+  new="$(cct_home)/$rel"
+  if [[ -n "${CCT_HOME:-}" ]]; then printf '%s\n' "$new"; return 0; fi
+  if [[ -e "$new" ]]; then printf '%s\n' "$new"; return 0; fi
+  legacy="$HOME/$CCT_HOME_LEGACY_REL/$rel"
+  if [[ -e "$legacy" ]]; then printf '%s\n' "$legacy"; return 0; fi
+  printf '%s\n' "$new"
+}
+
+cct_home_legacy_hits() {  # -> entries still served from the legacy home, one per line
+  [[ -z "${CCT_HOME:-}" && -d "$HOME/$CCT_HOME_LEGACY_REL" ]] || return 0
+  local entry name
+  for entry in "$HOME/$CCT_HOME_LEGACY_REL"/* "$HOME/$CCT_HOME_LEGACY_REL"/.[!.]*; do
+    [[ -e "$entry" ]] || continue
+    name="${entry##*/}"
+    [[ -e "$HOME/$CCT_HOME_DEFAULT_REL/$name" ]] || printf '%s\n' "$name"
+  done
+  return 0
+}
+# <<< cct-home resolver
+CCT_DIR="$(cct_home)"
+LEDGER="${CCT_HARNESS_STAMPS:-$(cct_home_path harness-stamps.jsonl)}"
+HARNESS_JSON="$(cct_home_path harness.json)"
+PROFILE="${CCT_PROVIDER_PROFILE:-$(cct_home_path providers.toml)}"
 
 # --- instructions digest: sorted relative path + bytes of each file ---
 # The set is exactly what setup.sh installs. Sorting by path keeps the

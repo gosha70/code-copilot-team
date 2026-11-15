@@ -40,6 +40,8 @@ code-copilot-team/
 │   ├── peer-review-runner.sh            Peer review execution engine
 │   ├── auto-build-loop.sh               Autonomous build driver (advisory|pr|merge; unattended policy core)
 │   ├── providers-health.sh              Peer provider availability diagnostics
+│   ├── cct-home.sh                      `cct home [show|migrate]`: the one mover between the legacy home and ~/.cct (#411)
+│   ├── lib/cct-home.sh                  The CCT home resolver, ${CCT_HOME:-~/.cct} with the 2.1.x legacy fallback (#411)
 │   ├── setup-reviewer.sh                Copilot independent-reviewer installer (Codex first)
 │   ├── setup-wiki.sh                    Managed wiki-studio install into .venv from the hashed lock (#384)
 │   ├── wiki-requirements.txt            wiki-studio==0.9.0 hash lock + provenance (#384)
@@ -48,12 +50,12 @@ code-copilot-team/
 ├── tests/
 │   ├── test-hooks.sh                    196 hook tests
 │   ├── test-generate.sh                 322 generation + adapter tests
-│   ├── test-shared-structure.sh         885 structure + content tests
-│   ├── test-sync.sh                     126 sync + init metadata tests
+│   ├── test-shared-structure.sh         893 structure + content tests
+│   ├── test-sync.sh                     129 sync + init metadata tests
 │   ├── test-litellm-proxy-deps.sh       13 benchmark proxy pin tests (+11 with --online)
 │   ├── test-coverage-parse.sh           46 coverage parser + safety tests
 │   ├── test-verification-preset.sh      43 preset resolution tests
-│   ├── test-peer-review.sh             94 peer-review runner tests
+│   ├── test-peer-review.sh             95 peer-review runner tests
 │   ├── test-review-loop.sh           237 review loop integration tests
 │   ├── test-setup-reviewer.sh           42 copilot reviewer installer tests
 │   ├── test-auto-build-loop.sh        1381 auto-build driver tests
@@ -66,6 +68,7 @@ code-copilot-team/
 │   ├── test-routing-recovery.sh       375 probe-state + timing + probe + tick-wake tests (#257 D)
 │   ├── test-pre-pr-check.sh           11 close-keyword audit tests (#408)
 │   ├── test-github-hardening.sh       14 hardening audit tests (classic + ruleset sources)
+│   ├── test-cct-home.sh               93 home resolver + `cct home` tests (#411)
 │   ├── test-wiki-setup.sh             54 managed wiki-studio install tests (#384)
 │   ├── test-wiki-launcher.sh          24 provenance-bound wiki launcher + alias tests (#384)
 │   ├── test-wiki-schema.sh            20 schema reconciliation + fingerprint tests (needs the managed .venv; #384)

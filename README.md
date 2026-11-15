@@ -111,7 +111,7 @@ provider profile and each installed adapter, and says which is missing. Then
 ### Your first peer review
 
 ```bash
-# Declare a reviewer in ~/.code-copilot-team/providers.toml, then prove it
+# Declare a reviewer in ~/.cct/providers.toml, then prove it
 # answers — the probe command:
 scripts/review-round-runner.sh . --probe --peer <name> --subject claude --out /tmp/probe.json
 jq '{provider, verdict, duration_sec, error}' /tmp/probe.json

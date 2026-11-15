@@ -30,6 +30,7 @@ import {
   redactedConfig,
 } from "./config/loader.ts";
 import type { LoadResult } from "./config/loader.ts";
+import { cctHomePath } from "./config/home.ts";
 import { BUILTIN_PROFILES } from "./config/profiles.ts";
 import {
   checkCommand,
@@ -164,7 +165,7 @@ function readDefaultProjectTrust(): string | null {
 
 function loadConfigForState(state: CctRuntimeState, cwd: string): void {
   state.config = loadLayeredConfig({
-    globalDir: process.env.CCT_HOME ?? path.join(os.homedir(), ".code-copilot-team"),
+    globalDir: path.dirname(cctHomePath("config.toml")),
     projectDir: cwd,
     trusted: state.trust === "trusted",
     profile: state.profile,
@@ -344,8 +345,7 @@ export default async function (pi: any): Promise<void> {
   // Resource dirs to search for the always-context bundle: the managed
   // install and a repo checkout, mirroring how the launcher finds the runtime.
   const resourceDirs = (): string[] => {
-    const home = process.env.CCT_HOME ?? path.join(os.homedir(), ".code-copilot-team");
-    const dirs = [path.join(home, "pi")];
+    const dirs = [cctHomePath("pi")];
     try {
       const here = path.dirname(new URL(import.meta.url).pathname);
       dirs.push(path.dirname(here)); // <adapter>/runtime -> <adapter>

@@ -43,6 +43,39 @@ BACKEND_CMUX="cmux"
 LAUNCHER_CONFIG="$HOME/.claude/launcher.json"
 SESSION_BACKEND="$BACKEND_AUTO"
 
+# The CCT home (#411): ${CCT_HOME:-~/.cct}, with a read-only fallback to the
+# legacy ~/.code-copilot-team through 2.1.x. The launcher runs from its
+# installed copy with no checkout, so it carries the resolver verbatim.
+# >>> cct-home resolver (verbatim copies: adapters/claude-code/.claude/hooks/harness-stamp.sh, adapters/claude-code/claude-code, adapters/pi/bin/pi-code)
+CCT_HOME_DEFAULT_REL=".cct"
+CCT_HOME_LEGACY_REL=".code-copilot-team"   # read-only fallback through 2.1.x; removed in 2.2
+
+cct_home() {  # -> the home directory (it may not exist yet)
+  printf '%s\n' "${CCT_HOME:-$HOME/$CCT_HOME_DEFAULT_REL}"
+}
+
+cct_home_path() {  # <relative> -> the path to read, or to create under the home
+  local rel="$1" new legacy
+  new="$(cct_home)/$rel"
+  if [[ -n "${CCT_HOME:-}" ]]; then printf '%s\n' "$new"; return 0; fi
+  if [[ -e "$new" ]]; then printf '%s\n' "$new"; return 0; fi
+  legacy="$HOME/$CCT_HOME_LEGACY_REL/$rel"
+  if [[ -e "$legacy" ]]; then printf '%s\n' "$legacy"; return 0; fi
+  printf '%s\n' "$new"
+}
+
+cct_home_legacy_hits() {  # -> entries still served from the legacy home, one per line
+  [[ -z "${CCT_HOME:-}" && -d "$HOME/$CCT_HOME_LEGACY_REL" ]] || return 0
+  local entry name
+  for entry in "$HOME/$CCT_HOME_LEGACY_REL"/* "$HOME/$CCT_HOME_LEGACY_REL"/.[!.]*; do
+    [[ -e "$entry" ]] || continue
+    name="${entry##*/}"
+    [[ -e "$HOME/$CCT_HOME_DEFAULT_REL/$name" ]] || printf '%s\n' "$name"
+  done
+  return 0
+}
+# <<< cct-home resolver
+
 # Force IPv4 DNS resolution order. Claude Code's Bun runtime prefers IPv6
 # but lacks Happy Eyeballs (RFC 8305) fallback, causing ECONNRESET on
 # networks with partial/broken IPv6. BUN_OPTIONS prepends CLI flags to
@@ -907,7 +940,8 @@ TMPLEOF
     if [[ -n "$LICENSE_TYPE" ]]; then
         local _year _company=""
         _year=$(date +%Y)
-        local _providers="$HOME/.code-copilot-team/providers.toml"
+        local _providers
+        _providers="$(cct_home_path providers.toml)"
         if [[ -f "$_providers" ]]; then
             _company=$(grep '^company[[:space:]]*=[[:space:]]*' "$_providers" \
                 | head -1 \

@@ -79,7 +79,15 @@ configuration from its own repository.
   `adapters/pi/runtime/config/home.ts` (`cctHome()`,
   `cctHomePath(relative)`). No other code spells either directory name;
   the three resolvers are the only places the legacy name appears in
-  code.
+  code. *Amended 2026-11-14 during the build:* three installed scripts
+  run without a checkout (`adapters/claude-code/.claude/hooks/harness-stamp.sh`,
+  `adapters/claude-code/claude-code`, `adapters/pi/bin/pi-code`) and so
+  carry a verbatim copy of the bash resolver block between
+  `# >>> cct-home resolver` / `# <<< cct-home resolver` markers; the
+  structure suite keeps every copy byte-identical to the lib. Two
+  commands print the legacy name on purpose (`cct home`, `cct doctor`,
+  and the `cct` help for `home`). The structure guard's allow-list is
+  exactly this set.
 - **FR-3 Precedence and fallback.** `CCT_HOME` set: that directory,
   no fallback. Otherwise `~/.cct/<relative>` when it exists; otherwise
   `~/.code-copilot-team/<relative>` when it exists (the legacy

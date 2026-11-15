@@ -161,6 +161,11 @@ jobs:
       - name: cct CLI tests
         run: bash tests/test-cct-cli.sh
 
+      # The CCT home resolver (${CCT_HOME:-~/.cct}, legacy fallback through
+      # 2.1.x) and `cct home migrate`, against throwaway HOMEs (#411).
+      - name: cct home tests
+        run: bash tests/test-cct-home.sh
+
       # pre-pr-check.sh audits a PR's commits, body and title for close
       # keywords; `--closes none` is the mode for a PR that closes nothing
       # (#408). The suite drives it against a throwaway repository.

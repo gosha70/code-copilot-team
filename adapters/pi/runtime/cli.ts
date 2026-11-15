@@ -14,7 +14,6 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 
 import {
@@ -31,6 +30,7 @@ import {
 } from "./agents/worktree-lifecycle.ts";
 import { readReport } from "./agents/team-commands.ts";
 import { resolveScrubPolicy, scrubEnv } from "./policy/env-scrub.ts";
+import { cctHomePath } from "./config/home.ts";
 
 export interface CliResult {
   out: string;
@@ -694,8 +694,7 @@ export function main(argv: string[]): CliResult {
   return runCli({
     argv,
     cwd: process.env.CCT_CLI_CWD ?? process.cwd(),
-    globalDir:
-      process.env.CCT_HOME ?? path.join(os.homedir(), ".code-copilot-team"),
+    globalDir: path.dirname(cctHomePath("config.toml")),
     runtimeEntry: process.env.CCT_RUNTIME_ENTRY ?? null,
   });
 }

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/gosha70/code-copilot-team/shared/schemas/providers.schema.json",
-  "title": "Provider profile (~/.code-copilot-team/providers.toml)",
+  "title": "Provider profile (~/.cct/providers.toml)",
   "description": "The peer-review and evaluator providers available on this machine, their default pairings, and the copyright name for generated files. Expressed as JSON Schema over the TOML document's structure: the readers are shell (scripts/review-round-runner.sh's toml_get, scripts/auto-build-loop.sh, adapters/claude-code/setup.sh), so this file is the contract of record and scripts/validate-providers-profile.sh enforces it. Only keys some reader actually consults appear here; the file holds the NAME of a key's environment variable, never the key itself.",
   "type": "object",
   "additionalProperties": false,

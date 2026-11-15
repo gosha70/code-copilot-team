@@ -42,6 +42,8 @@ set -uo pipefail
 #      CCT_AUTOBUILD_PROFILE, CCT_PROVIDER_PROFILE, CCT_REVIEW_* (passed through)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib/cct-home.sh
+source "$SCRIPT_DIR/lib/cct-home.sh"   # the CCT home (#411)
 
 # ── routed usage channel (#273, increment G of #109) ────────────────
 # The supervisor names the driver-owned evidence artifact via
@@ -2744,7 +2746,7 @@ verifier_gate() {
         #    conformance_command, and is healthy. Attended blockless runs
         #    reach here with a null evaluator — the requirement is frozen
         #    and unskippable, so it parks here rather than being ignored.
-        local ptoml="${CCT_PROVIDER_PROFILE:-$HOME/.code-copilot-team/providers.toml}"
+        local ptoml="${CCT_PROVIDER_PROFILE:-$(cct_home_path providers.toml)}"
         local ccmd chc
         if [[ -z "$evaluator" ]]; then
             hist=$(jq -n --argjson h "$hist" '$h + {provider_scope: "evaluator", evaluator: null}')
@@ -5736,7 +5738,7 @@ resume_parked() {
             if [[ "$pu_scope" == "evaluator" ]]; then
                 pu_eval=$(jq -r '.history.evaluator // empty' "$esc_file" 2>/dev/null || echo "")
                 [[ -n "$pu_eval" ]] || refuse_resume "this run's frozen contract requires runtime conformance but froze NO evaluator — a frozen contract cannot gain one; add verification.conformance and start a fresh run"
-                local pu_toml="${CCT_PROVIDER_PROFILE:-$HOME/.code-copilot-team/providers.toml}"
+                local pu_toml="${CCT_PROVIDER_PROFILE:-$(cct_home_path providers.toml)}"
                 grep -o '^\[providers\.[^]]*' "$pu_toml" 2>/dev/null | sed 's/^\[providers\.//' | grep -qxF "$pu_eval" \
                     || refuse_resume "frozen evaluator '$pu_eval' still does not resolve in $pu_toml — configure that exact provider, then --resume"
                 local pu_cmd pu_hc

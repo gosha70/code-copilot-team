@@ -35,7 +35,7 @@ defaults < profile chain < global < trusted project < trusted project-local < en
 
 | Layer | Path |
 |---|---|
-| global | `~/.code-copilot-team/config.toml` |
+| global | `~/.cct/config.toml` (the CCT home, `${CCT_HOME:-~/.cct}`; see `docs/cct-home.md`) |
 | project | `<repo>/.code-copilot-team/config.toml` |
 | project-local (gitignored) | `<repo>/.code-copilot-team/config.local.toml` |
 

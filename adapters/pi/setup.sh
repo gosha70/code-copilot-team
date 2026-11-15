@@ -2,10 +2,10 @@
 # setup.sh — Install the Code Copilot Team Pi adapter (ENFORCED mode)
 #
 # Installs:
-#   ~/.code-copilot-team/pi/runtime/      Enforcement runtime (authored)
-#   ~/.code-copilot-team/pi/resources/    Generated advisory resources
-#   ~/.code-copilot-team/pi/permissions/  Reused Claude permission profiles (T5.2)
-#   ~/.code-copilot-team/pi/compat.env    Pi version compatibility
+#   ~/.cct/pi/runtime/      Enforcement runtime (authored)   (the CCT home, #411;
+#   ~/.cct/pi/resources/    Generated advisory resources     an install still under
+#   ~/.cct/pi/permissions/  Reused Claude permission profiles the legacy
+#   ~/.cct/pi/compat.env    Pi version compatibility         ~/.code-copilot-team is found)
 #   ~/.local/bin/pi-code                  Launcher
 #
 # Usage:
@@ -25,8 +25,9 @@ REPO_DIR="$SCRIPT_DIR/../.."
 # Provider config: delegate --provider to the shared translator (T2.2).
 source "$REPO_DIR/shared/scripts/provider-setup.sh"
 if cct_handle_provider_flag "pi" "$@"; then exit 0; fi
-CCT_HOME="${CCT_HOME:-$HOME/.code-copilot-team}"
-MANAGED_DIR="$CCT_HOME/pi"
+# shellcheck source=../../scripts/lib/cct-home.sh
+source "$REPO_DIR/scripts/lib/cct-home.sh"   # the CCT home (#411)
+MANAGED_DIR="$(cct_home_path pi)"
 BIN_DIR="${CCT_BIN_DIR:-$HOME/.local/bin}"
 LAUNCHER_TARGET="$BIN_DIR/pi-code"
 

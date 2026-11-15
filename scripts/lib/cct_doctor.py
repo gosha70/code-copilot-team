@@ -22,6 +22,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cct_home  # noqa: E402 — the CCT home (#411)
+
 OK, WARN, BAD, SKIP = "ok", "warn", "fail", "skip"
 MARK = {OK: "✓", WARN: "!", BAD: "✗", SKIP: "-"}
 COLOR = {OK: "32", WARN: "33", BAD: "31", SKIP: "90"}
@@ -104,6 +107,24 @@ def check_tools(report: Report) -> None:
             report.add("Tools", tool, BAD if required else WARN, f"not installed — {why}")
 
 
+def check_home(report: Report) -> None:
+    """Where this user's files live (#411): ${CCT_HOME:-~/.cct}, and what is
+    still read from the legacy ~/.code-copilot-team through the fallback."""
+    home = cct_home.cct_home()
+    override = os.environ.get(cct_home.ENV_HOME)
+    report.add("Home", "home", OK, f"{home} ({'CCT_HOME' if override else 'default'})")
+    hits = cct_home.legacy_hits()
+    if not hits:
+        legacy = cct_home.legacy_home()
+        detail = "nothing left in the legacy home" if (not override and legacy.is_dir()) else "no legacy home"
+        report.add("Home", "legacy", OK, detail)
+        return
+    for name in hits:
+        report.add("Home", name, WARN,
+                   f"read from the legacy {cct_home.legacy_home()} (fallback ends in 2.2) — "
+                   f"run `cct home migrate`")
+
+
 SHIM_BAKED_LINE = re.compile(r'^CCT_REPO_DIR_DEFAULT="(?P<path>.*)"\s*$', re.MULTILINE)
 
 
@@ -169,7 +190,7 @@ def check_gateway(report: Report) -> None:
 
 
 def profile_path() -> Path:
-    return Path(os.environ.get("CCT_PROVIDER_PROFILE", Path.home() / ".code-copilot-team/providers.toml"))
+    return Path(os.environ.get("CCT_PROVIDER_PROFILE") or cct_home.cct_home_path("providers.toml"))
 
 
 WIKI_CHECK_LINE = re.compile(r"^wiki-studio expected (?P<expected>\S+): (?P<state>\S+) \((?P<python>.*)\)$", re.MULTILINE)
@@ -399,6 +420,7 @@ def main() -> None:
 
     if not args.adapter:
         check_tools(report)
+        check_home(report)
         check_shim(report)
         check_gateway(report)
         check_wiki(repo, report)

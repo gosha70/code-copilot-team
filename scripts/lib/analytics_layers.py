@@ -22,7 +22,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cct_home  # noqa: E402 — the CCT home (#411)
 
 #: A configuration key whose VALUE is a credential or can embed one.
 SENSITIVE = re.compile(r"(api_key|apikey|secret|token|password|passwd|credential|dsn)", re.I)
@@ -163,7 +167,7 @@ def resolve(key: str, repo: Path, *, environ: dict[str, str] | None = None) -> d
                 return {"value": value, "layer": f"{label} (${name})",
                         "variable": name, "source": source}
 
-    user_config = Path(environ.get("CCT_SA_USER_CONFIG", Path.home() / ".cct/session-analytics.json"))
+    user_config = Path(environ.get("CCT_SA_USER_CONFIG") or cct_home.cct_home_path("session-analytics.json"))
     if user_config.is_file():
         try:
             user = json.loads(user_config.read_text(encoding="utf-8"))
