@@ -143,7 +143,10 @@ configuration from its own repository.
   configuration values passed through a resolver only, are listed one
   by one in `tests/fixtures/home-guard/baseline.txt` and compared as a
   multiset, so a new occurrence fails until reviewed and a listed one
-  that no longer exists fails too.
+  that no longer exists fails too. The guard is best effort: a lookup
+  joined to either directory through a variable or constant (`home =
+  Path.home()` then `home / ".cct"`, or a new `DOT = ".cct"`), or split
+  inside a multi-line string, is not detected; review covers those.
 - **FR-10 Docs and generated artifacts.** Every doc, template header,
   schema description, generated reference and golden fixture says
   `~/.cct/`; one page, `docs/cct-home.md`, states the home, the

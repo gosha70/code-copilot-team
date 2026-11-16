@@ -2158,6 +2158,11 @@ done
 # added; a listed occurrence that no longer exists fails too, so the list
 # stays exact.
 #
+# Best effort, by decision (FR-9): a lookup joined to either directory
+# through a variable or constant (home = Path.home() then home / ".cct", or a
+# new DOT = ".cct"), or split inside a multi-line string, is not detected;
+# review covers those. Do not grow the guard to chase further shapes.
+#
 # No \b: macOS `git grep -E` treats \b as matching nothing, which made an
 # earlier draft scan zero lines and pass. The candidate count proves the scan
 # reads something.
@@ -2205,7 +2210,7 @@ assert_ok "the home guard's candidate scan reads lines (it is not a silent no-op
 HOME_ALL=$(home_all_occurrences)
 STRAY=$(LC_ALL=C comm -23 <(printf '%s\n' "$HOME_ALL" | sed '/^$/d') <(home_baseline))
 rc=0; [[ -z "$STRAY" ]] || rc=1
-assert_ok "no code outside the resolvers spells a CCT home beyond the reviewed baseline${STRAY:+ (unreviewed: $(cut -f1 <<<"$STRAY" | sort -u | tr '\n' ' '))}" "$rc"
+assert_ok "no detected CCT home spelling outside the resolvers is missing from the reviewed baseline${STRAY:+ (unreviewed: $(cut -f1 <<<"$STRAY" | sort -u | tr '\n' ' '))}" "$rc"
 GONE=$(LC_ALL=C comm -13 <(printf '%s\n' "$HOME_ALL" | sed '/^$/d') <(home_baseline))
 rc=0; [[ -z "$GONE" ]] || rc=1
 assert_ok "every baseline entry still occurs (the list is exact)${GONE:+ (stale: $(cut -f1 <<<"$GONE" | sort -u | tr '\n' ' '))}" "$rc"

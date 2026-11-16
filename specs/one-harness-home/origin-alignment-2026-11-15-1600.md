@@ -27,6 +27,11 @@ PR #456 at `df24199` and its follow-up:
   owner ruled must be closed without baselining per-project `.cct`
   segments.
 
+- **FR-9 limits** are stated: the guard is best effort; a lookup joined
+  to a directory through a variable or constant, or split inside a
+  multi-line string, is left to review. The owner's reviewer recommended
+  freezing the guard here rather than extending it again.
+
 Origin: issue #411 asks for one home, one override and no silent split
 or move. Every change above tightens the implementation toward that; none
 adds behaviour the issue did not ask for.
