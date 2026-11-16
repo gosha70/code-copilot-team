@@ -42,14 +42,17 @@ jobs:
     env:
       SA_DSN: "postgresql://cct:cct@localhost:5432/session_analytics"
       FIXTURE_ROOT: "scripts/session_analytics/tests/fixtures/claude_code"
-      # The CCT home for this job (#411): the steps write the analytics user
-      # config here and the resolver reads it back, so the override is
-      # exercised on every run.
-      CCT_HOME: "${{ runner.temp }}/cct-home"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # The CCT home for this job (#411): the steps write the analytics user
+      # config here and the resolver reads it back, so the override is
+      # exercised on every run. Set through GITHUB_ENV because the runner
+      # context (runner.temp) is not available in a job-level env block.
+      - name: Point CCT_HOME at a job-scoped directory
+        run: echo "CCT_HOME=$RUNNER_TEMP/cct-home" >> "$GITHUB_ENV"
 
       - name: Set up Python
         uses: actions/setup-python@v5
