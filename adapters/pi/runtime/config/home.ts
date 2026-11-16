@@ -27,6 +27,16 @@ export function cctHome(env: NodeJS.ProcessEnv = process.env): string {
   return override && override.length > 0 ? override : path.join(os.homedir(), HOME_DEFAULT_REL);
 }
 
+/** True if the entry exists, a dangling symlink included (no final-link follow). */
+function present(p: string): boolean {
+  try {
+    fs.lstatSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function legacyHome(): string {
   return path.join(os.homedir(), HOME_LEGACY_REL);
 }
@@ -36,12 +46,14 @@ export function legacyHome(): string {
  * CCT_HOME set: that directory, no fallback. Otherwise the TOP-LEVEL entry
  * (the first segment of `relative`) decides: the legacy home when that entry
  * exists only there, else the home. `pi/audit.log` therefore goes wherever
- * `pi/` lives and never splits the directory.
+ * `pi/` lives and never splits the directory. Presence does not follow a
+ * final symlink: a dangling home entry still selects the home rather than
+ * silently reviving a stale legacy copy.
  */
 export function cctHomePath(relative: string, env: NodeJS.ProcessEnv = process.env): string {
   const entry = relative.split(/[\\/]/)[0];
   const overridden = Boolean(env[ENV_HOME] && env[ENV_HOME]!.length > 0);
-  if (!overridden && !fs.existsSync(path.join(cctHome(env), entry)) && fs.existsSync(path.join(legacyHome(), entry))) {
+  if (!overridden && !present(path.join(cctHome(env), entry)) && present(path.join(legacyHome(), entry))) {
     return path.join(legacyHome(), relative);
   }
   return path.join(cctHome(env), relative);
@@ -55,6 +67,6 @@ export function legacyHits(env: NodeJS.ProcessEnv = process.env): string[] {
   const home = cctHome(env);
   return fs
     .readdirSync(legacy)
-    .filter((name) => !fs.existsSync(path.join(home, name)))
+    .filter((name) => !present(path.join(home, name)))
     .sort();
 }

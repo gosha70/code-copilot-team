@@ -60,6 +60,17 @@ test("a nested path follows its top-level entry, never splitting a directory", (
   });
 });
 
+test("a dangling home entry still selects the home, never the stale legacy copy", () => {
+  withHome((tmp) => {
+    fs.mkdirSync(path.join(tmp, HOME_DEFAULT_REL), { recursive: true });
+    fs.mkdirSync(path.join(tmp, HOME_LEGACY_REL), { recursive: true });
+    fs.writeFileSync(path.join(tmp, HOME_LEGACY_REL, "providers.toml"), "stale");
+    fs.symlinkSync(path.join(tmp, "nowhere"), path.join(tmp, HOME_DEFAULT_REL, "providers.toml"));
+    assert.equal(cctHomePath("providers.toml"), path.join(tmp, HOME_DEFAULT_REL, "providers.toml"));
+    assert.deepEqual(legacyHits(), []);
+  });
+});
+
 test("the home wins when both have the entry", () => {
   withHome((tmp) => {
     for (const d of [HOME_DEFAULT_REL, HOME_LEGACY_REL]) {

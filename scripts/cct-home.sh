@@ -39,7 +39,7 @@ entry_names() {  # <dir>... -> the union of their top-level entry names, sorted
   local dir entry
   for dir in "$@"; do
     [[ -d "$dir" ]] || continue
-    for entry in "$dir"/* "$dir"/.[!.]*; do
+    for entry in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
       present "$entry" && printf '%s\n' "${entry##*/}"
     done
   done | sort -u
@@ -199,7 +199,7 @@ migrate() {
     [[ -d "$stale" ]] || continue
     echo "note: $stale looks like a staging directory left by an interrupted migrate; not touched — inspect it and remove it by hand"
   done
-  for entry in "$LEGACY_DIR"/* "$LEGACY_DIR"/.[!.]*; do
+  for entry in "$LEGACY_DIR"/* "$LEGACY_DIR"/.[!.]* "$LEGACY_DIR"/..?*; do
     present "$entry" || continue
     name="${entry##*/}"
     if $DRY_RUN; then

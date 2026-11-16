@@ -71,6 +71,16 @@ mkdir -p "$H/.cct/pi"
 assert_eq "once the home has the directory, nested paths go there" "$H/.cct/pi/audit.log" "$(HOME=$H CCT_HOME= bash -c 'source "'"$REPO_DIR"'/scripts/lib/cct-home.sh"; cct_home_path pi/audit.log')"
 rmdir "$H/.cct/pi"
 
+# A dangling symlink in the home is an entry: it selects the home (and fails
+# loudly there) instead of silently reviving the stale legacy copy.
+HD=$(fresh_home); mkdir -p "$HD/.cct" "$HD/.code-copilot-team"
+printf 'stale\n' > "$HD/.code-copilot-team/providers.toml"; ln -s "$HD/nowhere" "$HD/.cct/providers.toml"
+assert_eq "a dangling home entry still selects the home" "$HD/.cct/providers.toml" "$(HOME=$HD CCT_HOME= bash -c 'source "'"$REPO_DIR"'/scripts/lib/cct-home.sh"; cct_home_path providers.toml')"
+assert_eq "...and is not counted as served from the legacy home" "" "$(HOME=$HD CCT_HOME= bash -c 'source "'"$REPO_DIR"'/scripts/lib/cct-home.sh"; cct_home_legacy_hits')"
+OUT=$(HOME=$HD CCT_HOME= bash "$CCT" home 2>&1)
+assert_contains "...and cct home calls it a conflict where the home copy is read, which is now true" "$OUT" "conflict: in both homes"
+rm -rf "$HD"
+
 echo "=== resolver: legacy hits ==="
 assert_eq "entries only in the legacy home are reported" "pi" "$(HOME=$H CCT_HOME= bash -c 'source "'"$REPO_DIR"'/scripts/lib/cct-home.sh"; cct_home_legacy_hits' | tr '\n' ' ' | sed 's/ $//')"
 assert_eq "...none with CCT_HOME set" "" "$(HOME=$H CCT_HOME=/srv/cct bash -c 'source "'"$REPO_DIR"'/scripts/lib/cct-home.sh"; cct_home_legacy_hits')"
@@ -117,6 +127,28 @@ assert_eq "cct home no longer lists moved entries as legacy" "0" "$(grep -c 'pro
 assert_contains "cct home after a refused conflict names the conflict" "$OUT" "routing.toml"
 assert_contains "...as a conflict, not as migrated" "$OUT" "conflict: in both homes"
 assert_eq "...and does not say nothing is left" "0" "$(grep -c 'nothing left' <<<"$OUT")"
+rm -rf "$H"
+
+echo "=== entries whose names begin with two dots ==="
+H=$(fresh_home); mkdir -p "$H/.code-copilot-team"; printf 'd\n' > "$H/.code-copilot-team/..hidden"
+assert_eq "cct_home_legacy_hits sees a ..name entry" "..hidden" "$(HOME=$H CCT_HOME= bash -c 'source "'"$REPO_DIR"'/scripts/lib/cct-home.sh"; cct_home_legacy_hits')"
+OUT=$(HOME=$H CCT_HOME= bash "$CCT" home 2>&1)
+assert_contains "cct home lists it as legacy" "$OUT" "..hidden"
+OUT=$(HOME=$H CCT_HOME= bash "$CCT" home migrate 2>&1); RC=$?
+assert_exit "migrate moves it" 0 "$RC"
+assert_eq "...into the home" "d" "$(cat "$H/.cct/..hidden" 2>/dev/null)"
+rm -rf "$H"
+
+echo "=== setup writes harness.json through the resolver ==="
+# A legacy-only harness.json is rewritten in place; a fresh home gets ~/.cct/harness.json.
+H=$(fresh_home); mkdir -p "$H/.code-copilot-team"; printf 'old\n' > "$H/.code-copilot-team/harness.json"
+HJ_RUN='source "'"$REPO_DIR"'/scripts/lib/cct-home.sh"; SCRIPT_DIR="'"$REPO_DIR"'/adapters/claude-code"; eval "$(sed -n "/^write_harness_json()/,/^}/p" "'"$REPO_DIR"'/adapters/claude-code/setup.sh")"; write_harness_json >/dev/null'
+HOME=$H CCT_HOME= bash -c "$HJ_RUN"
+assert_contains "a legacy-only harness.json is rewritten in place" "$(cat "$H/.code-copilot-team/harness.json")" "cct_version"
+assert_eq "...and no second copy appears in the home" "no" "$([[ -e $H/.cct/harness.json ]] && echo yes || echo no)"
+rm -rf "$H"; H=$(fresh_home)
+HOME=$H CCT_HOME= bash -c "$HJ_RUN"
+assert_contains "a fresh home gets ~/.cct/harness.json" "$(cat "$H/.cct/harness.json" 2>/dev/null)" "cct_version"
 rm -rf "$H"
 
 echo "=== cct home migrate: a target that appears after the check is never overwritten ==="

@@ -39,6 +39,16 @@ class TheHomeResolver(unittest.TestCase):
         (self.tmp / ".cct" / "pi").mkdir(parents=True)
         self.assertEqual(H.cct_home_path("pi/audit.log"), self.tmp / ".cct" / "pi" / "audit.log")
 
+    def test_a_dangling_home_entry_still_selects_the_home(self) -> None:
+        # A broken ~/.cct/providers.toml must not silently revive the stale
+        # legacy copy: the home is selected and fails loudly there.
+        (self.tmp / ".cct").mkdir()
+        (self.tmp / ".code-copilot-team").mkdir()
+        (self.tmp / ".code-copilot-team" / "providers.toml").write_text("stale")
+        (self.tmp / ".cct" / "providers.toml").symlink_to(self.tmp / "nowhere")
+        self.assertEqual(H.cct_home_path("providers.toml"), self.tmp / ".cct" / "providers.toml")
+        self.assertEqual(H.legacy_hits(), [])
+
     def test_the_home_wins_when_both_have_the_entry(self) -> None:
         for d in (".cct", ".code-copilot-team"):
             (self.tmp / d).mkdir()

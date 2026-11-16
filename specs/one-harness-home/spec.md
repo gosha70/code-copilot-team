@@ -77,17 +77,20 @@ configuration from its own repository.
   `session_analytics/home.py` re-exported for `scripts/lib` callers
   (`cct_home()`, `cct_home_path(relative)`), TypeScript
   `adapters/pi/runtime/config/home.ts` (`cctHome()`,
-  `cctHomePath(relative)`). No other code spells either directory name;
-  the three resolvers are the only places the legacy name appears in
-  code. *Amended 2026-11-14 during the build:* three installed scripts
-  run without a checkout (`adapters/claude-code/.claude/hooks/harness-stamp.sh`,
+  `cctHomePath(relative)`). Only these three implementations decide
+  CCT-home paths. Three installed scripts run without a checkout
+  (`adapters/claude-code/.claude/hooks/harness-stamp.sh`,
   `adapters/claude-code/claude-code`, `adapters/pi/bin/pi-code`) and so
   carry a verbatim copy of the bash resolver block between
   `# >>> cct-home resolver` / `# <<< cct-home resolver` markers; the
-  structure suite keeps every copy byte-identical to the lib. Two
-  commands print the legacy name on purpose (`cct home`, `cct doctor`,
-  and the `cct` help for `home`). The structure guard's allow-list is
-  exactly this set.
+  structure suite keeps every copy byte-identical to the lib. Other
+  occurrences of either directory name may be reviewed display text
+  (help, messages, docstrings, schema descriptions, UI copy, including
+  the user-facing surfaces that name the legacy home on purpose:
+  `cct home`, `cct doctor` and the `cct` help for `home`) or
+  configuration values passed through a resolver, as recorded by FR-9's
+  exact baseline. No other occurrence may read, write, create or pass a
+  filesystem path without resolver mediation.
 - **FR-3 Precedence and fallback.** The top-level entry of a relative
   path (its first segment: `providers.toml`, or `pi` for `pi/audit.log`)
   decides the home, never the full path. `CCT_HOME` set: that
@@ -128,13 +131,19 @@ configuration from its own repository.
   harness-stamps default through the Python resolver; the API's path
   allow-list (`server.py`) accepts the resolved home and, during the
   fallback release, the legacy home.
-- **FR-9 Guard.** `tests/test-shared-structure.sh` fails when any
-  tracked code file outside the three resolvers spells
-  `.code-copilot-team` or `~/.cct` as a path; docs, CHANGELOG, specs
-  and fixtures that assert the legacy fallback are listed exceptions.
-  Display-only occurrences in code (help, messages, docstrings, Studio
-  copy) are listed one by one in `tests/fixtures/home-guard/baseline.txt`
-  and compared as a multiset, so any new occurrence needs review.
+- **FR-9 Guard.** `tests/test-shared-structure.sh` fails on any
+  **unreviewed** occurrence of `.code-copilot-team` or `.cct` as a CCT
+  home path in tracked code or config (workflows, presets, schemas and
+  templates included; prose, specs and test code excluded). An
+  occurrence is a line naming either directory after a tilde, a line
+  with a home lookup and either directory after it, or a home
+  construction continued across lines (followed from the lookup through
+  balanced brackets or a trailing backslash; the next independent
+  statement is not part of it). Reviewed occurrences, display text and
+  configuration values passed through a resolver only, are listed one
+  by one in `tests/fixtures/home-guard/baseline.txt` and compared as a
+  multiset, so a new occurrence fails until reviewed and a listed one
+  that no longer exists fails too.
 - **FR-10 Docs and generated artifacts.** Every doc, template header,
   schema description, generated reference and golden fixture says
   `~/.cct/`; one page, `docs/cct-home.md`, states the home, the
@@ -212,7 +221,7 @@ configuration from its own repository.
 | Criterion | Proof |
 |---|---|
 | One home for a fresh install | suite: setup into a throwaway `HOME` leaves nothing under `~/.code-copilot-team` and the doctor prints no notice |
-| An unmigrated 2.0 user keeps working | suite: fixtures under the legacy home are found by peer review, routing, the hook, Pi and analytics through the fallback; writes land in `~/.cct/` |
+| An unmigrated 2.0 user keeps working | suite: fixtures under the legacy home are found by peer review, routing, the hook, Pi and analytics through the fallback; a write inside a legacy-served entry stays in that entry, a new top-level entry goes to `~/.cct/` |
 | Nothing moves silently | suite: setup and launchers leave the legacy files where they are; `cct home migrate` moves, lists conflicts, never overwrites |
 | `CCT_HOME` wins everywhere | suite: with it set, no reader touches either default |
 | A missed reader cannot hide | structure-suite guard fails on a planted direct spelling |

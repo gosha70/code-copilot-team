@@ -95,7 +95,7 @@ file contains.
 | Risk | Mitigation |
 |---|---|
 | A reader is missed and keeps reading the legacy home | FR-9 guard: no direct spelling outside the resolvers |
-| A tool writes to the legacy home after the move | FR-4: creation always under the new home; the doctor reports fallback reads |
+| A tool writes to the legacy home after the move | FR-3/FR-4: a new top-level entry is created under the new home; a write inside an entry the legacy home still serves stays there, so nothing is split, and the doctor reports that entry until `cct home migrate` moves it |
 | `cct home migrate` destroys a file | never overwrites, never deletes; conflicts listed; dry run |
 | Pi's init manifest records the global home | the manifest records the per-project config only (D5 keeps it); `pi-code doctor` reports the home |
 | The hook and analytics disagree on `harness-stamps.jsonl` | `CCT_HARNESS_STAMPS` keeps winning (#448); both defaults come from the same resolver rule |

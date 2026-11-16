@@ -2136,9 +2136,11 @@ for copy in adapters/claude-code/.claude/hooks/harness-stamp.sh adapters/claude-
 done
 # The guard (FR-9): no code outside the resolvers spells a CCT home. A
 # candidate is a non-comment line naming either directory after a tilde
-# (~/.cct, ~/.code-copilot-team) or after a home construction ($HOME,
+# (~/.cct, ~/.code-copilot-team), or a line that has a home lookup ($HOME,
 # ${HOME}, Path.home(), homedir(), os.environ["HOME"], environ.get("HOME"),
-# getenv("HOME"), process.env.HOME, env["HOME"]). No file is exempt: the
+# getenv("HOME"), process.env.HOME, env["HOME"], a bare "~" string as in
+# expanduser("~")) and EITHER directory token anywhere after it on the same
+# line, whatever sits between (joinpath, f-strings, concatenation). No file is exempt: the
 # resolvers spell both names through constants (CCT_HOME_DEFAULT_REL,
 # HOME_LEGACY_REL, ...), so their code produces no candidates, and any line
 # in them that does is compared like every other line. Only a line whose
@@ -2160,9 +2162,10 @@ done
 # earlier draft scan zero lines and pass. The candidate count proves the scan
 # reads something.
 HOME_END='([^[:alnum:]_-]|$)'
-HOME_SRC='(\$HOME|\$\{HOME\}|HOME\}|home\(\)|homedir\(\)|environ\[["'"'"']HOME["'"'"']\]|environ\.get\(["'"'"']HOME["'"'"']\)|getenv\(["'"'"']HOME["'"'"']\)|env\.HOME|env\[["'"'"']HOME["'"'"']\])'
-HOME_SEP='[[:space:]/\\"'"'"',)+!]*'
-HOME_SPELLING="(~/\.(code-copilot-team|cct)$HOME_END)|($HOME_SRC$HOME_SEP\.(code-copilot-team|cct)$HOME_END)"
+HOME_ID_END='([^[:alnum:]_]|$)'
+HOME_Q='["'"'"'`]'
+HOME_SRC="(\\\$HOME$HOME_ID_END|\\\$\\{HOME[}:]|Path[[:space:]]*\\.[[:space:]]*home[[:space:]]*\\([[:space:]]*\\)|homedir[[:space:]]*\\([[:space:]]*\\)|environ[[:space:]]*\\[[[:space:]]*${HOME_Q}HOME${HOME_Q}|environ\\.get\\([[:space:]]*${HOME_Q}HOME${HOME_Q}|getenv\\([[:space:]]*${HOME_Q}HOME${HOME_Q}|env\\.HOME$HOME_ID_END|env\\[[[:space:]]*${HOME_Q}HOME${HOME_Q}|${HOME_Q}~${HOME_Q})"
+HOME_SPELLING="(~/\\.(code-copilot-team|cct)$HOME_END)|($HOME_SRC.*\\.(code-copilot-team|cct)$HOME_END)"
 HOME_BASELINE="$REPO_DIR/tests/fixtures/home-guard/baseline.txt"
 home_baseline() { grep -v '^#' "$HOME_BASELINE" | LC_ALL=C sort; }   # entries only, sorted
 home_occurrences() {  # stdin: "<file>:<line>:<text>" → sorted "<file><TAB><trimmed text>", one per occurrence
@@ -2174,37 +2177,107 @@ home_occurrences() {  # stdin: "<file>:<line>:<text>" → sorted "<file><TAB><tr
 home_unreviewed() {  # stdin as above → occurrences not covered by the baseline (multiset)
   LC_ALL=C comm -23 <(home_occurrences) <(home_baseline)
 }
-HOME_CANDIDATES=$(cd "$REPO_DIR" && git grep -n -E "\.(code-copilot-team|cct)$HOME_END" -- scripts adapters shared/scripts studio ':!*.md' ':!*.mdc' ':!*/tests/*' ':!tests' 2>/dev/null)
+# A home construction split across lines (Path.home().joinpath( then ".cct"
+# on the next line) has no single line holding both parts. The expression
+# scan starts at each home lookup and follows the expression that contains
+# it, through balanced brackets or a trailing backslash, so the split form is
+# caught while the next independent statement (repo_root / ".cct") is not.
+# It needs python3, as the tape checker above does; without it the planted
+# split cases below fail loudly rather than passing.
+HOME_EXPR_SCAN="$REPO_DIR/tests/fixtures/home-guard/expr_scan.py"
+home_expr_occurrences() {  # [<repo dir>] → "<file><TAB><expression>" for split home constructions
+  (cd "${1:-$REPO_DIR}" && git grep -lz -E "$HOME_SRC" -- "${HOME_PATHSPEC[@]}" 2>/dev/null \
+    | HOME_SRC="$HOME_SRC" HOME_END="$HOME_END" python3 "$HOME_EXPR_SCAN")
+}
+home_all_occurrences() {  # [<repo dir>] → every occurrence, line scan and expression scan, sorted
+  { home_discover "${1:-$REPO_DIR}" | home_occurrences; home_expr_occurrences "${1:-$REPO_DIR}"; } | LC_ALL=C sort
+}
+# Discovery covers every tracked code and config file: prose (Markdown, the
+# generated .mdc rules, specs, the wiki, CHANGELOG, llms.txt) and test code
+# are the only exclusions.
+HOME_PATHSPEC=(. ':!*.md' ':!*.mdc' ':!specs' ':!knowledge' ':!CHANGELOG.md' ':!llms.txt' ':!*.jsonl' ':!tests' ':!*/tests/*')
+home_discover() {  # [<repo dir>] → "<file>:<line>:<text>" for every tracked line naming either directory
+  (cd "${1:-$REPO_DIR}" && git grep -n -E "\.(code-copilot-team|cct)$HOME_END" -- "${HOME_PATHSPEC[@]}" 2>/dev/null)
+}
+HOME_CANDIDATES=$(home_discover)
 rc=0; [[ $(grep -c . <<<"$HOME_CANDIDATES") -ge 20 ]] || rc=1
 assert_ok "the home guard's candidate scan reads lines (it is not a silent no-op)" "$rc"
-STRAY=$(home_unreviewed <<<"$HOME_CANDIDATES")
+HOME_ALL=$(home_all_occurrences)
+STRAY=$(LC_ALL=C comm -23 <(printf '%s\n' "$HOME_ALL" | sed '/^$/d') <(home_baseline))
 rc=0; [[ -z "$STRAY" ]] || rc=1
 assert_ok "no code outside the resolvers spells a CCT home beyond the reviewed baseline${STRAY:+ (unreviewed: $(cut -f1 <<<"$STRAY" | sort -u | tr '\n' ' '))}" "$rc"
-GONE=$(LC_ALL=C comm -13 <(home_occurrences <<<"$HOME_CANDIDATES") <(home_baseline))
+GONE=$(LC_ALL=C comm -13 <(printf '%s\n' "$HOME_ALL" | sed '/^$/d') <(home_baseline))
 rc=0; [[ -z "$GONE" ]] || rc=1
 assert_ok "every baseline entry still occurs (the list is exact)${GONE:+ (stale: $(cut -f1 <<<"$GONE" | sort -u | tr '\n' ' '))}" "$rc"
-# The guard bites: each planted spelling is unreviewed, even in a listed file.
+# The guard bites, through real discovery: each planted file goes into a
+# throwaway git repository and is found (or not) by home_discover, the same
+# git grep the real scan uses, so scope and matching are both exercised.
+# "<path>|<line>": the line is written to <path>; a listed baseline line
+# written twice into its own file proves the multiset (a second copy fails).
+home_flags_planted() {  # <path> <line>... → 0 if the guard flags the planted file (one line per argument)
+  local repo out
+  repo=$(mktemp -d)
+  mkdir -p "$repo/$(dirname "$1")"
+  printf '%s\n' "${@:2}" > "$repo/$1"
+  (cd "$repo" && git init -q . && git add -A) >/dev/null 2>&1
+  out=$(LC_ALL=C comm -23 <(home_all_occurrences "$repo" | sed '/^$/d') <(home_baseline))
+  rm -rf "$repo"
+  [[ -n "$out" ]]
+}
 FIRST_LISTED=$(home_baseline | head -1)
-for planted in \
-  'scripts/lib/routing-state.sh:41:RS_FILE="${CCT_ROUTING_STATE:-$HOME/.code-copilot-team/routing-state.json}"' \
-  'scripts/session_analytics/config.py:133:_USER_CONFIG = Path.home() / ".cct" / "session-analytics.json"' \
-  'scripts/x.sh:1:cat ~/.cct/providers.toml' \
-  'scripts/x.sh:2:FILE=~/.cct/providers.toml' \
-  'scripts/x.py:3:p = Path(os.environ["HOME"]) / ".cct" / "providers.toml"' \
-  'scripts/x.py:4:p = os.environ.get("HOME") + "/.cct/routing.toml"' \
-  'adapters/pi/runtime/x.ts:5:const p = path.join(process.env.HOME!, ".cct", "llms.toml");' \
-  'adapters/pi/runtime/x.ts:6:const p = path.join(os.homedir(), ".code-copilot-team");' \
-  'scripts/x.py:7:REG = os.path.expanduser("~/.cct/routing.toml")' \
-  'scripts/cct:999:cat ~/.cct/providers.toml' \
-  'scripts/lib/cct_doctor.py:999:p = Path.home() / ".cct" / "secret"' \
-  'adapters/pi/bin/pi-code:999:STATE="$HOME/.cct/state"' \
-  'scripts/lib/cct-home.sh:999:cat "$HOME/.code-copilot-team/providers.toml"' \
-  'scripts/session_analytics/home.py:999:LEGACY = Path.home() / ".code-copilot-team"' \
-  'scripts/x.sh:8:cat ~/.cct/providers.toml   # read the profile' \
-  'scripts/x.py:9:open(Path.home() / ".cct" / "llms.toml")  # the catalog' \
-  "${FIRST_LISTED%%	*}:999:${FIRST_LISTED#*	}"; do
-  rc=0; [[ -n "$(LC_ALL=C comm -23 <(printf '%s\n' "$HOME_CANDIDATES" "$planted" | home_occurrences) <(home_baseline))" ]] || rc=1
-  assert_ok "the home guard flags a planted spelling in ${planted%%:*}: ${planted#*:*:}" "$rc"
+while IFS='|' read -r ppath pline; do
+  [[ -n "$ppath" ]] || continue
+  rc=0; home_flags_planted "$ppath" "$pline" || rc=1
+  assert_ok "the home guard flags a planted spelling in $ppath: $pline" "$rc"
+done <<'PLANTED'
+scripts/lib/routing-state.sh|RS_FILE="${CCT_ROUTING_STATE:-$HOME/.code-copilot-team/routing-state.json}"
+scripts/session_analytics/config.py|_USER_CONFIG = Path.home() / ".cct" / "session-analytics.json"
+scripts/x.sh|cat ~/.cct/providers.toml
+scripts/x.sh|FILE=~/.cct/providers.toml
+scripts/x.py|p = Path(os.environ["HOME"]) / ".cct" / "providers.toml"
+scripts/x.py|p = os.environ.get("HOME") + "/.cct/routing.toml"
+adapters/pi/runtime/x.ts|const p = path.join(process.env.HOME!, ".cct", "llms.toml");
+adapters/pi/runtime/x.ts|const p = path.join(os.homedir(), ".code-copilot-team");
+scripts/x.py|REG = os.path.expanduser("~/.cct/routing.toml")
+scripts/cct|cat ~/.cct/providers.toml
+scripts/lib/cct_doctor.py|p = Path.home() / ".cct" / "secret"
+adapters/pi/bin/pi-code|STATE="$HOME/.cct/state"
+scripts/lib/cct-home.sh|cat "$HOME/.code-copilot-team/providers.toml"
+scripts/session_analytics/home.py|LEGACY = Path.home() / ".code-copilot-team"
+scripts/x.sh|cat ~/.cct/providers.toml   # read the profile
+scripts/x.py|open(Path.home() / ".cct" / "llms.toml")  # the catalog
+scripts/x.py|p = Path.home().joinpath(".cct", "providers.toml")
+scripts/x.py|p = Path(os.getenv("HOME")).joinpath(".cct")
+scripts/x.py|p = f"{Path.home()}/.cct/providers.toml"
+scripts/x.py|p = os.path.join(os.path.expanduser("~"), ".code-copilot-team", "pi")
+adapters/pi/runtime/x.ts|const p = `${os.homedir()}/.cct/llms.toml`;
+scripts/x.py|p = Path.home( ) / ".cct" / "providers.toml"
+benchmarks/presets/x.json|"registry": "~/.cct/other-routing.toml"
+.github/workflows/x.yml|run: cat ~/.cct/providers.toml
+shared/templates/x.toml|path = "${HOME}/.cct/providers.toml"
+PLANTED
+rc=0; home_flags_planted "${FIRST_LISTED%%	*}" "${FIRST_LISTED#*	}" "${FIRST_LISTED#*	}" || rc=1
+assert_ok "the home guard flags a second copy of a listed line in its listed file" "$rc"
+# Split constructions are flagged through the expression scan...
+rc=0; home_flags_planted scripts/x.py 'path = Path.home().joinpath(' '    ".cct", "providers.toml"' ')' || rc=1
+assert_ok "the home guard flags a Python home construction split across lines" "$rc"
+rc=0; home_flags_planted adapters/pi/runtime/x.ts 'const p = path.join(' '  os.homedir(),' '  ".cct",' '  "llms.toml",' ');' || rc=1
+assert_ok "the home guard flags a TypeScript home construction split across lines" "$rc"
+rc=0; home_flags_planted scripts/x.sh 'dest="${HOME}"\' '"/.cct/providers.toml"' || rc=1
+assert_ok "the home guard flags a shell home construction continued with a backslash" "$rc"
+rc=0; home_flags_planted .github/workflows/x.yml 'jobs:' '  x:' '    steps:' '      - run: |' '          cp profile.toml \' '            "$HOME"/\' '.cct/providers.toml' || rc=1
+assert_ok "the home guard flags a workflow home construction continued with a backslash" "$rc"
+# ...while the next independent statement after a home lookup is not part of it.
+for neg in py:'home = Path.home()|state = repo_root / ".cct" / "review"' ts:'const home = os.homedir();|const p = path.join(repoRoot, ".cct", "team.json");' sh:'log "$HOME"|STATE="$REPO/.cct/state.json"'; do
+  ext="${neg%%:*}"; body="${neg#*:}"
+  rc=0; home_flags_planted "scripts/neg.$ext" "${body%%|*}" "${body#*|}" && rc=1
+  assert_ok "the home guard does not flag a per-project .cct path in the statement after a home lookup ($ext)" "$rc"
+done
+# ...and does not flag look-alikes that are not a home: an identifier that
+# merely starts with HOME, a non-Path .home() method, a per-project .cct path.
+for lookalike in 'p="$HOMELESS/.cct/x"' 'p = account.home() + "/.cct"' 'p = os.path.join(repo_root, ".cct", "review")'; do
+  rc=0; home_flags_planted scripts/x.py "$lookalike" && rc=1
+  assert_ok "the home guard does not flag a look-alike: $lookalike" "$rc"
 done
 # The exactness check bites: a baseline entry with no occurrence is reported.
 rc=0; [[ -n "$(LC_ALL=C comm -13 <(home_occurrences <<<"$HOME_CANDIDATES") <(printf '%s\n' "$(home_baseline)" "scripts/x.sh	echo ~/.cct/removed" | LC_ALL=C sort))" ]] || rc=1

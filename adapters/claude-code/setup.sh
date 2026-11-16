@@ -279,8 +279,9 @@ install_helper_scripts() {
 # records absence as null when this file is missing; never fabricated.
 write_harness_json() {
     local repo_root="$SCRIPT_DIR/../.."
-    local target_dir
-    target_dir="$(cct_home)"
+    local target_file target_dir
+    target_file="$(cct_home_path harness.json)"   # a legacy-only harness.json is rewritten in place (#411 FR-4)
+    target_dir="$(dirname "$target_file")"
     local version="" sha=""
     if [[ -f "$repo_root/package.json" ]]; then
         if command -v jq &>/dev/null; then
@@ -296,8 +297,8 @@ write_harness_json() {
     printf '{"cct_version": %s, "cct_sha": %s, "installed_at": "%s"}\n' \
         "$([[ -n "$version" ]] && printf '"%s"' "$version" || printf 'null')" \
         "$([[ -n "$sha" ]] && printf '"%s"' "$sha" || printf 'null')" \
-        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$target_dir/harness.json"
-    echo "[done] Wrote harness identity to $target_dir/harness.json (${version:-no version} @ ${sha:0:12})"
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$target_file"
+    echo "[done] Wrote harness identity to $target_file (${version:-no version} @ ${sha:0:12})"
 }
 
 # ══════════════════════════════════════════════════════════════

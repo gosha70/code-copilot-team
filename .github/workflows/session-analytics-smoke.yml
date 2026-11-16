@@ -42,6 +42,10 @@ jobs:
     env:
       SA_DSN: "postgresql://cct:cct@localhost:5432/session_analytics"
       FIXTURE_ROOT: "scripts/session_analytics/tests/fixtures/claude_code"
+      # The CCT home for this job (#411): the steps write the analytics user
+      # config here and the resolver reads it back, so the override is
+      # exercised on every run.
+      CCT_HOME: "${{ runner.temp }}/cct-home"
 
     steps:
       - name: Checkout
@@ -136,8 +140,8 @@ jobs:
         # under the STRICTER of config and ingest-recorded mode (FR-4
         # floor) — leaving text with no searchable words in it.
         run: |
-          mkdir -p ~/.cct
-          cat > ~/.cct/session-analytics.json <<'JSON'
+          mkdir -p "$CCT_HOME"
+          cat > "$CCT_HOME/session-analytics.json" <<'JSON'
           {
             "projects": {
               "demo-project": { "trace_archive": true }
@@ -228,12 +232,12 @@ jobs:
           assert cur.fetchone() == (0,), "index text survived a purge"
           print("OK purge reaches the index")
           PY
-          rm -f ~/.cct/session-analytics.json search.json
+          rm -f "$CCT_HOME/session-analytics.json" search.json
 
       - name: "Per-project redaction override survives PostgreSQL (E8, #84)"
         run: |
-          mkdir -p ~/.cct
-          cat > ~/.cct/session-analytics.json <<'JSON'
+          mkdir -p "$CCT_HOME"
+          cat > "$CCT_HOME/session-analytics.json" <<'JSON'
           {
             "projects": {
               "demo-project": { "redaction_mode": "metadata-only" }
@@ -256,7 +260,7 @@ jobs:
           assert rows == [("metadata-only",)], rows  # per-project override, not the global 'code' default
           print("OK per-project override under Postgres:", rows)
           PY
-          rm -f ~/.cct/session-analytics.json
+          rm -f "$CCT_HOME/session-analytics.json"
 
       - name: Build + assert the Kùzu graph
         run: |

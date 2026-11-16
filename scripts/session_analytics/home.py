@@ -29,16 +29,23 @@ def legacy_home() -> Path:
     return Path.home() / HOME_LEGACY_REL
 
 
+def _present(path: Path) -> bool:
+    """True if the entry exists, a dangling symlink included (lexists)."""
+    return os.path.lexists(path)
+
+
 def cct_home_path(relative: str) -> Path:
     """The path to read, write or create ``relative`` at.
 
     ``CCT_HOME`` set: that directory, no fallback. Otherwise the TOP-LEVEL
     entry (the first segment of ``relative``) decides: the legacy home when
     that entry exists only there, else the home. ``pi/audit.log`` therefore
-    goes wherever ``pi/`` lives and never splits the directory.
+    goes wherever ``pi/`` lives and never splits the directory. Presence does
+    not follow a final symlink: a dangling home entry still selects the home
+    rather than silently reviving a stale legacy copy.
     """
     entry = Path(relative).parts[0]
-    if not os.environ.get(ENV_HOME) and not (cct_home() / entry).exists() and (legacy_home() / entry).exists():
+    if not os.environ.get(ENV_HOME) and not _present(cct_home() / entry) and _present(legacy_home() / entry):
         return legacy_home() / relative
     return cct_home() / relative
 
@@ -51,4 +58,4 @@ def legacy_hits() -> list[str]:
     if not legacy.is_dir():
         return []
     home = cct_home()
-    return sorted(p.name for p in legacy.iterdir() if not (home / p.name).exists())
+    return sorted(p.name for p in legacy.iterdir() if not _present(home / p.name))
