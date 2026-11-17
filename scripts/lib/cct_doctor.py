@@ -113,10 +113,12 @@ def check_home(report: Report) -> None:
     home = cct_home.cct_home()
     override = os.environ.get(cct_home.ENV_HOME)
     report.add("Home", "home", OK, f"{home} ({'CCT_HOME' if override else 'default'})")
-    # Leftovers of `cct home migrate`: never listed as legacy entries or
-    # served, so this is the one place a user hears about them.
+    # These entries are excluded from legacy_hits(), so Doctor enumerates
+    # them separately. A set-aside entry is retained user data, not a
+    # fallback read, so CCT_HOME (usual for a cross-filesystem migrate)
+    # does not hide it.
     legacy = cct_home.legacy_home()
-    if not override and legacy.is_dir():
+    if legacy.is_dir():
         for p in sorted(legacy.glob(cct_home.MIGRATE_ASIDE_PREFIX + "*")):
             report.add("Home", p.name, WARN,
                        f"{p} was set aside by `cct home migrate` (interrupted, or kept because "

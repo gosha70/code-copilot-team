@@ -106,6 +106,11 @@ H_LEFT=$(HOME="$HOME_TMP" CCT_HOME= bash "$CCT" doctor --no-network --json 2>&1 
 assert "doctor: a set-aside entry and a staging directory each warn" "[[ \$(home_rows \"\$H_LEFT\") == 'home=ok .cct-migrate-aside.abc123=warn .cct-migrate.def456=warn pi=warn providers.toml=warn' ]]"
 assert "doctor: ...the set-aside row says why it is there" "grep -q 'interrupted, or kept because the name was recreated' <<<\"\$H_LEFT\""
 assert "doctor: ...and the staging row names the interrupted migrate" "grep -q 'staging directory left by an interrupted' <<<\"\$H_LEFT\""
+# With CCT_HOME set (the usual cross-filesystem case) the legacy aside is
+# retained data and still warns, beside the overridden home's stage.
+mkdir -p "$HOME_TMP/elsewhere/.cct-migrate.ghi789"
+H_LEFT_OVR=$(HOME="$HOME_TMP" CCT_HOME="$HOME_TMP/elsewhere" bash "$CCT" doctor --no-network --json 2>&1 || true)
+assert "doctor: with CCT_HOME set, one warning for the legacy aside and one for the overridden home's stage" "[[ \$(home_rows \"\$H_LEFT_OVR\") == 'home=ok .cct-migrate-aside.abc123=warn .cct-migrate.ghi789=warn legacy=ok' ]]"
 rm -rf "$HOME_TMP"
 
 # ── doctor reports the Claude Code gateway and its compat settings (#399) ──
