@@ -2,7 +2,7 @@
 spec_mode: full
 feature_id: simplest-complete-change
 risk_category: integration
-status: draft
+status: approved
 date: 2026-11-10
 ---
 
