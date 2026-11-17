@@ -17,6 +17,8 @@ from session_analytics.home import (  # noqa: E402,F401 — re-exported
     HOME_LEGACY_REL,
     cct_home,
     cct_home_path,
+    MIGRATE_ASIDE_PREFIX,
+    MIGRATE_STAGE_PREFIX,
     legacy_hits,
     legacy_home,
 )
