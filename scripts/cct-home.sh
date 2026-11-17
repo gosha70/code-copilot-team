@@ -54,11 +54,11 @@ note_leftovers() {
   local stale
   for stale in "$HOME_DIR"/.cct-migrate.*; do
     [[ -d "$stale" ]] || continue
-    echo "note: $stale looks like a staging directory left by an interrupted migrate; not touched — inspect it and remove it by hand"
+    echo "note: $stale looks like a staging directory left by an interrupted migrate, not touched — inspect it and remove it by hand"
   done
   for stale in "$LEGACY_DIR"/.cct-migrate-aside.*; do
     present "$stale" || continue
-    echo "note: $stale is a legacy entry an interrupted migrate set aside; not touched — inspect it and move it back by hand"
+    echo "note: $stale is a legacy entry an interrupted migrate set aside, not touched — inspect it and move it back by hand"
   done
   return 0
 }
@@ -201,9 +201,9 @@ keep_both() {
   local src="$1" aside="$ACTIVE_ASIDE"
   withdraw_own   # puts the aside back under $src when that name is free
   if [[ -n "$aside" ]] && present "$aside"; then
-    echo "conflict: ${src##*/} was copied across filesystems; the home copy is now read, and the legacy copy is kept at $aside because ${src##*/} was recreated meanwhile — compare them, keep one, remove the other by hand"
+    echo "conflict: ${src##*/} was copied across filesystems. The home copy is now read, and the legacy copy is kept at $aside because ${src##*/} was recreated meanwhile — compare them, keep one, remove the other by hand"
   else
-    echo "conflict: ${src##*/} was copied across filesystems; the home copy is now read and the legacy copy is kept at $src — check the home copy, then remove the legacy one by hand"
+    echo "conflict: ${src##*/} was copied across filesystems. The home copy is now read and the legacy copy is kept at $src — check the home copy, then remove the legacy one by hand"
   fi
   return 4
 }
@@ -222,7 +222,7 @@ move_entry() {
     own_claim "$dst"
     if ! command -v python3 >/dev/null 2>&1; then
       withdraw_own
-      echo "cct home migrate: python3 is needed to move a directory (rename(2)); none on PATH" >&2; return 2
+      echo "cct home migrate: python3 is needed to move a directory with rename(2), and none is on PATH" >&2; return 2
     fi
     local r stage aside
     # Same filesystem: rename(2) moves the directory object itself, so a
@@ -276,6 +276,10 @@ move_entry() {
   keep_both "$src"; return $?
 }
 
+# Every line migrate and --dry-run print is safe to paste back into a shell:
+# no > < | ; & $ or backtick in the text (#411 follow-up). A pasted
+# "moved: x -> /path/x" once emptied six files, because zsh opened /path/x for
+# writing before failing on the unknown command "moved:".
 migrate() {
   if [[ ! -d "$LEGACY_DIR" ]]; then
     echo "nothing to migrate: no legacy home at $LEGACY_DIR"
@@ -292,7 +296,7 @@ migrate() {
         conflicts="$conflicts $name"
         echo "conflict: $name exists in both $LEGACY_DIR and $HOME_DIR — would be left in place"
       else
-        echo "would move: $entry -> $HOME_DIR/$name"
+        echo "would move $name into $HOME_DIR"
       fi
       continue
     fi
@@ -301,12 +305,12 @@ migrate() {
     if [[ $r -eq 0 ]] && present "$entry"; then
       # Moved, but a writer recreated the legacy name meanwhile: that newer
       # entry is kept where it is and the pair is a conflict to resolve.
-      echo "moved: $name -> $HOME_DIR/$name"; moved=$((moved + 1))
+      echo "moved $name into $HOME_DIR"; moved=$((moved + 1))
       echo "conflict: $name was written again in $LEGACY_DIR while it was migrated — both kept, resolve by hand"
       r=3
     fi
     case $r in
-      0) echo "moved: $name -> $HOME_DIR/$name"; moved=$((moved + 1)) ;;
+      0) echo "moved $name into $HOME_DIR"; moved=$((moved + 1)) ;;
       3|4) conflicts="$conflicts $name" ;;   # already reported
       1) conflicts="$conflicts $name"
          echo "conflict: $name exists in both $LEGACY_DIR and $HOME_DIR — left in place, resolve by hand" ;;
@@ -318,7 +322,7 @@ migrate() {
   elif [[ $moved -eq 0 && -z "$conflicts" ]]; then
     echo "nothing to migrate: $LEGACY_DIR has no entries"
   else
-    echo "moved $moved entr$([[ $moved -eq 1 ]] && echo y || echo ies) into $HOME_DIR; the legacy directory is left in place"
+    echo "moved $moved entr$([[ $moved -eq 1 ]] && echo y || echo ies) into $HOME_DIR, and the legacy directory is left in place"
   fi
   if [[ -n "$conflicts" ]]; then
     echo "unresolved:$conflicts" >&2

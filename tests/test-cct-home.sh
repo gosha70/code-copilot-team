@@ -221,7 +221,7 @@ assert_exit "a collision inside the claim exits 1" 1 "$RC"
 assert_contains "...and is reported as a conflict" "$OUT" "conflict: pi"
 assert_eq "...the legacy directory is intact (both files)" "a b" "$(ls "$H/.code-copilot-team/pi" | tr '\n' ' ' | sed 's/ $//')"
 assert_eq "...the home directory holds only the racer's file" "x" "$(ls "$H/.cct/pi" | tr '\n' ' ' | sed 's/ $//')"
-assert_eq "...no file was moved" "0" "$(grep -c '^moved:' <<<"$OUT")"
+assert_eq "...no file was moved" "0" "$(grep -cE '^moved [^0-9]' <<<"$OUT")"
 # Operational failure mid-move: the rename itself fails. Nothing moved, and the
 # empty claim is withdrawn so a retry starts clean.
 printf '#!/usr/bin/env bash\nexit 2\n' > "$SHIM/python3"
@@ -449,6 +449,59 @@ OUT=$(HOME=$H CCT_HOME= bash "$CCT" home migrate 2>&1)
 assert_contains "migrate notes it" "$OUT" "an interrupted migrate set aside"
 assert_eq "...and leaves it exactly where it is" "k" "$(cat "$H/.code-copilot-team/.cct-migrate-aside.abc123/f" 2>/dev/null)"
 rm -rf "$H"
+
+echo "=== cct home migrate output is safe to paste back into a shell ==="
+# A pasted "moved: x -> /path/x" once emptied six real files (zsh opened the
+# path for writing before failing on "moved:"). Every line migrate and
+# --dry-run print, on every path, must carry none of > < | ; & $ or backtick.
+PASTE_OUT=""
+H=$(fresh_home); mkdir -p "$H/.code-copilot-team/pi" "$H/.cct/.cct-migrate.stale" "$H/.code-copilot-team/.cct-migrate-aside.old"
+printf 'p\n' > "$H/.code-copilot-team/providers.toml"; printf 'a\n' > "$H/.code-copilot-team/pi/a"
+printf 'old\n' > "$H/.code-copilot-team/routing.toml"; printf 'new\n' > "$H/.cct/routing.toml"
+PASTE_OUT+=$(HOME=$H CCT_HOME= bash "$CCT" home migrate --dry-run 2>&1)$'\n'
+PASTE_OUT+=$(HOME=$H CCT_HOME= bash "$CCT" home migrate 2>&1)$'\n'
+PASTE_OUT+=$(HOME=$H CCT_HOME= bash "$CCT" home migrate 2>&1)$'\n'
+rm -rf "$H"
+# written again during the move
+H=$(fresh_home); mkdir -p "$H/.code-copilot-team" "$H/.cct"; printf 'old\n' > "$H/.code-copilot-team/providers.toml"
+SHIM=$(mktemp -d)
+cat > "$SHIM/ln" <<SH
+#!/usr/bin/env bash
+for last; do :; done
+/bin/ln "\$@"; rc=\$?
+case "\$last" in */.cct/providers.toml) printf 'new\n' > "$H/.code-copilot-team/providers.toml" ;; esac
+exit \$rc
+SH
+chmod +x "$SHIM/ln"
+PASTE_OUT+=$(HOME=$H CCT_HOME= PATH="$SHIM:$PATH" bash "$CCT" home migrate 2>&1)$'\n'
+rm -r "$SHIM"; rm -rf "$H"
+# across filesystems, both kept: a directory (python3 rename reports EXDEV once) and a file (ln fails once)
+H=$(fresh_home); mkdir -p "$H/.code-copilot-team/pi" "$H/.cct"; printf 'a\n' > "$H/.code-copilot-team/pi/a"; printf 'r\n' > "$H/.code-copilot-team/routing.toml"
+SHIM=$(mktemp -d)
+cat > "$SHIM/python3" <<SH
+#!/usr/bin/env bash
+for last; do :; done
+case "\$last" in */.cct/*) ;; *) exec "$REAL_PY" "\$@" ;; esac
+if [[ ! -e "$SHIM/py-first" ]]; then touch "$SHIM/py-first"; exit 3; fi
+exec "$REAL_PY" "\$@"
+SH
+cat > "$SHIM/ln" <<SH
+#!/usr/bin/env bash
+for last; do :; done
+case "\$last" in */.cct/routing.toml) if [[ ! -e "$SHIM/ln-first" ]]; then touch "$SHIM/ln-first"; exit 1; fi ;; esac
+exec /bin/ln "\$@"
+SH
+chmod +x "$SHIM/python3" "$SHIM/ln"
+PASTE_OUT+=$(HOME=$H CCT_HOME= PATH="$SHIM:$PATH" bash "$CCT" home migrate 2>&1)$'\n'
+rm -r "$SHIM"; rm -rf "$H"
+assert_contains "the paste check saw a move" "$PASTE_OUT" "moved providers.toml into"
+assert_contains "...a dry-run line" "$PASTE_OUT" "would move "
+assert_contains "...a conflict" "$PASTE_OUT" "conflict: routing.toml"
+assert_contains "...a leftover note" "$PASTE_OUT" "not touched"
+assert_contains "...a legacy name written again" "$PASTE_OUT" "written again"
+assert_contains "...a cross-filesystem copy" "$PASTE_OUT" "copied across filesystems"
+UNSAFE=$(printf '%s\n' "$PASTE_OUT" | grep -nE '[<>|;&$`]' || true)
+assert_eq "no migrate or --dry-run line contains a shell metacharacter" "" "$UNSAFE"
 
 echo ""
 echo "========================================="
