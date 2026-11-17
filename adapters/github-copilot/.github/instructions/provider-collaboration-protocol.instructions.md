@@ -95,6 +95,6 @@ CI validator (`scripts/validate-collaboration.sh`) fails the PR when:
 
 ## Provider Profile
 
-Global registry: `~/.code-copilot-team/providers.toml`.
+Global registry: `~/.cct/providers.toml`.
 
 See `shared/templates/provider-profile-template.toml` for schema and seed file.

@@ -43,7 +43,7 @@ request the size of a real review (the diff limit, §7).
 
 ## 3. The provider profile
 
-Providers live in `~/.code-copilot-team/providers.toml` (seeded by
+Providers live in `~/.cct/providers.toml` (seeded by
 `setup.sh`; the annotated template is
 `shared/templates/provider-profile-template.toml`). The file holds the
 **name** of the key's environment variable, never the key.

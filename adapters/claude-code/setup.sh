@@ -27,6 +27,8 @@ ALWAYS_RULES="coding-standards copilot-conventions copyright-headers safety"
 TEMPLATES_DIR="$CLAUDE_DIR/templates"
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")")" && pwd)"
 SHARED_DIR="$SCRIPT_DIR/../../shared"
+# shellcheck source=../../scripts/lib/cct-home.sh
+source "$SCRIPT_DIR/../../scripts/lib/cct-home.sh"   # the CCT home (#411)
 LAUNCHER_SOURCE="$SCRIPT_DIR/claude-code"
 LAUNCHER_TARGET="$HOME/.local/bin/claude-code"
 SYNC_MODE=0
@@ -277,7 +279,9 @@ install_helper_scripts() {
 # records absence as null when this file is missing; never fabricated.
 write_harness_json() {
     local repo_root="$SCRIPT_DIR/../.."
-    local target_dir="$HOME/.cct"
+    local target_file target_dir
+    target_file="$(cct_home_path harness.json)"   # a legacy-only harness.json is rewritten in place (#411 FR-4)
+    target_dir="$(dirname "$target_file")"
     local version="" sha=""
     if [[ -f "$repo_root/package.json" ]]; then
         if command -v jq &>/dev/null; then
@@ -293,8 +297,8 @@ write_harness_json() {
     printf '{"cct_version": %s, "cct_sha": %s, "installed_at": "%s"}\n' \
         "$([[ -n "$version" ]] && printf '"%s"' "$version" || printf 'null')" \
         "$([[ -n "$sha" ]] && printf '"%s"' "$sha" || printf 'null')" \
-        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$target_dir/harness.json"
-    echo "[done] Wrote harness identity to $target_dir/harness.json (${version:-no version} @ ${sha:0:12})"
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$target_file"
+    echo "[done] Wrote harness identity to $target_file (${version:-no version} @ ${sha:0:12})"
 }
 
 # ══════════════════════════════════════════════════════════════
@@ -1350,8 +1354,8 @@ fi
 # 13. PROVIDER PROFILE
 # ══════════════════════════════════════════════════════════════
 
-PROVIDER_DIR="$HOME/.code-copilot-team"
-PROVIDER_FILE="$PROVIDER_DIR/providers.toml"
+PROVIDER_FILE="$(cct_home_path providers.toml)"
+PROVIDER_DIR="$(dirname "$PROVIDER_FILE")"
 
 if [[ ! -f "$PROVIDER_FILE" ]]; then
     mkdir -p "$PROVIDER_DIR"
@@ -1640,7 +1644,7 @@ mkdir -p "$BIN_TARGET"
 
 # lib/review-verdict.sh IS A HARD DEPENDENCY of the runner, not an extra:
 # the runner sources it at startup and exits with "missing … (verdict
-# parser)" without it. Installing the runner alone shipped a copy that failed
+# parser)" without it; since #411 lib/cct-home.sh is a second one. Installing the runner alone shipped a copy that failed
 # on first use, which is the bug this block fixes.
 #
 # PREFLIGHT, NOT "BOTH OR NEITHER". Skipping the pair governs only a FRESH
@@ -1656,10 +1660,10 @@ mkdir -p "$BIN_TARGET"
 # that leaves the pair installed but the runner not executable.
 PEER_RUNNER_INSTALLED=false
 if [[ -f "$REPO_SCRIPTS/peer-review-runner.sh" ]]; then
-    if [[ ! -f "$REPO_SCRIPTS/lib/review-verdict.sh" ]]; then
+    if [[ ! -f "$REPO_SCRIPTS/lib/review-verdict.sh" || ! -f "$REPO_SCRIPTS/lib/cct-home.sh" ]]; then
         echo "[ERROR] peer-review-runner.sh cannot be installed: its verdict parser" >&2
-        echo "        is missing from this checkout" >&2
-        echo "        ($REPO_SCRIPTS/lib/review-verdict.sh)." >&2
+        echo "        or home resolver is missing from this checkout" >&2
+        echo "        ($REPO_SCRIPTS/lib/review-verdict.sh, $REPO_SCRIPTS/lib/cct-home.sh)." >&2
         if [[ -e "$BIN_TARGET/peer-review-runner.sh" ]]; then
             echo "        A runner from an earlier install is still at" >&2
             echo "        $BIN_TARGET/peer-review-runner.sh and cannot start without" >&2
@@ -1672,10 +1676,11 @@ if [[ -f "$REPO_SCRIPTS/peer-review-runner.sh" ]]; then
     fi
     mkdir -p "$BIN_TARGET/lib"
     cp "$REPO_SCRIPTS/lib/review-verdict.sh" "$BIN_TARGET/lib/review-verdict.sh"
+    cp "$REPO_SCRIPTS/lib/cct-home.sh" "$BIN_TARGET/lib/cct-home.sh"   # the CCT home resolver (#411), also sourced at startup
     cp "$REPO_SCRIPTS/peer-review-runner.sh" "$BIN_TARGET/peer-review-runner.sh"
     chmod +x "$BIN_TARGET/peer-review-runner.sh"
     PEER_RUNNER_INSTALLED=true
-    echo "[done] Installed lib/review-verdict.sh + peer-review-runner.sh to $BIN_TARGET"
+    echo "[done] Installed lib/review-verdict.sh + lib/cct-home.sh + peer-review-runner.sh to $BIN_TARGET"
 else
     echo "[skip] peer-review-runner.sh not found at $REPO_SCRIPTS"
 fi

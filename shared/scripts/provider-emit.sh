@@ -12,7 +12,7 @@ set -euo pipefail
 #   <copilot>  one of: claude-code, aider, codex, github-copilot, cursor,
 #              windsurf, pi
 #   <provider-id>  a [providers.<id>] section in the profile
-#   --profile-file  provider profile (default: ~/.code-copilot-team/providers.toml)
+#   --profile-file  provider profile (default: ~/.cct/providers.toml)
 #
 # Output: the copilot-specific config on stdout (deterministic — golden-testable).
 # Auth VALUES are never emitted; only the api_key_env NAME (as a shell ${VAR}
@@ -27,7 +27,9 @@ err() { echo "[$PROG] ERROR: $*" >&2; }
 COPILOT="${1:-}"
 PROVIDER="${2:-}"
 shift 2 2>/dev/null || true
-PROFILE_FILE="${CCT_PROVIDERS_FILE:-$HOME/.code-copilot-team/providers.toml}"
+# shellcheck source=../../scripts/lib/cct-home.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scripts/lib" && pwd)/cct-home.sh"   # the CCT home (#411)
+PROFILE_FILE="${CCT_PROVIDERS_FILE:-$(cct_home_path providers.toml)}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --profile-file) PROFILE_FILE="${2:?--profile-file requires a path}"; shift 2 ;;

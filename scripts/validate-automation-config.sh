@@ -502,7 +502,7 @@ fi
 
 # ── routing (#248, increment A of #109): TRUST-ASYMMETRIC by
 #    construction. A repository may only NARROW what the user-level
-#    registry (~/.code-copilot-team/routing.toml) permits — disable
+#    registry (~/.cct/routing.toml) permits — disable
 #    routing, restrict allowed_profiles, pick a default route class.
 #    It can never CREATE executable authority: profile definitions,
 #    credential or endpoint references, and protocol selection belong
@@ -520,7 +520,7 @@ if [[ "$(q 'has("routing")')" == "true" ]]; then
             case "$k" in
                 enabled|allowed_profiles|default_task_route) ;;
                 profiles|profile)
-                    violation "routing.$k: a repository cannot DEFINE execution profiles — repo configuration narrows user routing authority, never creates it (profiles live in ~/.code-copilot-team/routing.toml)" ;;
+                    violation "routing.$k: a repository cannot DEFINE execution profiles — repo configuration narrows user routing authority, never creates it (profiles live in ~/.cct/routing.toml)" ;;
                 credential*|base_url*|protocol|model|backend|provider|quota_pool|capability_tier|tier|roles|tool_profile|data_policy)
                     violation "routing.$k: a repository cannot introduce credential, endpoint, identity, or capability fields — these belong to the user-level registry, and repo configuration can only narrow it" ;;
                 tier2) ;;     # promoted with #254 T6 (restriction-only; validated below)

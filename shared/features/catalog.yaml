@@ -94,7 +94,7 @@ features:
       windsurf: advisory
       aider: advisory
     prerequisites:
-      - a reviewer provider in ~/.code-copilot-team/providers.toml
+      - a reviewer provider in ~/.cct/providers.toml
       - the provider's API key exported by name, or a local model server
     guide: docs/auto-code-review-setup.md
     commands: [review-submit, review-decide]

@@ -308,7 +308,7 @@ export VLLM_API_KEY=dummy    # vLLM ignores it; Codex will not start without one
 ### Claude Code — bridge first
 
 ```
-# ~/.code-copilot-team/litellm-qwen38.yaml
+# ~/.cct/litellm-qwen38.yaml
 # model_list:
 #   - model_name: qwen38-27b
 #     litellm_params:
@@ -316,7 +316,7 @@ export VLLM_API_KEY=dummy    # vLLM ignores it; Codex will not start without one
 #       api_base: http://<dgx-spark-ip>:8001/v1
 #       api_key: dummy
 
-litellm --config ~/.code-copilot-team/litellm-qwen38.yaml --port 8787
+litellm --config ~/.cct/litellm-qwen38.yaml --port 8787
 
 export ANTHROPIC_BASE_URL="http://127.0.0.1:8787"   # bare origin, NO /v1
 export ANTHROPIC_AUTH_TOKEN="dummy"

@@ -32,7 +32,7 @@ echo "=== cct CLI ==="
 
 assert "cct is executable" "[[ -x '$CCT' ]]"
 HELP=$(bash "$CCT" help)
-for c in start features list routing doctor config help; do
+for c in start features list routing doctor config home help; do
   assert "help documents: $c" "grep -qE '^  $c ' <<<\"\$HELP\""
 done
 # Capture, then grep: these commands exit nonzero by design, and under
@@ -82,6 +82,25 @@ assert "start without a launcher names the install command" \
 assert "start without a launcher says it wants the installed one, not the checkout" \
   "grep -q 'INSTALLED launcher' <<<\"\$NOLAUNCHER_OUT\""
 rm -r "$START_BIN" "$START_HOME" "$EMPTY_HOME"; rm "$START_LOG"
+
+# ── doctor reports the CCT home and what the legacy home still serves (#411) ──
+home_rows() {  # home_rows <json> → "check=status" per Home row
+  python3 -c "
+import json, sys
+d = json.loads(sys.stdin.read())
+print(' '.join(f\"{c['check']}={c['status']}\" for c in d['checks'] if c['section'] == 'Home'))" <<<"$1"
+}
+HOME_TMP=$(mktemp -d)
+H_FRESH=$(HOME="$HOME_TMP" CCT_HOME= bash "$CCT" doctor --no-network --json 2>&1 || true)
+assert "doctor: a fresh machine reports the home and no legacy home" "[[ \$(home_rows \"\$H_FRESH\") == 'home=ok legacy=ok' ]]"
+assert "doctor: ...naming ~/.cct as the default" "grep -q '$HOME_TMP/.cct (default)' <<<\"\$H_FRESH\""
+mkdir -p "$HOME_TMP/.code-copilot-team/pi"; printf 'x\n' > "$HOME_TMP/.code-copilot-team/providers.toml"
+H_LEGACY=$(HOME="$HOME_TMP" CCT_HOME= bash "$CCT" doctor --no-network --json 2>&1 || true)
+assert "doctor: entries still in the legacy home warn, one row each" "[[ \$(home_rows \"\$H_LEGACY\") == 'home=ok pi=warn providers.toml=warn' ]]"
+assert "doctor: ...and name the migrate command" "grep -q 'cct home migrate' <<<\"\$H_LEGACY\""
+H_OVERRIDE=$(HOME="$HOME_TMP" CCT_HOME="$HOME_TMP/elsewhere" bash "$CCT" doctor --no-network --json 2>&1 || true)
+assert "doctor: CCT_HOME set reports the override and no fallback rows" "[[ \$(home_rows \"\$H_OVERRIDE\") == 'home=ok legacy=ok' ]]"
+rm -rf "$HOME_TMP"
 
 # ── doctor reports the Claude Code gateway and its compat settings (#399) ──
 gw_status() {

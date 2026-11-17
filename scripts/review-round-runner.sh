@@ -13,7 +13,7 @@ set -euo pipefail
 #        4 = RUNNER_ERROR (script crash — #229)
 #
 # Requires: jq, shasum or sha256sum
-# Env:      CCT_PROVIDER_PROFILE (optional, default ~/.code-copilot-team/providers.toml)
+# Env:      CCT_PROVIDER_PROFILE (optional, default ~/.cct/providers.toml)
 #           CCT_REVIEW_MAX_ROUNDS (optional, default 5)
 #           CCT_REVIEW_TIMEOUT_SEC (optional, default 900)
 #           CCT_REVIEW_STALE_THRESHOLD (optional, default 2)
@@ -63,6 +63,12 @@ if [[ ! -f "$RV_LIB_DIR/lib/review-verdict.sh" ]]; then
 fi
 # shellcheck source=lib/review-verdict.sh
 source "$RV_LIB_DIR/lib/review-verdict.sh"
+if [[ ! -f "$RV_LIB_DIR/lib/cct-home.sh" ]]; then
+    echo "Error: missing $RV_LIB_DIR/lib/cct-home.sh (the CCT home resolver, #411)" >&2
+    exit 1
+fi
+# shellcheck source=lib/cct-home.sh
+source "$RV_LIB_DIR/lib/cct-home.sh"
 
 # Review state dir — overridable so a caller (e.g. the auto-build driver
 # running an advisory panel reviewer) can run a review in isolation, without
@@ -84,7 +90,7 @@ fi
 # ── Configuration ─────────────────────────────────────────────
 
 STATE_FILE="$REVIEW_DIR/state.json"
-PROFILE="${CCT_PROVIDER_PROFILE:-$HOME/.code-copilot-team/providers.toml}"
+PROFILE="${CCT_PROVIDER_PROFILE:-$(cct_home_path providers.toml)}"
 MAX_ROUNDS="${CCT_REVIEW_MAX_ROUNDS:-5}"
 TIMEOUT_SEC="${CCT_REVIEW_TIMEOUT_SEC:-900}"
 STALE_THRESHOLD="${CCT_REVIEW_STALE_THRESHOLD:-2}"

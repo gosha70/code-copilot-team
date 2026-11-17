@@ -12,7 +12,7 @@ Code Copilot Team supports **dual-copilot peer review** — a second AI provider
    What the automatic flow uses:
    - `peer-review-on-stop.sh` hook to `~/.claude/hooks/`
    - `/phase-complete` command to `~/.claude/commands/`
-   - Provider profile seed to `~/.code-copilot-team/providers.toml`
+   - Provider profile seed to `~/.cct/providers.toml`
 
    > **Upgrading?** `./scripts/setup.sh --sync --claude-code` refreshes
    > templates and the launcher but does **not** reinstall `~/.local/bin`.
@@ -141,7 +141,7 @@ cd ~/projects/existing-app && claude-code --peer-review
 
 ### Provider Profile
 
-Peer providers are configured in `~/.code-copilot-team/providers.toml` (seeded by setup):
+Peer providers are configured in `~/.cct/providers.toml` (seeded by setup):
 
 ```toml
 [defaults]

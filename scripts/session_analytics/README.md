@@ -906,7 +906,7 @@ byte-identical after a full derive + evaluate + gate run).
 
 ```bash
 CCT_SA_CALIBRATION_ROOT=/path/to/calibration \
-CCT_SA_CALIBRATION_POLICY_SOURCE=~/.code-copilot-team/routing.toml \
+CCT_SA_CALIBRATION_POLICY_SOURCE=~/.cct/routing.toml \
 CCT_SA_CALIBRATION_REPO_POLICY_SOURCE=.claude/automation.json \
   ./scripts/session-analytics serve
 ```

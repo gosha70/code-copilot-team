@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from . import constants as C
+from .home import cct_home_path
 
 # Env vars / .env keys (presence-checked, never logged for secrets).
 # The database key is CCT_SA_DB. It was CCT_SA_DSN until 2026-09 ("what
@@ -130,7 +131,17 @@ SECRET_ENV_KEYS = frozenset({ENV_JUDGE_API_KEY})
 
 _CONFIG_PACKAGE = "session_analytics.config_data"
 _DEFAULTS_FILE = "defaults.json"
-_USER_CONFIG = Path.home() / ".cct" / "session-analytics.json"
+_USER_CONFIG_NAME = "session-analytics.json"
+# None = resolve through the CCT home at load time; tests patch a Path here.
+_USER_CONFIG: Path | None = None
+
+
+def _user_config_path() -> Path:
+    """~/.cct/session-analytics.json, or the legacy home's copy while the
+    #411 fallback lasts; resolved at load time, never at import."""
+    if _USER_CONFIG is not None:
+        return _USER_CONFIG
+    return cct_home_path(_USER_CONFIG_NAME)
 
 # Repo root = …/scripts/session_analytics/config.py → parents[2].
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -850,8 +861,9 @@ def load_config(
 ) -> AnalyticsConfig:
     """Resolve configuration with the documented precedence."""
     data = _read_defaults()
-    if _USER_CONFIG.is_file():
-        data = _deep_merge(data, _load_json_text(_USER_CONFIG.read_text(encoding="utf-8")))
+    user_config = _user_config_path()
+    if user_config.is_file():
+        data = _deep_merge(data, _load_json_text(user_config.read_text(encoding="utf-8")))
     if extra_overrides:
         data = _deep_merge(data, extra_overrides)
 
@@ -912,7 +924,7 @@ def load_config(
     resolved_dsn = dsn or env_db() or data.get(C.CFG_DSN) or ""
     resolved_kuzu = Path(
         kuzu_path or env(ENV_KUZU_PATH) or data.get(C.CFG_KUZU_PATH)
-        or str(Path.home() / ".cct" / C.KUZU_STORE_NAME)
+        or str(cct_home_path(C.KUZU_STORE_NAME))
     ).expanduser()
     # Kùzu refuses a directory ("Database path cannot be a directory"),
     # and a user who sets CCT_SA_KUZU_PATH=~/.cct means "keep the graph
@@ -926,7 +938,7 @@ def load_config(
     harness_stamps_path = (
         shared_ledger_path(stamps_override, windows=os.name == "nt")
         if stamps_override
-        else (Path.home() / ".cct" / C.HARNESS_STAMPS_FILENAME).as_posix()
+        else cct_home_path(C.HARNESS_STAMPS_FILENAME).as_posix()
     )
     resolved_redaction = (
         redaction_mode or env(ENV_REDACTION) or data.get(C.CFG_REDACTION) or C.REDACT_CODE

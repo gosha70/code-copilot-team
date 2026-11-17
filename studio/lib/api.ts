@@ -815,7 +815,7 @@ export interface RoutingEvidenceSettings {
   root_count: number;
 }
 
-/** The runtime routing registry (~/.code-copilot-team/routing.toml),
+/** The runtime routing registry (~/.cct/routing.toml),
  *  summarised read-only. Credentials, endpoints and any field outside the
  *  server's whitelist never reach the browser. */
 export interface RoutingRegistryProfile {

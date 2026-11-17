@@ -88,7 +88,7 @@ if $SHOW_HELP; then
   echo "  --claude-code     Install Claude Code config to ~/.claude/"
   echo "  --playwright      Also install the Playwright MCP server (Claude Code only)"
   echo "  --codex           Install Codex config to ~/.codex/"
-  echo "  --pi              Install Pi adapter (pi-code + runtime) to ~/.code-copilot-team/pi/"
+  echo "  --pi              Install Pi adapter (pi-code + runtime) to ~/.cct/pi/"
   echo ""
   echo "Tools (project install — requires project dir):"
   echo "  --cursor          Install Cursor .mdc rules"
@@ -282,6 +282,16 @@ echo "========================================="
 echo "  Setup complete"
 echo "  Adapters: $INSTALLED installed, $FAILED failed"
 echo "  Wiki tooling: $WIKI_STATUS"
+# The CCT home (#411): name what is still read from the legacy home; never move it.
+# A partial copy of the checkout without the lib (the test stubs) prints no Home line.
+if [[ -f "$REPO_DIR/scripts/lib/cct-home.sh" ]]; then
+  # shellcheck source=lib/cct-home.sh
+  source "$REPO_DIR/scripts/lib/cct-home.sh"
+  HOME_LEGACY_HITS="$(cct_home_legacy_hits | tr '\n' ' ' | sed 's/ $//')"
+  if [[ -n "$HOME_LEGACY_HITS" ]]; then   # FR-6: this line only when there is legacy state, else nothing
+    echo "  Home: $(cct_home); still read from the legacy $HOME/$CCT_HOME_LEGACY_REL: $HOME_LEGACY_HITS — run: cct home migrate"
+  fi
+fi
 echo "========================================="
 
 if [[ $FAILED -gt 0 || "$WIKI_STATUS" == "FAILED" ]]; then

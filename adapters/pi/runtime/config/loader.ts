@@ -62,7 +62,7 @@ export interface LoadResult {
 }
 
 export interface LoadOptions {
-  globalDir: string; // ~/.code-copilot-team
+  globalDir: string; // the CCT home: ${CCT_HOME:-~/.cct} (#411), resolved by the caller
   projectDir: string; // project root
   trusted: boolean; // in-process Pi trust resolution result
   profile: string;
