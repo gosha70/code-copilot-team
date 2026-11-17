@@ -452,6 +452,7 @@ class TestLedgerPathEndToEnd(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.home, True)
         self.addCleanup(shutil.rmtree, self.work, True)
         self.addCleanup(shutil.rmtree, Path(tempfile.gettempdir()) / self.tag, True)
+        self.addCleanup(shutil.rmtree, Path("/tmp") / self.tag, True)
 
     def _forms(self) -> list[str]:
         base = Path(tempfile.gettempdir()).as_posix() + "/" + self.tag
