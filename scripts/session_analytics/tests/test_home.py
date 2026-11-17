@@ -14,7 +14,7 @@ class TheHomeResolver(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="cct-home-"))
         self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp, True))
-        self.env = mock.patch.dict(os.environ, {"HOME": str(self.tmp)}, clear=False)
+        self.env = mock.patch.dict(os.environ, {"HOME": str(self.tmp), "USERPROFILE": str(self.tmp)}, clear=False)
         self.env.start()
         os.environ.pop(H.ENV_HOME, None)
         self.addCleanup(self.env.stop)
@@ -45,7 +45,12 @@ class TheHomeResolver(unittest.TestCase):
         (self.tmp / ".cct").mkdir()
         (self.tmp / ".code-copilot-team").mkdir()
         (self.tmp / ".code-copilot-team" / "providers.toml").write_text("stale")
-        (self.tmp / ".cct" / "providers.toml").symlink_to(self.tmp / "nowhere")
+        try:
+            (self.tmp / ".cct" / "providers.toml").symlink_to(self.tmp / "nowhere")
+        except OSError:
+            if os.name != "nt":
+                raise
+            self.skipTest("symlinks unavailable")
         self.assertEqual(H.cct_home_path("providers.toml"), self.tmp / ".cct" / "providers.toml")
         self.assertEqual(H.legacy_hits(), [])
 
@@ -78,7 +83,7 @@ class ConfigUsesTheResolver(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="cct-home-cfg-"))
         self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp, True))
-        self.env = mock.patch.dict(os.environ, {"HOME": str(self.tmp)}, clear=False)
+        self.env = mock.patch.dict(os.environ, {"HOME": str(self.tmp), "USERPROFILE": str(self.tmp)}, clear=False)
         self.env.start()
         for k in (H.ENV_HOME, "CCT_HARNESS_STAMPS", "CCT_SA_KUZU_PATH"):
             os.environ.pop(k, None)
