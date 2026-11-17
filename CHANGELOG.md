@@ -144,6 +144,14 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Fixed
 
+- **`cct home migrate` output is safe to paste back into a shell.** It
+  printed `moved: x -> /path/x`; pasted into zsh, the `>` opened
+  `/path/x` for writing before the unknown command `moved:` failed, which
+  emptied the file just migrated. Lines now read `moved x into /path`,
+  and no line `migrate` or `--dry-run` prints contains `>`, `<`, `|`,
+  `;`, `&`, `$` or a backtick. A regression test migrates a non-empty
+  profile with backups and a ledger and compares every file's sha256;
+  `docs/cct-home.md` documents recovering an emptied file (#463).
 - **The home-path scrub no longer leaves the username when the home
   follows a letter.** The left boundary added to the home match kept
   `scrub_text` from touching a home that came straight after a word

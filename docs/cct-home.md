@@ -103,6 +103,41 @@ hand. An interrupted run puts an unpublished entry back; one it could not
 put back is reported by `cct home` and `cct home migrate`.
 It never deletes the legacy directory; once it is empty, remove it yourself.
 
+**Do not paste `migrate`'s output back into a terminal.** Versions before
+this fix printed `moved: x -> /path/x`; pasted into zsh or bash, the `>`
+opens `/path/x` for writing before the unknown command `moved:` fails, and
+the file just migrated is left empty (#463). Output now reads
+`moved x into /path` and carries no `>`, `<`, `|`, `;`, `&`, `$` or
+backtick, but a terminal is still the wrong place for it.
+
+## Recovering an emptied file
+
+`migrate` moves a file by renaming or hard-linking it, never by writing its
+content, so a migrated file keeps its original bytes and its original birth
+time. A file that is empty after a migrate was emptied afterwards.
+
+1. **Confirm.** `ls -la ~/.cct` shows the size; on macOS,
+   `stat -f '%N born=%SB modified=%Sm size=%z' ~/.cct/*` shows that an
+   emptied file still has its old birth time and a new modification time.
+2. **Restore from a backup** taken before the empty timestamp (Time
+   Machine, or a copy on another machine), into `~/.cct/`.
+3. **Rebuild a provider profile** when there is no backup. The profile holds
+   provider settings and the *names* of key variables, never the keys:
+   `docs/auto-code-review-setup.md` has the DeepSeek, DGX Spark and Codex
+   blocks and the `[defaults]` block; the template
+   `shared/templates/provider-profile-template.toml` has the rest. Earlier
+   Claude Code or Codex sessions that opened the file may hold its values
+   (`~/.claude/projects/*/*.jsonl`, `~/.codex/sessions/`). Check
+   `[defaults]` yourself: it decides which provider reviews your code.
+   Validate with `bash scripts/validate-providers-profile.sh <file>` before
+   copying it to `~/.cct/providers.toml`.
+4. **Reseed from the template** as a last resort: remove the empty
+   `~/.cct/providers.toml` (setup does not overwrite an existing file, even
+   an empty one), run `bash scripts/setup.sh --sync`, and re-add your
+   providers.
+5. **Drop emptied state files** such as `routing-probe-ledger.json`; the
+   routing commands recreate them.
+
 The per-project directory `<repo>/.code-copilot-team/` (the Pi runtime's
 project config) is not part of the user home and is unchanged by this page; its
 rename is tracked separately (#411 ruled it its own issue).
