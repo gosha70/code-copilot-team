@@ -450,6 +450,48 @@ assert_contains "migrate notes it" "$OUT" "an interrupted migrate set aside"
 assert_eq "...and leaves it exactly where it is" "k" "$(cat "$H/.code-copilot-team/.cct-migrate-aside.abc123/f" 2>/dev/null)"
 rm -rf "$H"
 
+echo "=== #463: a non-empty profile, its backups and a ledger keep every byte ==="
+sha_of() { { sha256sum "$1" 2>/dev/null || shasum -a 256 "$1"; } | cut -d' ' -f1; }
+seed_profile() {  # <home> → the legacy profile, four backups and a 0600 ledger, all non-empty
+  mkdir -p "$1/.code-copilot-team" "$1/.cct"
+  local n
+  for n in providers.toml providers.toml.bak-2026-10-24 providers.toml.bak-20260808-091632 providers.toml.bak-20260909-run2 providers.toml.bak-20260910-deepseek; do
+    printf '[defaults]\npeer_for.claude = "deepseek"\n\n[providers.deepseek]\ntype = "openai-compatible"\napi_key_env = "DEEPSEEK_API_KEY"\n# %s\n' "$n" > "$1/.code-copilot-team/$n"
+  done
+  printf '{"probes": [1, 2, 3]}\n' > "$1/.code-copilot-team/routing-probe-ledger.json"; chmod 0600 "$1/.code-copilot-team/routing-probe-ledger.json"
+}
+PROFILE_SET="providers.toml providers.toml.bak-2026-10-24 providers.toml.bak-20260808-091632 providers.toml.bak-20260909-run2 providers.toml.bak-20260910-deepseek routing-probe-ledger.json"
+# Same filesystem: every file arrives in the home with its bytes and mode.
+H=$(fresh_home); seed_profile "$H"
+declare_sums=""; for n in $PROFILE_SET; do declare_sums+="$n=$(sha_of "$H/.code-copilot-team/$n") "; done
+OUT=$(HOME=$H CCT_HOME= bash "$CCT" home migrate 2>&1); RC=$?
+assert_exit "migrating the profile set exits 0" 0 "$RC"
+got=""; for n in $PROFILE_SET; do got+="$n=$(sha_of "$H/.cct/$n") "; done
+assert_eq "every file in the home has the bytes it had in the legacy home (sha256)" "$declare_sums" "$got"
+empty=$(find "$H/.cct" -maxdepth 1 -type f -size 0 | wc -l | tr -d ' ')
+assert_eq "...and none of them is empty" "0" "$empty"
+assert_eq "...and the ledger keeps its 0600 mode" "600" "$(mode_of "$H/.cct/routing-probe-ledger.json")"
+rm -rf "$H"
+# Across filesystems (ln refuses each first link): the home gets the same bytes
+# and every legacy original is kept, never deleted.
+H=$(fresh_home); seed_profile "$H"
+declare_sums=""; for n in $PROFILE_SET; do declare_sums+="$n=$(sha_of "$H/.code-copilot-team/$n") "; done
+SHIM=$(mktemp -d)
+cat > "$SHIM/ln" <<SH
+#!/usr/bin/env bash
+for last; do :; done
+case "\$last" in */.cct/*) m="$SHIM/first-\${last##*/}"; if [[ ! -e "\$m" ]]; then touch "\$m"; exit 1; fi ;; esac
+exec /bin/ln "\$@"
+SH
+chmod +x "$SHIM/ln"
+OUT=$(HOME=$H CCT_HOME= PATH="$SHIM:$PATH" bash "$CCT" home migrate 2>&1); RC=$?
+assert_exit "across filesystems the profile set is copied and reported (exit 1)" 1 "$RC"
+got=""; for n in $PROFILE_SET; do got+="$n=$(sha_of "$H/.cct/$n") "; done
+assert_eq "...every home copy has the original bytes (sha256)" "$declare_sums" "$got"
+got=""; for n in $PROFILE_SET; do got+="$n=$(sha_of "$H/.code-copilot-team/$n") "; done
+assert_eq "...and every legacy original is kept with its bytes" "$declare_sums" "$got"
+rm -r "$SHIM"; rm -rf "$H"
+
 echo "=== cct home migrate output is safe to paste back into a shell ==="
 # A pasted "moved: x -> /path/x" once emptied six real files (zsh opened the
 # path for writing before failing on "moved:"). Every line migrate and
