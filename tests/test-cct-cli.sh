@@ -100,6 +100,12 @@ assert "doctor: entries still in the legacy home warn, one row each" "[[ \$(home
 assert "doctor: ...and name the migrate command" "grep -q 'cct home migrate' <<<\"\$H_LEGACY\""
 H_OVERRIDE=$(HOME="$HOME_TMP" CCT_HOME="$HOME_TMP/elsewhere" bash "$CCT" doctor --no-network --json 2>&1 || true)
 assert "doctor: CCT_HOME set reports the override and no fallback rows" "[[ \$(home_rows \"\$H_OVERRIDE\") == 'home=ok legacy=ok' ]]"
+# Leftovers of `cct home migrate` (never listed as legacy entries) warn here.
+mkdir -p "$HOME_TMP/.code-copilot-team/.cct-migrate-aside.abc123" "$HOME_TMP/.cct/.cct-migrate.def456"
+H_LEFT=$(HOME="$HOME_TMP" CCT_HOME= bash "$CCT" doctor --no-network --json 2>&1 || true)
+assert "doctor: a set-aside entry and a staging directory each warn" "[[ \$(home_rows \"\$H_LEFT\") == 'home=ok .cct-migrate-aside.abc123=warn .cct-migrate.def456=warn pi=warn providers.toml=warn' ]]"
+assert "doctor: ...the set-aside row says why it is there" "grep -q 'interrupted, or kept because the name was recreated' <<<\"\$H_LEFT\""
+assert "doctor: ...and the staging row names the interrupted migrate" "grep -q 'staging directory left by an interrupted' <<<\"\$H_LEFT\""
 rm -rf "$HOME_TMP"
 
 # ── doctor reports the Claude Code gateway and its compat settings (#399) ──

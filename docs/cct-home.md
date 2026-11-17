@@ -85,11 +85,13 @@ own staging directory and unpublished claim on exit or a signal, and only
 while the object at that path is still the one it created (same device and
 inode), never a directory that has since been published there; a
 `.cct-migrate.*` directory it did not create is reported and left alone.
-Nor does it delete anything a writer is still using. Each legacy entry is
-first renamed to a private `.cct-migrate-aside.*` name beside it, which
-fixes the object being moved. On the same filesystem the move is a rename
-(a directory) or a hard link (a file), so a writer holding the file open
-keeps writing to the moved object, and only the private name is removed.
+Nor does it delete anything a writer is still using. Each file, and each
+directory moved across filesystems, is first renamed to a private
+`.cct-migrate-aside.*` name beside it, which fixes the object being moved.
+On the same filesystem a directory is renamed straight onto its claim in the
+home and a file is hard-linked from its private name, so a writer holding
+either open keeps writing to the moved object, and only the private name is
+removed.
 A writer that replaces the legacy entry meanwhile creates a new one at the
 original name, which is kept and reported as a conflict.
 
@@ -112,9 +114,11 @@ backtick, but a terminal is still the wrong place for it.
 
 ## Recovering an emptied file
 
-`migrate` moves a file by renaming or hard-linking it, never by writing its
-content, so a migrated file keeps its original bytes and its original birth
-time. A file that is empty after a migrate was emptied afterwards.
+On the same filesystem `migrate` moves a file by renaming or hard-linking
+it, never by writing its content, so a migrated file keeps its original
+bytes and its original birth time, and a file that is empty after a migrate
+was emptied afterwards. Across filesystems the home copy is a new file with
+the original bytes, and the legacy original is kept beside it.
 
 1. **Confirm.** `ls -la ~/.cct` shows the size; on macOS,
    `stat -f '%N born=%SB modified=%Sm size=%z' ~/.cct/*` shows that an

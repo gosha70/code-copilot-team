@@ -17,6 +17,7 @@ from pathlib import Path
 ENV_HOME = "CCT_HOME"
 HOME_DEFAULT_REL = ".cct"
 MIGRATE_ASIDE_PREFIX = ".cct-migrate-aside."  # an entry `cct home migrate` set aside; reported there, never listed here
+MIGRATE_STAGE_PREFIX = ".cct-migrate."  # a staging directory `cct home migrate` creates in the home
 HOME_LEGACY_REL = ".code-copilot-team"  # served as a fallback through 2.1.x; removed in 2.2
 
 

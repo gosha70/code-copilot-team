@@ -58,7 +58,7 @@ note_leftovers() {
   done
   for stale in "$LEGACY_DIR"/.cct-migrate-aside.*; do
     present "$stale" || continue
-    echo "note: $stale is a legacy entry an interrupted migrate set aside, not touched — inspect it and move it back by hand"
+    echo "note: $stale is a legacy entry migrate set aside (interrupted, or kept because the name was recreated), not touched — compare it with the entry of the same name and move or remove it by hand"
   done
   return 0
 }
@@ -277,7 +277,7 @@ move_entry() {
 }
 
 # Every line migrate and --dry-run print is safe to paste back into a shell:
-# no > < | ; & $ or backtick in the text (#411 follow-up). A pasted
+# no > < | ; & $ or backtick in the text (#463, #464). A pasted
 # "moved: x -> /path/x" once emptied six files, because zsh opened /path/x for
 # writing before failing on the unknown command "moved:".
 migrate() {

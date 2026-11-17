@@ -113,9 +113,23 @@ def check_home(report: Report) -> None:
     home = cct_home.cct_home()
     override = os.environ.get(cct_home.ENV_HOME)
     report.add("Home", "home", OK, f"{home} ({'CCT_HOME' if override else 'default'})")
+    # Leftovers of `cct home migrate`: never listed as legacy entries or
+    # served, so this is the one place a user hears about them.
+    legacy = cct_home.legacy_home()
+    if not override and legacy.is_dir():
+        for p in sorted(legacy.glob(cct_home.MIGRATE_ASIDE_PREFIX + "*")):
+            report.add("Home", p.name, WARN,
+                       f"{p} was set aside by `cct home migrate` (interrupted, or kept because "
+                       f"the name was recreated) — compare it with the entry of the same name "
+                       f"and move or remove it by hand")
+    if home.is_dir():
+        for p in sorted(home.glob(cct_home.MIGRATE_STAGE_PREFIX + "*")):
+            if p.is_dir():
+                report.add("Home", p.name, WARN,
+                           f"{p} looks like a staging directory left by an interrupted "
+                           f"`cct home migrate` — inspect it and remove it by hand")
     hits = cct_home.legacy_hits()
     if not hits:
-        legacy = cct_home.legacy_home()
         detail = "nothing left in the legacy home" if (not override and legacy.is_dir()) else "no legacy home"
         report.add("Home", "legacy", OK, detail)
         return

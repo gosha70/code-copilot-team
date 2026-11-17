@@ -446,7 +446,7 @@ rm -r "$SHIM"; rm -rf "$H"
 H=$(fresh_home); mkdir -p "$H/.code-copilot-team/.cct-migrate-aside.abc123"; printf 'k\n' > "$H/.code-copilot-team/.cct-migrate-aside.abc123/f"
 assert_eq "cct_home_legacy_hits does not list a set-aside entry" "" "$(HOME=$H CCT_HOME= bash -c 'source "'"$REPO_DIR"'/scripts/lib/cct-home.sh"; cct_home_legacy_hits')"
 OUT=$(HOME=$H CCT_HOME= bash "$CCT" home migrate 2>&1)
-assert_contains "migrate notes it" "$OUT" "an interrupted migrate set aside"
+assert_contains "migrate notes it" "$OUT" "migrate set aside (interrupted, or kept because the name was recreated)"
 assert_eq "...and leaves it exactly where it is" "k" "$(cat "$H/.code-copilot-team/.cct-migrate-aside.abc123/f" 2>/dev/null)"
 rm -rf "$H"
 
