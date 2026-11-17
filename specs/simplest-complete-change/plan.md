@@ -3,7 +3,7 @@ spec_mode: full
 feature_id: simplest-complete-change
 risk_category: integration
 justification: "Framework-level instruction architecture update affecting shared conventions, coding standards, review guidelines, and memory skills across all supported adapters and reviewer setup."
-status: draft
+status: approved
 date: 2026-11-10
 collaboration_mode: single
 issue: 389
