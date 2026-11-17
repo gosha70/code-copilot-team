@@ -85,6 +85,22 @@ own staging directory and unpublished claim on exit or a signal, and only
 while the object at that path is still the one it created (same device and
 inode), never a directory that has since been published there; a
 `.cct-migrate.*` directory it did not create is reported and left alone.
+Nor does it delete anything a writer is still using. Each legacy entry is
+first renamed to a private `.cct-migrate-aside.*` name beside it, which
+fixes the object being moved. On the same filesystem the move is a rename
+(a directory) or a hard link (a file), so a writer holding the file open
+keeps writing to the moved object, and only the private name is removed.
+A writer that replaces the legacy entry meanwhile creates a new one at the
+original name, which is kept and reported as a conflict.
+
+Across filesystems (`CCT_HOME` on another volume) the entry is copied and
+published in the home, and the home copy is read from then on, but the
+legacy copy is **never deleted**: no check can rule out a writer changing it
+after the copy. It goes back under its original name (or, if a writer
+recreated that name, stays under its private name, whose path is printed),
+and `migrate` exits 1 so you compare the two and remove the legacy one by
+hand. An interrupted run puts an unpublished entry back; one it could not
+put back is reported by `cct home` and `cct home migrate`.
 It never deletes the legacy directory; once it is empty, remove it yourself.
 
 The per-project directory `<repo>/.code-copilot-team/` (the Pi runtime's

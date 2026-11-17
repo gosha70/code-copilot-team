@@ -160,8 +160,10 @@ printf 'legacy\n' > "$H/.code-copilot-team/providers.toml"; printf 'inner\n' > "
 SHIM=$(mktemp -d)
 cat > "$SHIM/ln" <<'SH'
 #!/usr/bin/env bash
+# Races only a target in the new home; migrate's own set-aside and restore
+# steps inside the legacy home run untouched.
 for last; do :; done
-[[ -e "$last" ]] || printf 'racer\n' > "$last"
+case "$last" in */.cct/*) [[ -e "$last" ]] || printf 'racer\n' > "$last" ;; esac
 exec /bin/ln "$@"
 SH
 cat > "$SHIM/mkdir" <<'SH'
@@ -251,8 +253,12 @@ chmod 0600 "$H/.code-copilot-team/secret/inner/f"; chmod 0700 "$H/.code-copilot-
 SHIM=$(mktemp -d)
 cat > "$SHIM/python3" <<SH
 #!/usr/bin/env bash
-if [[ ! -e "$SHIM/first-done" ]]; then touch "$SHIM/first-done"; exit 3; fi
+# Acts only on a rename INTO the new home: the first reports EXDEV (forcing
+# the staged path), later ones apply the mode. Renames inside the legacy
+# home (set aside, restore) run for real.
 for last; do :; done
+case "\$last" in */.cct/*) ;; *) exec "$REAL_PY" "\$@" ;; esac
+if [[ ! -e "$SHIM/first-done" ]]; then touch "$SHIM/first-done"; exit 3; fi
 case "\$(cat "$SHIM/mode" 2>/dev/null)" in
   conflict) printf 'racer\n' > "\$last/x" ;;
   fail) exit 2 ;;
@@ -263,12 +269,14 @@ exec "$REAL_PY" "\$@"
 SH
 chmod +x "$SHIM/python3"
 OUT=$(HOME=$H CCT_HOME= PATH="$SHIM:$PATH" bash -c 'umask 022; bash "'"$CCT"'" home migrate' 2>&1); RC=$?
-assert_exit "a cross-device directory move exits 0" 0 "$RC"
+assert_exit "a cross-device directory move publishes and keeps both copies (exit 1)" 1 "$RC"
+assert_contains "...reported as copied across filesystems" "$OUT" "copied across filesystems"
 assert_eq "...the content arrives" "s" "$(cat "$H/.cct/secret/inner/f")"
 assert_eq "...with 0700 on the top directory" "700" "$(mode_of "$H/.cct/secret")"
 assert_eq "...0700 on the nested directory" "700" "$(mode_of "$H/.cct/secret/inner")"
 assert_eq "...0600 on the file" "600" "$(mode_of "$H/.cct/secret/inner/f")"
-assert_eq "...the legacy tree is gone" "no" "$([[ -e $H/.code-copilot-team/secret ]] && echo yes || echo no)"
+assert_eq "...the legacy tree is kept under its own name, never deleted" "s" "$(cat "$H/.code-copilot-team/secret/inner/f" 2>/dev/null)"
+assert_eq "...and no set-aside name is left behind" "" "$(ls -A "$H/.code-copilot-team" | grep '^\.cct-migrate-aside\.' || true)"
 assert_eq "...and no staging directory is left behind" "" "$(ls -d "$H"/.cct/.cct-migrate.* 2>/dev/null)"
 # Publication conflict after the copy: the claim gained a file meanwhile.
 mkdir -p "$H/.code-copilot-team/pi"; printf 'a\n' > "$H/.code-copilot-team/pi/a"
@@ -296,7 +304,7 @@ assert_eq "...this run's claim is withdrawn" "no" "$([[ -e $H/.cct/pi ]] && echo
 assert_eq "...this run's stage is removed, the user's look-alike is kept" ".cct-migrate.user-data" "$(ls -d "$H"/.cct/.cct-migrate.* 2>/dev/null | xargs -n1 basename)"
 rm "$SHIM/mode"; rm "$SHIM/first-done"
 OUT=$(HOME=$H CCT_HOME= PATH="$SHIM:$PATH" bash "$CCT" home migrate 2>&1); RC=$?
-assert_exit "...and the next run completes" 0 "$RC"
+assert_exit "...and the next run publishes, keeping both copies (exit 1)" 1 "$RC"
 assert_eq "...with the directory in the home" "a" "$(ls "$H/.cct/pi")"
 # A signal right AFTER a successful publication rename: the claim's path now
 # holds the migrated directory (another inode), which the trap must not touch.
@@ -318,6 +326,129 @@ assert_eq "...the published directory survives with its content" "v" "$(cat "$H/
 assert_eq "...the directory is never missing from both homes" "yes" "$([[ -d $H/.cct/vol || -d $H/.code-copilot-team/vol ]] && echo yes || echo no)"
 assert_eq "...this run's stage is withdrawn, the user's look-alike kept" ".cct-migrate.user-data" "$(ls -d "$H"/.cct/.cct-migrate.* 2>/dev/null | xargs -n1 basename)"
 rm -r "$SHIM"; rm -rf "$H"
+
+echo "=== cct home migrate: the legacy side is never deleted out from under a writer ==="
+# (1) Same filesystem, a file: a writer atomically replaces the legacy file
+# right after migrate links the set-aside object into the home. The writer's
+# new file must survive at the legacy name, and the pair is a conflict.
+H=$(fresh_home); mkdir -p "$H/.code-copilot-team" "$H/.cct"; printf 'old\n' > "$H/.code-copilot-team/providers.toml"
+SHIM=$(mktemp -d)
+cat > "$SHIM/ln" <<SH
+#!/usr/bin/env bash
+for last; do :; done
+/bin/ln "\$@"; rc=\$?
+case "\$last" in */.cct/providers.toml) printf 'new\n' > "$H/.code-copilot-team/.w"; /bin/mv -f "$H/.code-copilot-team/.w" "$H/.code-copilot-team/providers.toml" ;; esac
+exit \$rc
+SH
+chmod +x "$SHIM/ln"
+OUT=$(HOME=$H CCT_HOME= PATH="$SHIM:$PATH" bash "$CCT" home migrate 2>&1); RC=$?
+assert_exit "a legacy file replaced during migrate is a conflict (exit 1)" 1 "$RC"
+assert_contains "...reported as written again" "$OUT" "written again"
+assert_eq "...the home has the object that was migrated" "old" "$(cat "$H/.cct/providers.toml")"
+assert_eq "...the writer's new legacy file is not deleted" "new" "$(cat "$H/.code-copilot-team/providers.toml")"
+assert_eq "...and no set-aside name is left behind" "" "$(ls -A "$H/.code-copilot-team" | grep '^\.cct-migrate-aside\.' || true)"
+rm -r "$SHIM"; rm -rf "$H"
+
+# (2) Cross-device, a directory: the legacy tree changes after the copy and
+# before publication. The home gets the copy as it was; the legacy tree is put
+# back with the later change; nothing is deleted.
+H=$(fresh_home); mkdir -p "$H/.code-copilot-team/pi" "$H/.cct"; printf 'a\n' > "$H/.code-copilot-team/pi/a"
+SHIM=$(mktemp -d)
+cat > "$SHIM/python3" <<SH
+#!/usr/bin/env bash
+for last; do :; done
+case "\$last" in */.cct/*) ;; *) exec "$REAL_PY" "\$@" ;; esac
+if [[ ! -e "$SHIM/first-done" ]]; then touch "$SHIM/first-done"; exit 3; fi
+for d in "$H"/.code-copilot-team/.cct-migrate-aside.*; do [[ -d "\$d" ]] && printf 'late\n' > "\$d/late.txt"; done
+exec "$REAL_PY" "\$@"
+SH
+chmod +x "$SHIM/python3"
+OUT=$(HOME=$H CCT_HOME= PATH="$SHIM:$PATH" bash "$CCT" home migrate 2>&1); RC=$?
+assert_exit "a legacy tree changed during a cross-device copy is a conflict (exit 1)" 1 "$RC"
+assert_contains "...reported as copied across filesystems, both kept" "$OUT" "copied across filesystems"
+assert_eq "...the home has the copy as it was" "a" "$(ls "$H/.cct/pi" | tr '\n' ' ' | sed 's/ $//')"
+assert_eq "...the legacy tree is back with the later change" "a late.txt" "$(ls "$H/.code-copilot-team/pi" | tr '\n' ' ' | sed 's/ $//')"
+assert_eq "...and no set-aside name is left behind" "" "$(ls -A "$H/.code-copilot-team" | grep '^\.cct-migrate-aside\.' || true)"
+rm -r "$SHIM"; rm -rf "$H"
+
+# (3) Cross-device, a file: the set-aside file changes after the copy and
+# before the copy is linked into the home. Same outcome as (2).
+H=$(fresh_home); mkdir -p "$H/.code-copilot-team" "$H/.cct"; printf 'old\n' > "$H/.code-copilot-team/routing.toml"
+SHIM=$(mktemp -d)
+cat > "$SHIM/ln" <<SH
+#!/usr/bin/env bash
+for last; do :; done
+case "\$last" in
+  */.cct/routing.toml)
+    if [[ ! -e "$SHIM/first-done" ]]; then touch "$SHIM/first-done"; exit 1; fi   # as if across devices
+    for f in "$H"/.code-copilot-team/.cct-migrate-aside.*; do [[ -f "\$f" ]] && printf 'later\n' >> "\$f"; done ;;
+esac
+exec /bin/ln "\$@"
+SH
+chmod +x "$SHIM/ln"
+OUT=$(HOME=$H CCT_HOME= PATH="$SHIM:$PATH" bash "$CCT" home migrate 2>&1); RC=$?
+assert_exit "a legacy file changed during a cross-device copy is a conflict (exit 1)" 1 "$RC"
+assert_eq "...the home has the copy as it was" "old" "$(cat "$H/.cct/routing.toml")"
+assert_eq "...the legacy file is back with the later change" "old later" "$(tr '\n' ' ' < "$H/.code-copilot-team/routing.toml" | sed 's/ $//')"
+assert_eq "...and no set-aside name is left behind" "" "$(ls -A "$H/.code-copilot-team" | grep '^\.cct-migrate-aside\.' || true)"
+rm -r "$SHIM"; rm -rf "$H"
+
+# (3b) The review's case: a writer holding the set-aside file changes it
+# AFTER the copy is published. Nothing is deleted, so the later write
+# survives in the legacy copy.
+H=$(fresh_home); mkdir -p "$H/.code-copilot-team" "$H/.cct"; printf 'old\n' > "$H/.code-copilot-team/routing.toml"
+SHIM=$(mktemp -d)
+cat > "$SHIM/ln" <<SH
+#!/usr/bin/env bash
+for last; do :; done
+case "\$last" in
+  */.cct/routing.toml)
+    if [[ ! -e "$SHIM/first-done" ]]; then touch "$SHIM/first-done"; exit 1; fi   # as if across devices
+    /bin/ln "\$@"; rc=\$?
+    for f in "$H"/.code-copilot-team/.cct-migrate-aside.*; do [[ -f "\$f" ]] && printf 'new\n' > "\$f"; done   # the late write
+    exit \$rc ;;
+esac
+exec /bin/ln "\$@"
+SH
+chmod +x "$SHIM/ln"
+OUT=$(HOME=$H CCT_HOME= PATH="$SHIM:$PATH" bash "$CCT" home migrate 2>&1); RC=$?
+assert_exit "a write after a cross-device publish is never lost (exit 1)" 1 "$RC"
+assert_eq "...the home has the published copy" "old" "$(cat "$H/.cct/routing.toml")"
+assert_eq "...the legacy copy keeps the later write" "new" "$(cat "$H/.code-copilot-team/routing.toml" 2>/dev/null || echo MISSING)"
+rm -r "$SHIM"; rm -rf "$H"
+
+# (3c) A writer recreates the legacy name during a cross-device copy: the
+# set-aside copy cannot go back, so it stays under its private name and the
+# exact path is reported.
+H=$(fresh_home); mkdir -p "$H/.code-copilot-team" "$H/.cct"; printf 'old\n' > "$H/.code-copilot-team/routing.toml"
+SHIM=$(mktemp -d)
+cat > "$SHIM/ln" <<SH
+#!/usr/bin/env bash
+for last; do :; done
+case "\$last" in
+  */.cct/routing.toml)
+    if [[ ! -e "$SHIM/first-done" ]]; then touch "$SHIM/first-done"; exit 1; fi
+    printf 'recreated\n' > "$H/.code-copilot-team/routing.toml" ;;
+esac
+exec /bin/ln "\$@"
+SH
+chmod +x "$SHIM/ln"
+OUT=$(HOME=$H CCT_HOME= PATH="$SHIM:$PATH" bash "$CCT" home migrate 2>&1); RC=$?
+ASIDE=$(ls -d "$H"/.code-copilot-team/.cct-migrate-aside.* 2>/dev/null | head -1)
+assert_exit "a legacy name recreated during a cross-device copy is a conflict (exit 1)" 1 "$RC"
+assert_eq "...the writer's recreated file is kept" "recreated" "$(cat "$H/.code-copilot-team/routing.toml")"
+assert_eq "...the set-aside copy is kept under its private name" "old" "$(cat "$ASIDE" 2>/dev/null || echo MISSING)"
+assert_contains "...and its exact path is reported" "$OUT" "$ASIDE"
+rm -r "$SHIM"; rm -rf "$H"
+
+# (4) A set-aside entry left by an interrupted run is never listed, served or
+# migrated, only noted.
+H=$(fresh_home); mkdir -p "$H/.code-copilot-team/.cct-migrate-aside.abc123"; printf 'k\n' > "$H/.code-copilot-team/.cct-migrate-aside.abc123/f"
+assert_eq "cct_home_legacy_hits does not list a set-aside entry" "" "$(HOME=$H CCT_HOME= bash -c 'source "'"$REPO_DIR"'/scripts/lib/cct-home.sh"; cct_home_legacy_hits')"
+OUT=$(HOME=$H CCT_HOME= bash "$CCT" home migrate 2>&1)
+assert_contains "migrate notes it" "$OUT" "an interrupted migrate set aside"
+assert_eq "...and leaves it exactly where it is" "k" "$(cat "$H/.code-copilot-team/.cct-migrate-aside.abc123/f" 2>/dev/null)"
+rm -rf "$H"
 
 echo ""
 echo "========================================="

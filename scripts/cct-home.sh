@@ -40,9 +40,27 @@ entry_names() {  # <dir>... -> the union of their top-level entry names, sorted
   for dir in "$@"; do
     [[ -d "$dir" ]] || continue
     for entry in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
-      present "$entry" && printf '%s\n' "${entry##*/}"
+      present "$entry" || continue
+      case "${entry##*/}" in .cct-migrate-aside.*) continue ;; esac   # reported by note_leftovers
+      printf '%s\n' "${entry##*/}"
     done
   done | sort -u
+}
+
+# A name alone proves nothing about ownership: a .cct-migrate.* stage in the
+# home, or a .cct-migrate-aside.* entry in the legacy home, that this process
+# did not create is reported and left exactly as it is.
+note_leftovers() {
+  local stale
+  for stale in "$HOME_DIR"/.cct-migrate.*; do
+    [[ -d "$stale" ]] || continue
+    echo "note: $stale looks like a staging directory left by an interrupted migrate; not touched — inspect it and remove it by hand"
+  done
+  for stale in "$LEGACY_DIR"/.cct-migrate-aside.*; do
+    present "$stale" || continue
+    echo "note: $stale is a legacy entry an interrupted migrate set aside; not touched — inspect it and move it back by hand"
+  done
+  return 0
 }
 
 show() {
@@ -52,6 +70,7 @@ show() {
   else
     echo "override: none (set CCT_HOME to use another directory)"
   fi
+  note_leftovers
   local names name in_home in_legacy legacy=0 conflicts=0
   if [[ -n "${CCT_HOME:-}" ]]; then
     names="$(entry_names "$HOME_DIR")"
@@ -99,24 +118,33 @@ show() {
 # is removed only after the publish. No step leaves a directory split
 # between the two homes.
 # What this process owns right now, and nothing else: the one staging
-# directory it created and the one empty claim it has not published yet. On
-# exit or a signal they are withdrawn — but only if the object at the path is
-# still the one this run created (same device and inode). After a successful
-# rename the claim's path holds the user's migrated directory, a different
-# inode, and must not be touched. A directory merely NAMED .cct-migrate.* is
-# never deleted on that evidence either (it may be a user's, or another run's).
+# directory it created, the one empty claim it has not published yet, and
+# the one legacy entry it has set aside. On exit or a signal the stage and
+# the claim are withdrawn and an aside is put back under its original name
+# — each only if the object at the path is still the one this run recorded
+# (same device and inode). After a successful rename the claim's path holds
+# the user's migrated directory, a different inode, and must not be touched.
+# A directory merely NAMED .cct-migrate.* or .cct-migrate-aside.* is never
+# deleted on that evidence (it may be a user's, or another run's).
 inode_of() { stat -c '%d:%i' "$1" 2>/dev/null || stat -f '%d:%i' "$1" 2>/dev/null; }   # GNU, then BSD
 ACTIVE_STAGE=""; ACTIVE_STAGE_ID=""
 ACTIVE_CLAIM=""; ACTIVE_CLAIM_ID=""
+ACTIVE_ASIDE=""; ACTIVE_ASIDE_ID=""; ACTIVE_ASIDE_ORIG=""
 own_claim()       { ACTIVE_CLAIM="$1"; ACTIVE_CLAIM_ID="$(inode_of "$1")"; }
 own_stage()       { ACTIVE_STAGE="$1"; ACTIVE_STAGE_ID="$(inode_of "$1")"; }
+own_aside()       { ACTIVE_ASIDE="$1"; ACTIVE_ASIDE_ID="$(inode_of "$1")"; ACTIVE_ASIDE_ORIG="$2"; }
 own_clear_claim() { ACTIVE_CLAIM=""; ACTIVE_CLAIM_ID=""; }
 own_clear_stage() { ACTIVE_STAGE=""; ACTIVE_STAGE_ID=""; }
-withdraw_own() {  # idempotent: ownership is cleared first, then only the recorded objects go
+own_clear_aside() { ACTIVE_ASIDE=""; ACTIVE_ASIDE_ID=""; ACTIVE_ASIDE_ORIG=""; }
+withdraw_own() {  # idempotent: ownership is cleared first, then only the recorded objects are acted on
   local stage="$ACTIVE_STAGE" stage_id="$ACTIVE_STAGE_ID" claim="$ACTIVE_CLAIM" claim_id="$ACTIVE_CLAIM_ID"
-  own_clear_stage; own_clear_claim
+  local aside="$ACTIVE_ASIDE" aside_id="$ACTIVE_ASIDE_ID" orig="$ACTIVE_ASIDE_ORIG"
+  own_clear_stage; own_clear_claim; own_clear_aside
   if [[ -n "$stage" && -n "$stage_id" && -d "$stage" && "$(inode_of "$stage")" == "$stage_id" ]]; then rm -r "$stage"; fi
   if [[ -n "$claim" && -n "$claim_id" && -d "$claim" && "$(inode_of "$claim")" == "$claim_id" ]]; then rmdir "$claim" 2>/dev/null; fi
+  if [[ -n "$aside" && -n "$aside_id" ]] && present "$aside" && [[ "$(inode_of "$aside")" == "$aside_id" ]]; then
+    restore_aside "$aside" "$orig" || echo "cct home migrate: the legacy entry set aside is kept at $aside — move it back to $orig by hand" >&2
+  fi
   return 0
 }
 trap withdraw_own EXIT
@@ -135,6 +163,55 @@ except OSError as e:
 ' "$1" "$2"
 }
 
+# set_aside <src> → prints the aside path. Renames the legacy entry to a
+# private name in the same directory (one atomic rename, so the object being
+# migrated is fixed from here on). A writer that later replaces the legacy
+# name creates a NEW entry there, which migrate never deletes.
+set_aside() {
+  local src="$1" aside
+  if [[ -d "$src" && ! -L "$src" ]]; then
+    aside="$(mktemp -d "$(dirname "$src")/.cct-migrate-aside.XXXXXX")" || return 2
+    rename_dir "$src" "$aside" || { rmdir "$aside" 2>/dev/null; return 2; }   # onto our own empty dir
+  else
+    aside="$(mktemp "$(dirname "$src")/.cct-migrate-aside.XXXXXX")" || return 2
+    mv -f "$src" "$aside" || { rm -f "$aside"; return 2; }                    # same directory: a rename
+  fi
+  printf '%s\n' "$aside"
+}
+
+# restore_aside <aside> <orig>: put the entry back under its original name,
+# never over anything that appeared there meanwhile. 0 restored · 1 kept aside.
+restore_aside() {
+  local aside="$1" orig="$2"
+  if [[ -d "$aside" && ! -L "$aside" ]]; then
+    mkdir "$orig" 2>/dev/null || return 1
+    rename_dir "$aside" "$orig" && return 0
+    rmdir "$orig" 2>/dev/null; return 1
+  fi
+  ln -P "$aside" "$orig" 2>/dev/null || return 1
+  rm "$aside"
+}
+
+# keep_both <src>: after a cross-device publish. No check-then-delete can be
+# atomic against a writer holding an open descriptor on the set-aside copy,
+# so that copy is never deleted: it goes back under its original name (or,
+# if a writer recreated that name meanwhile, stays under its private name)
+# and the pair is reported for the user to resolve. Always returns 4.
+keep_both() {
+  local src="$1" aside="$ACTIVE_ASIDE"
+  withdraw_own   # puts the aside back under $src when that name is free
+  if [[ -n "$aside" ]] && present "$aside"; then
+    echo "conflict: ${src##*/} was copied across filesystems; the home copy is now read, and the legacy copy is kept at $aside because ${src##*/} was recreated meanwhile — compare them, keep one, remove the other by hand"
+  else
+    echo "conflict: ${src##*/} was copied across filesystems; the home copy is now read and the legacy copy is kept at $src — check the home copy, then remove the legacy one by hand"
+  fi
+  return 4
+}
+
+# move_entry <src> <dst>: move without ever replacing dst, never half, and
+# never deleting a legacy object other than the one being migrated. Across
+# filesystems nothing in the legacy home is deleted at all (keep_both).
+#   0 moved · 1 conflict, nothing moved · 4 copied across filesystems, both kept · 2 error
 move_entry() {
   local src="$1" dst="$2"
   if [[ -d "$src" && ! -L "$src" ]]; then
@@ -147,44 +224,56 @@ move_entry() {
       withdraw_own
       echo "cct home migrate: python3 is needed to move a directory (rename(2)); none on PATH" >&2; return 2
     fi
-    local r stage
+    local r stage aside
+    # Same filesystem: rename(2) moves the directory object itself, so a
+    # writer holding a path or a descriptor inside it keeps writing to it.
     rename_dir "$src" "$dst"; r=$?
     case $r in
       0) own_clear_claim; return 0 ;;     # published: the path now holds the moved inode
       4) own_clear_claim; return 1 ;;     # something landed in the claim: a conflict, src intact
-      3) ;;                               # cross-device: fall through to the staged copy
+      3) ;;                               # cross-device: copy from a fixed aside, below
       *) withdraw_own; echo "cct home migrate: could not move $src" >&2; return 2 ;;
     esac
+    aside="$(set_aside "$src")" || { withdraw_own; echo "cct home migrate: could not set $src aside" >&2; return 2; }
+    own_aside "$aside" "$src"
     stage="$(mktemp -d "$(dirname "$dst")/.cct-migrate.XXXXXX")" || { withdraw_own; echo "cct home migrate: cannot stage beside $dst" >&2; return 2; }
     own_stage "$stage"
-    if ! cp -pRP "$src" "$stage/entry"; then withdraw_own; echo "cct home migrate: could not copy $src" >&2; return 2; fi
+    if ! cp -pRP "$aside" "$stage/entry"; then withdraw_own; echo "cct home migrate: could not copy $src" >&2; return 2; fi
     rename_dir "$stage/entry" "$dst"; r=$?
-    if [[ $r -eq 0 ]]; then
-      own_clear_claim
-      rmdir "$stage" 2>/dev/null; own_clear_stage
-      rm -r "$src" || { echo "cct home migrate: $dst is complete but $src could not be fully removed — remove it by hand" >&2; return 2; }
-      return 0
+    if [[ $r -ne 0 ]]; then
+      [[ $r -eq 4 ]] && own_clear_claim   # foreign content in the claim stays
+      withdraw_own                        # drops the stage and the empty claim, puts the legacy entry back
+      [[ $r -eq 4 ]] && return 1
+      echo "cct home migrate: could not place $dst" >&2; return 2
     fi
-    if [[ $r -eq 4 ]]; then own_clear_claim; withdraw_own; return 1; fi   # keeps the claim (foreign content), drops the stage
-    withdraw_own; echo "cct home migrate: could not place $dst" >&2; return 2
+    own_clear_claim; rmdir "$stage" 2>/dev/null; own_clear_stage
+    keep_both "$src"; return $?
   fi
-  if ln -P "$src" "$dst" 2>/dev/null; then
-    rm "$src" || { echo "cct home migrate: linked $dst but could not remove $src" >&2; return 2; }
+  # A file or symlink: set the legacy object aside, link it into place
+  # without replacing (ln -P fails if dst exists), then drop the aside name,
+  # which only this run knows. The migrated object is never unlinked from
+  # anywhere but the private name.
+  present "$dst" && return 1
+  local aside stage r
+  aside="$(set_aside "$src")" || { echo "cct home migrate: could not set $src aside" >&2; return 2; }
+  own_aside "$aside" "$src"
+  if ln -P "$aside" "$dst" 2>/dev/null; then
+    own_clear_aside; rm "$aside"
     return 0
   fi
-  present "$dst" && return 1
-  local stage
-  stage="$(mktemp -d "$(dirname "$dst")/.cct-migrate.XXXXXX")" || { echo "cct home migrate: cannot stage beside $dst" >&2; return 2; }
+  if present "$dst"; then withdraw_own; return 1; fi
+  # Cross-device: copy from the fixed aside into a stage beside dst, link.
+  stage="$(mktemp -d "$(dirname "$dst")/.cct-migrate.XXXXXX")" || { withdraw_own; echo "cct home migrate: cannot stage beside $dst" >&2; return 2; }
   own_stage "$stage"
-  if ! cp -pRP "$src" "$stage/entry"; then withdraw_own; echo "cct home migrate: could not copy $src" >&2; return 2; fi
-  if ln -P "$stage/entry" "$dst" 2>/dev/null; then
-    withdraw_own                          # the stage (copy already linked into place) goes; nothing else is owned
-    rm "$src" || { echo "cct home migrate: placed $dst but could not remove $src" >&2; return 2; }
-    return 0
+  if ! cp -pRP "$aside" "$stage/entry"; then withdraw_own; echo "cct home migrate: could not copy $src" >&2; return 2; fi
+  if ! ln -P "$stage/entry" "$dst" 2>/dev/null; then
+    r=2; present "$dst" && r=1
+    withdraw_own
+    [[ $r -eq 2 ]] && echo "cct home migrate: could not place $dst" >&2
+    return $r
   fi
-  withdraw_own
-  present "$dst" && return 1
-  echo "cct home migrate: could not place $dst" >&2; return 2
+  rm "$stage/entry"; rmdir "$stage"; own_clear_stage
+  keep_both "$src"; return $?
 }
 
 migrate() {
@@ -192,16 +281,12 @@ migrate() {
     echo "nothing to migrate: no legacy home at $LEGACY_DIR"
     return 0
   fi
-  local entry name moved=0 conflicts="" r stale
-  # A name alone proves nothing about ownership: a .cct-migrate.* directory
-  # this process did not create is reported and left exactly as it is.
-  for stale in "$HOME_DIR"/.cct-migrate.*; do
-    [[ -d "$stale" ]] || continue
-    echo "note: $stale looks like a staging directory left by an interrupted migrate; not touched — inspect it and remove it by hand"
-  done
+  local entry name moved=0 conflicts="" r
+  note_leftovers
   for entry in "$LEGACY_DIR"/* "$LEGACY_DIR"/.[!.]* "$LEGACY_DIR"/..?*; do
     present "$entry" || continue
     name="${entry##*/}"
+    case "$name" in .cct-migrate-aside.*) continue ;; esac   # never migrated; note_leftovers reported it
     if $DRY_RUN; then
       if present "$HOME_DIR/$name"; then
         conflicts="$conflicts $name"
@@ -213,8 +298,16 @@ migrate() {
     fi
     mkdir -p "$HOME_DIR" || { echo "cct home migrate: cannot create $HOME_DIR" >&2; return 2; }
     move_entry "$entry" "$HOME_DIR/$name"; r=$?
+    if [[ $r -eq 0 ]] && present "$entry"; then
+      # Moved, but a writer recreated the legacy name meanwhile: that newer
+      # entry is kept where it is and the pair is a conflict to resolve.
+      echo "moved: $name -> $HOME_DIR/$name"; moved=$((moved + 1))
+      echo "conflict: $name was written again in $LEGACY_DIR while it was migrated — both kept, resolve by hand"
+      r=3
+    fi
     case $r in
       0) echo "moved: $name -> $HOME_DIR/$name"; moved=$((moved + 1)) ;;
+      3|4) conflicts="$conflicts $name" ;;   # already reported
       1) conflicts="$conflicts $name"
          echo "conflict: $name exists in both $LEGACY_DIR and $HOME_DIR — left in place, resolve by hand" ;;
       *) return 2 ;;

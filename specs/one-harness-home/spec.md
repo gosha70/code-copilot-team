@@ -48,11 +48,17 @@ configuration from its own repository.
    `~/.code-copilot-team/` through the fallback; the doctor prints one
    line naming the files still in the legacy home and the command that
    moves them. Peer review, routing, Pi and the hook keep working.
-3. **Migrate.** The user runs `cct home migrate`. Each legacy file or
-   directory is moved to `~/.cct/` unless a file of the same name
-   already exists there, in which case both are left in place and
-   listed; the command prints what moved and what did not; nothing is
-   deleted or overwritten. `cct doctor` is quiet afterwards.
+3. **Migrate.** The user runs `cct home migrate`. On the same
+   filesystem each legacy file or directory is moved to `~/.cct/`
+   unless an entry of the same name already exists there, in which case
+   both are left in place and listed. Across filesystems (`CCT_HOME` on
+   another volume) the entry is copied and published in the home, the
+   home copy is read from then on, and the legacy copy is kept and
+   listed for the user to check and remove. The command prints what
+   moved, what was copied and what did not move; nothing a writer may
+   still be using is deleted, and nothing is overwritten. After a
+   same-filesystem migrate `cct doctor` is quiet; copied or conflicting
+   entries stay listed by `cct home` until the user resolves them.
 4. **Explicit home.** A user sets `CCT_HOME=/srv/cct`. Every tool,
    including Pi, which already honoured that variable, uses it; no
    fallback to either default is attempted.
@@ -113,7 +119,17 @@ configuration from its own repository.
   file between homes on its own. `cct home migrate` is the one mover:
   it moves each legacy entry to `~/.cct/` when the target is absent,
   leaves both and lists the conflict when the target exists, never
-  deletes, never overwrites, and prints each action. `cct home` without
+  deletes, never overwrites, and prints each action. A move first
+  renames the legacy entry to a private name beside it, fixing the
+  object being moved; a writer that recreates the legacy name keeps its
+  new entry and the pair is a conflict. On the same filesystem the move
+  is a rename (a directory) or a hard link (a file), so a writer holding
+  a descriptor keeps writing to the moved object. Across filesystems no
+  check-then-delete can be atomic against such a writer, so the legacy
+  copy is never deleted: it is put back under its name (or, if that name
+  was recreated, kept under its private name and its path reported) and
+  the pair is reported with exit 1. An interrupted run puts an
+  unpublished entry back. `cct home` without
   arguments prints the resolved home and, per known file, where it was
   found.
 - **FR-6 Doctor and setup notices.** `cct doctor` gains a **Home**

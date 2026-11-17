@@ -96,6 +96,7 @@ cct_home_legacy_hits() {  # -> entries still served from the legacy home, one pe
   for entry in "$HOME/$CCT_HOME_LEGACY_REL"/* "$HOME/$CCT_HOME_LEGACY_REL"/.[!.]* "$HOME/$CCT_HOME_LEGACY_REL"/..?*; do
     _cct_home_present "$entry" || continue
     name="${entry##*/}"
+    case "$name" in .cct-migrate-aside.*) continue ;; esac   # set aside by an interrupted migrate; cct home reports it
     _cct_home_present "$HOME/$CCT_HOME_DEFAULT_REL/$name" || printf '%s\n' "$name"
   done
   return 0

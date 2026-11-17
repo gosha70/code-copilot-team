@@ -16,6 +16,7 @@ from pathlib import Path
 
 ENV_HOME = "CCT_HOME"
 HOME_DEFAULT_REL = ".cct"
+MIGRATE_ASIDE_PREFIX = ".cct-migrate-aside."  # an entry `cct home migrate` set aside; reported there, never listed here
 HOME_LEGACY_REL = ".code-copilot-team"  # served as a fallback through 2.1.x; removed in 2.2
 
 
@@ -58,4 +59,7 @@ def legacy_hits() -> list[str]:
     if not legacy.is_dir():
         return []
     home = cct_home()
-    return sorted(p.name for p in legacy.iterdir() if not _present(home / p.name))
+    return sorted(
+        p.name for p in legacy.iterdir()
+        if not p.name.startswith(MIGRATE_ASIDE_PREFIX) and not _present(home / p.name)
+    )

@@ -47,13 +47,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # The CCT home for this job (#411): the steps write the analytics user
-      # config here and the resolver reads it back, so the override is
-      # exercised on every run. Set through GITHUB_ENV because the runner
-      # context (runner.temp) is not available in a job-level env block.
-      - name: Point CCT_HOME at a job-scoped directory
-        run: echo "CCT_HOME=$RUNNER_TEMP/cct-home" >> "$GITHUB_ENV"
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -142,6 +135,11 @@ jobs:
         # ingests the fixture as `metadata-only`, and the archive stores
         # under the STRICTER of config and ingest-recorded mode (FR-4
         # floor) — leaving text with no searchable words in it.
+        # CCT_HOME (#411) only for this step, which writes the analytics
+        # user config there and reads it back through the resolver; set
+        # here, not job-wide, so the unit suite keeps its default home.
+        env:
+          CCT_HOME: ${{ runner.temp }}/cct-home
         run: |
           mkdir -p "$CCT_HOME"
           cat > "$CCT_HOME/session-analytics.json" <<'JSON'
@@ -238,6 +236,11 @@ jobs:
           rm -f "$CCT_HOME/session-analytics.json" search.json
 
       - name: "Per-project redaction override survives PostgreSQL (E8, #84)"
+        # CCT_HOME (#411) only for this step, which writes the analytics
+        # user config there and reads it back through the resolver; set
+        # here, not job-wide, so the unit suite keeps its default home.
+        env:
+          CCT_HOME: ${{ runner.temp }}/cct-home
         run: |
           mkdir -p "$CCT_HOME"
           cat > "$CCT_HOME/session-analytics.json" <<'JSON'

@@ -20,6 +20,8 @@ export const ENV_HOME = "CCT_HOME";
 export const HOME_DEFAULT_REL = ".cct";
 /** Served as a fallback through 2.1.x; removed in 2.2. */
 export const HOME_LEGACY_REL = ".code-copilot-team";
+/** An entry `cct home migrate` set aside; reported there, never listed here. */
+export const MIGRATE_ASIDE_PREFIX = ".cct-migrate-aside.";
 
 /** The home directory; it may not exist yet. */
 export function cctHome(env: NodeJS.ProcessEnv = process.env): string {
@@ -67,6 +69,6 @@ export function legacyHits(env: NodeJS.ProcessEnv = process.env): string[] {
   const home = cctHome(env);
   return fs
     .readdirSync(legacy)
-    .filter((name) => !present(path.join(home, name)))
+    .filter((name) => !name.startsWith(MIGRATE_ASIDE_PREFIX) && !present(path.join(home, name)))
     .sort();
 }
