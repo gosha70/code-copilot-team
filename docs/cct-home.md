@@ -142,6 +142,8 @@ the original bytes, and the legacy original is kept beside it.
 5. **Drop emptied state files** such as `routing-probe-ledger.json`; the
    routing commands recreate them.
 
-The per-project directory `<repo>/.code-copilot-team/` (the Pi runtime's
-project config) is not part of the user home and is unchanged by this page; its
-rename is tracked separately (#411 ruled it its own issue).
+A project's committed Pi configuration is not part of the user home: it is
+`<repo>/.cct.toml`, with the personal `<repo>/.cct.local.toml` and the
+`<repo>/.cct-init.json` manifest beside it (#460). The older
+`<repo>/.code-copilot-team/` files are moved with `pi-code migrate`; see
+`adapters/pi/docs/configuration-reference.md`.

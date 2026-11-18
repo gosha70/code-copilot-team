@@ -154,8 +154,8 @@ test("profiles: unattended = autonomous posture + headless ask allow (US1)", () 
 test("precedence: defaults < profile < global < project < project-local < env < cli", () => {
   const dir = tempTree({
     "global/config.toml": "[limits]\ntimeout_sec = 100\n[review]\nafter_phase = false\n",
-    "proj/.code-copilot-team/config.toml": "[limits]\ntimeout_sec = 200\n",
-    "proj/.code-copilot-team/config.local.toml": "[limits]\ntimeout_sec = 300\n",
+    "proj/.cct.toml": "[limits]\ntimeout_sec = 200\n",
+    "proj/.cct.local.toml": "[limits]\ntimeout_sec = 300\n",
   });
   const r = load({
     globalDir: path.join(dir, "global"),
@@ -178,8 +178,8 @@ test("precedence: defaults < profile < global < project < project-local < env < 
 
 test("trust gating: untrusted project config is ignored with reason (fail closed)", () => {
   const dir = tempTree({
-    "proj/.code-copilot-team/config.toml": "[limits]\ntimeout_sec = 200\n",
-    "proj/.code-copilot-team/config.local.toml": "[limits]\ntimeout_sec = 300\n",
+    "proj/.cct.toml": "[limits]\ntimeout_sec = 200\n",
+    "proj/.cct.local.toml": "[limits]\ntimeout_sec = 300\n",
   });
   const r = load({ projectDir: path.join(dir, "proj"), trusted: false });
   assert.equal(r.resolved.get("limits.timeout_sec").value, 900); // defaults
@@ -190,7 +190,7 @@ test("trust gating: untrusted project config is ignored with reason (fail closed
 
 test("trust gating: --no-project-config ignores even trusted project config", () => {
   const dir = tempTree({
-    "proj/.code-copilot-team/config.toml": "[limits]\ntimeout_sec = 200\n",
+    "proj/.cct.toml": "[limits]\ntimeout_sec = 200\n",
   });
   const r = load({
     projectDir: path.join(dir, "proj"),
@@ -201,11 +201,49 @@ test("trust gating: --no-project-config ignores even trusted project config", ()
   assert.match(r.ignoredFiles[0].reason, /--no-project-config/);
 });
 
+// ── project files: .cct.toml, legacy fallback (#460) ────────
+
+test("project layers: a legacy-only project is read while the fallback lasts", () => {
+  const dir = tempTree({
+    "proj/.code-copilot-team/config.toml": "[limits]\ntimeout_sec = 200\n",
+    "proj/.code-copilot-team/config.local.toml": "[limits]\ntimeout_sec = 300\n",
+  });
+  const r = load({ projectDir: path.join(dir, "proj"), trusted: true });
+  assert.equal(r.errors.length, 0);
+  assert.equal(r.resolved.get("limits.timeout_sec").value, 300);
+  assert.equal(r.resolved.get("limits.timeout_sec").layer, "project-local");
+  assert.equal(r.loadedFiles.length, 2);
+});
+
+test("project layers: the new file wins when both exist, per file", () => {
+  const dir = tempTree({
+    "proj/.cct.toml": "[limits]\ntimeout_sec = 210\n",
+    "proj/.code-copilot-team/config.toml": "[limits]\ntimeout_sec = 200\n",
+    "proj/.code-copilot-team/config.local.toml": "[review]\nafter_phase = false\n",
+  });
+  const r = load({ projectDir: path.join(dir, "proj"), trusted: true });
+  assert.equal(r.resolved.get("limits.timeout_sec").value, 210, ".cct.toml wins over the legacy config");
+  // The local file resolves on its own: only the legacy one exists, so it is read.
+  assert.equal(r.resolved.get("review.after_phase").value, false);
+  assert.equal(r.resolved.get("review.after_phase").layer, "project-local");
+});
+
+test("project layers: an untrusted project reads neither location", () => {
+  const dir = tempTree({
+    "proj/.cct.toml": "[limits]\ntimeout_sec = 210\n",
+    "proj/.code-copilot-team/config.local.toml": "[limits]\ntimeout_sec = 300\n",
+  });
+  const r = load({ projectDir: path.join(dir, "proj"), trusted: false });
+  assert.equal(r.resolved.get("limits.timeout_sec").value, 900);
+  assert.equal(r.loadedFiles.length, 0);
+  assert.equal(r.ignoredFiles.length, 2);
+});
+
 // ── security floor (FR-009a) ────────────────────────────────
 
 test("floor: trusted project cannot weaken; can strengthen", () => {
   const dir = tempTree({
-    "proj/.code-copilot-team/config.toml": `
+    "proj/.cct.toml": `
 [security]
 fail_closed = false            # weakening attempt -> blocked
 sandbox_required = true        # strengthening -> accepted
@@ -238,7 +276,7 @@ denied_commands = ["git push --force"]  # subset (drops entries) -> blocked
 
 test("floor: user-controlled project-local override may relax, recorded", () => {
   const dir = tempTree({
-    "proj/.code-copilot-team/config.local.toml": "[security]\nfail_closed = false\n",
+    "proj/.cct.local.toml": "[security]\nfail_closed = false\n",
   });
   const r = load({ projectDir: path.join(dir, "proj"), trusted: true });
   assert.equal(r.resolved.get("security.fail_closed").value, false);

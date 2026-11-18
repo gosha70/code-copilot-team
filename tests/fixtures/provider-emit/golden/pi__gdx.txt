@@ -1,4 +1,4 @@
-# provider 'gdx' -> pi: add to .code-copilot-team/config.toml
+# provider 'gdx' -> pi: add to .cct.toml at the project root
 [providers.gdx]
 type = "openai-compatible"
 model = "deepseek-coder-v2"

@@ -134,7 +134,7 @@ emit_json_ui() { # $1 = copilot label
 }
 
 emit_pi() {
-  echo "# provider '$PROVIDER' -> pi: add to .code-copilot-team/config.toml"
+  echo "# provider '$PROVIDER' -> pi: add to .cct.toml at the project root"
   echo "[providers.$PROVIDER]"
   [[ -n "$P_TYPE" ]] && echo "type = \"$P_TYPE\""
   [[ -n "$P_MODEL" ]] && echo "model = \"$P_MODEL\""

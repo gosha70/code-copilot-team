@@ -7,10 +7,10 @@
  * persistence surfaces — a different concern, untouched.
  *
  * Trust asymmetry (FR-004a): BOTH in-repo layers — `project`
- * (.code-copilot-team/config.toml) AND `project-local` (config.local.toml) —
- * may only TIGHTEN the scrub policy. This deliberately diverges from
+ * (.cct.toml) AND `project-local` (.cct.local.toml) — may only TIGHTEN the
+ * scrub policy. This deliberately diverges from
  * floor.ts's RELAXATION_LAYERS (which treats project-local as user-controlled):
- * config.local.toml is only gitignored by convention, so a hostile repo can
+ * .cct.local.toml is only gitignored by convention, so a hostile repo can
  * commit one — and a silently-honored credential-scrub opt-out is exactly the
  * exfiltration vector this module exists to close. Relaxation comes only from
  * genuinely user-controlled scopes: global config, `CCT_CONFIG__*` env, and

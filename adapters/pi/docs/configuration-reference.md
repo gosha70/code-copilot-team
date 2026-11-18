@@ -36,8 +36,18 @@ defaults < profile chain < global < trusted project < trusted project-local < en
 | Layer | Path |
 |---|---|
 | global | `~/.cct/config.toml` (the CCT home, `${CCT_HOME:-~/.cct}`; see `docs/cct-home.md`) |
-| project | `<repo>/.code-copilot-team/config.toml` |
-| project-local (gitignored) | `<repo>/.code-copilot-team/config.local.toml` |
+| project | `<repo>/.cct.toml` (committed) |
+| project-local (gitignored) | `<repo>/.cct.local.toml` |
+
+`pi-code init` also writes `<repo>/.cct-init.json`, the ownership manifest,
+which is committed beside `.cct.toml`; `<repo>/.cct/` holds untracked runtime
+state. Projects created before #460 keep `.code-copilot-team/config.toml`,
+`config.local.toml` and `.cct-init.json`: each is still read while the
+fallback lasts (through the minor release after the one that ships #460; the
+CHANGELOG names it), the new file wins when both exist, and `pi-code doctor`
+names any legacy file. `pi-code migrate [dir] [--dry-run]` moves them; it never
+overwrites, makes no git change, and refuses (exit 1) when an ignore rule
+would hide `.cct.toml` or `.cct-init.json`. Commit the renamed files afterwards.
 
 Env (`CCT_*`) and CLI flags override files; a `session` layer is the most local.
 
