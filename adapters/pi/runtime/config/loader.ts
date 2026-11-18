@@ -27,6 +27,7 @@ import {
   ENV_CONFIG_CARRIER_PREFIX,
 } from "../policy/env-scrub.ts";
 import { CONFIG_SCHEMA_VERSION, CONFIG_VERSION_KEY, migrateTable } from "./migrate.ts";
+import { projectFile } from "./project.ts";
 import type { MigrationNote } from "./migrate.ts";
 import type { FloorDecision } from "./floor.ts";
 
@@ -265,12 +266,10 @@ export function loadLayeredConfig(opts: LoadOptions): LoadResult {
       return "project is not positively trusted (Pi project_trust unresolved or denied) — FR-004a fail-closed";
     return null;
   };
-  fileLayer("project", path.join(opts.projectDir, ".code-copilot-team", "config.toml"), projectGate);
-  fileLayer(
-    "project-local",
-    path.join(opts.projectDir, ".code-copilot-team", "config.local.toml"),
-    projectGate,
-  );
+  // <repo>/.cct.toml and <repo>/.cct.local.toml (#460), each falling back to
+  // the legacy .code-copilot-team/ file while the fallback lasts.
+  fileLayer("project", projectFile(opts.projectDir, "config"), projectGate);
+  fileLayer("project-local", projectFile(opts.projectDir, "local"), projectGate);
 
   // Env layer: CCT_CONFIG__a__b=value → a.b = value
   const envTable: TomlTable = {};

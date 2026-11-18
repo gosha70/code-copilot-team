@@ -76,15 +76,22 @@ purely untracked runtime state and needs no gitignore exception.
   project's `.gitignore` (creating the file if there is none); outside a
   git work tree it changes no ignore file.
   `--dry-run` reports every change and makes none.
-- **FR-5 sync.** `pi-code sync` reads the manifest through FR-2 and keeps
-  its ownership rule: the user configuration is never overwritten,
-  whichever location it is in.
+- **FR-5 sync.** `pi-code sync` regenerates the repository's managed
+  resources and never reads the project manifest or the project
+  configuration, so it needs no change: the user configuration is never
+  overwritten, whichever location it is in. (Amended 2026-11-18 at build
+  time: the draft assumed sync read the manifest.)
 - **FR-6 migrate.** `pi-code migrate [--dry-run] [<project>]` is the only
   mover. For each legacy file present it moves it to its new name
   without ever replacing an existing target (a target that exists is a
   conflict: both are kept, reported, exit 1); the manifest moves with
   its `generated` path entry for the config rewritten to `.cct.toml`.
-  It removes `.code-copilot-team/` only if it is then empty. It makes no
+  When a legacy `config.local.toml` is present it first makes sure git
+  ignores `.cct/` and `.cct.local.toml`, by the same `git check-ignore`
+  rule as `init` (`--dry-run` only reports), so the personal override
+  cannot be committed by accident after the rename. It removes
+  `.code-copilot-team/` only if it is then empty, and says so when it
+  keeps the directory because other files remain. It makes no
   git change (no `git mv`, `add` or `commit`). In a git work tree it runs
   the read-only `git check-ignore`; if `.cct.toml` or `.cct-init.json`
   would be ignored, it moves nothing, names the rule

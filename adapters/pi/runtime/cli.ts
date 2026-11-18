@@ -31,6 +31,7 @@ import {
 import { readReport } from "./agents/team-commands.ts";
 import { resolveScrubPolicy, scrubEnv } from "./policy/env-scrub.ts";
 import { cctHomePath } from "./config/home.ts";
+import { projectFileStates, projectWarnings } from "./config/project.ts";
 
 export interface CliResult {
   out: string;
@@ -106,6 +107,12 @@ function doctor(opts: CliOptions, json: boolean): CliResult {
     },
   ];
   const code = checks.every((c) => c.ok) && cfg.errors.length === 0 ? 0 : 1;
+  // Where the project's Pi files are read from, and what needs attention
+  // (#460 FR-7). Warnings, not failures: they never change the exit code.
+  const project = {
+    files: projectFileStates(opts.cwd),
+    warnings: projectWarnings(opts.cwd),
+  };
 
   if (json) {
     return {
@@ -119,6 +126,7 @@ function doctor(opts: CliOptions, json: boolean): CliResult {
         errors: cfg.errors,
         trustNote: TRUST_NOTE,
         unattended,
+        project,
       }),
       code,
     };
@@ -135,6 +143,9 @@ function doctor(opts: CliOptions, json: boolean): CliResult {
   }
   for (const w of cfg.warnings) lines.push(`warning: ${w}`);
   for (const e of cfg.errors) lines.push(`error: ${e}`);
+  for (const f of project.files)
+    if (f.source !== "absent") lines.push(`project ${f.kind}: ${f.path} (${f.source})`);
+  for (const w of project.warnings) lines.push(`[warn] ${w}`);
   lines.push(
     `unattended: posture ${unattended.posture} (ask_resolution=${unattended.ask_resolution}); ` +
       `cooldown-resume: ${unattended.cooldown_resume}`,

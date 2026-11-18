@@ -61,6 +61,10 @@ Optional per-project scaffolding:
 pi-code init [dir] --profile <name> [--dry-run]
 ```
 
+It writes `.cct.toml` and `.cct-init.json` at the project root (commit both)
+and makes sure `.cct/` and `.cct.local.toml` are git-ignored. A project that
+still has `.code-copilot-team/config.toml` moves it with `pi-code migrate`.
+
 ## Profiles at a glance
 
 `minimal`, `disciplined` (default), `review-heavy`, `autonomous`, `local-first`,

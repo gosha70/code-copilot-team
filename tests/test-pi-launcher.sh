@@ -512,15 +512,15 @@ if command -v git >/dev/null 2>&1; then
   assert "pass-through handoff exports no CCT_ENV_SCRUBBED" \
     "grep -q 'CCT_ENV_SCRUBBED:unset' \"\$TMP/capture.txt\""
 
-  # A repo-local opt-out (config.toml or the conventionally-gitignored
-  # config.local.toml) must NOT loosen the launcher boundary: the untrusted
+  # A repo-local opt-out (.cct.toml or the conventionally-gitignored
+  # .cct.local.toml) must NOT loosen the launcher boundary: the untrusted
   # CLI never reads project layers, so scrubbing still happens.
-  ES_REPO3="$TMP/es-repo3"; mkdir -p "$ES_REPO3/.code-copilot-team"
+  ES_REPO3="$TMP/es-repo3"; mkdir -p "$ES_REPO3"
   git -C "$ES_REPO3" init -q -b master
   git -C "$ES_REPO3" config user.email t@e.com
   git -C "$ES_REPO3" config user.name T
-  printf '[security]\nenv_scrub = false\n' > "$ES_REPO3/.code-copilot-team/config.toml"
-  printf '[security]\nenv_scrub = false\n' > "$ES_REPO3/.code-copilot-team/config.local.toml"
+  printf '[security]\nenv_scrub = false\n' > "$ES_REPO3/.cct.toml"
+  printf '[security]\nenv_scrub = false\n' > "$ES_REPO3/.cct.local.toml"
   echo seed > "$ES_REPO3/README.md"; git -C "$ES_REPO3" add -A; git -C "$ES_REPO3" commit -q -m seed
   rm -f "$TMP/capture.txt"
   ( cd "$ES_REPO3" && GITHUB_TOKEN=leakme CCT_HOME="$TMP/es-home3" PATH="$DIAG_PATH" "$LAUNCHER" worktree run scrub-3 --branch feature/scrub-3 ) >/dev/null 2>&1 || true
@@ -620,27 +620,97 @@ DRY_OUT=$(PATH="$BASE_PATH" "$LAUNCHER" init "$INIT_DIR" --dry-run 2>&1 || true)
 assert "init --dry-run reports report-only" "echo \"\$DRY_OUT\" | grep -q 'no writes'"
 assert "init --dry-run writes nothing" "[[ -z \"\$(ls -A '$INIT_DIR')\" ]]"
 
-# Real init scaffolds ONLY the Pi-native footprint (config.toml + manifest).
+# Real init scaffolds ONLY the Pi-native footprint (.cct.toml + manifest, #460).
 PATH="$BASE_PATH" "$LAUNCHER" init "$INIT_DIR" --profile ci >/dev/null 2>&1
-assert "init creates .code-copilot-team/config.toml" "[[ -f '$INIT_DIR/.code-copilot-team/config.toml' ]]"
-assert "init creates the .cct-init.json manifest" "[[ -f '$INIT_DIR/.code-copilot-team/.cct-init.json' ]]"
+assert "init creates .cct.toml at the repo root" "[[ -f '$INIT_DIR/.cct.toml' ]]"
+assert "init creates the .cct-init.json manifest" "[[ -f '$INIT_DIR/.cct-init.json' ]]"
 assert "init emits no .claude/ (Pi-native only)" "[[ ! -e '$INIT_DIR/.claude' && ! -e '$INIT_DIR/CLAUDE.md' ]]"
-assert "init --profile seeds the profile" "grep -q 'profile = \"ci\"' '$INIT_DIR/.code-copilot-team/config.toml'"
-assert "manifest marks config.toml as user-config" "grep -q '\"kind\": \"user-config\"' '$INIT_DIR/.code-copilot-team/.cct-init.json'"
+assert "init --profile seeds the profile" "grep -q 'profile = \"ci\"' '$INIT_DIR/.cct.toml'"
+assert "manifest marks .cct.toml as user-config" "grep -q '\"kind\": \"user-config\"' '$INIT_DIR/.cct-init.json'"
 
 # Ownership proof: the manifest hash matches the generated config's content.
-MANI_HASH=$(grep '"hash"' "$INIT_DIR/.code-copilot-team/.cct-init.json" | grep -oE '[0-9a-f]{32,}')
-CFG_HASH=$(shasum -a 256 "$INIT_DIR/.code-copilot-team/config.toml" | awk '{print $1}')
-assert "manifest hash matches config.toml content" "[[ -n '$MANI_HASH' && '$MANI_HASH' == '$CFG_HASH' ]]"
+MANI_HASH=$(grep '"hash"' "$INIT_DIR/.cct-init.json" | grep -oE '[0-9a-f]{32,}')
+CFG_HASH=$(shasum -a 256 "$INIT_DIR/.cct.toml" | awk '{print $1}')
+assert "manifest hash matches .cct.toml content" "[[ -n '$MANI_HASH' && '$MANI_HASH' == '$CFG_HASH' ]]"
 
 # No-clobber: re-init preserves a user-edited config and reports it, exit 0.
-echo "# user edit" >> "$INIT_DIR/.code-copilot-team/config.toml"
-BEFORE=$(shasum -a 256 "$INIT_DIR/.code-copilot-team/config.toml" | awk '{print $1}')
+echo "# user edit" >> "$INIT_DIR/.cct.toml"
+BEFORE=$(shasum -a 256 "$INIT_DIR/.cct.toml" | awk '{print $1}')
 RC=0; RE_OUT=$(PATH="$BASE_PATH" "$LAUNCHER" init "$INIT_DIR" 2>&1) || RC=$?
-AFTER=$(shasum -a 256 "$INIT_DIR/.code-copilot-team/config.toml" | awk '{print $1}')
+AFTER=$(shasum -a 256 "$INIT_DIR/.cct.toml" | awk '{print $1}')
 assert "re-init preserves edited config (no clobber)" "[[ '$BEFORE' == '$AFTER' ]]"
 assert "re-init reports already-initialized" "echo \"\$RE_OUT\" | grep -qi 'already initialized'"
 assert "re-init exits 0" "[[ '$RC' == '0' ]]"
+
+# ── #460: .cct.toml at the root, ignore lines, migrate, doctor ──
+echo "--- #460 project files ---"
+GI_DIR="$TMP/proj-git"; mkdir -p "$GI_DIR"; git -C "$GI_DIR" init -q
+PATH="$BASE_PATH" "$LAUNCHER" init "$GI_DIR" >/dev/null 2>&1
+assert "init in a git repo ignores .cct/ and .cct.local.toml" \
+  "git -C '$GI_DIR' check-ignore -q .cct/x && git -C '$GI_DIR' check-ignore -q .cct.local.toml"
+assert "init keeps .cct.toml and .cct-init.json committable" \
+  "! git -C '$GI_DIR' check-ignore -q .cct.toml && ! git -C '$GI_DIR' check-ignore -q .cct-init.json"
+GI2="$TMP/proj-git2"; mkdir -p "$GI2"; git -C "$GI2" init -q
+printf '.cct/*\n' > "$GI2/.gitignore"; printf '.cct.local.toml\n' >> "$GI2/.git/info/exclude"
+PATH="$BASE_PATH" "$LAUNCHER" init "$GI2" >/dev/null 2>&1
+assert "init adds no line git check-ignore already covers (.cct/* and info/exclude)" \
+  "[[ \"\$(cat '$GI2/.gitignore')\" == '.cct/*' ]]"
+NG="$TMP/proj-nogit"; mkdir -p "$NG"
+PATH="$BASE_PATH" "$LAUNCHER" init "$NG" >/dev/null 2>&1
+assert "init outside a git work tree changes no ignore file" "[[ ! -e '$NG/.gitignore' ]]"
+
+LEG="$TMP/proj-legacy"; mkdir -p "$LEG/.code-copilot-team"; git -C "$LEG" init -q
+printf '[limits]\ntimeout_sec = 200\n' > "$LEG/.code-copilot-team/config.toml"
+printf 'x = 1\n' > "$LEG/.code-copilot-team/config.local.toml"
+printf '{\n "generated": [\n  { "path": ".code-copilot-team/config.toml", "kind": "user-config", "hash": "abc" }\n ]\n}\n' > "$LEG/.code-copilot-team/.cct-init.json"
+RC=0; OUT=$(PATH="$BASE_PATH" "$LAUNCHER" init "$LEG" 2>&1) || RC=$?
+assert "init on a legacy project creates nothing and exits 1" "[[ '$RC' == '1' && ! -e '$LEG/.cct.toml' ]]"
+assert "...and names pi-code migrate" "echo \"\$OUT\" | grep -q 'pi-code migrate'"
+DOC=$( cd "$LEG" && PATH="$BASE_PATH" "$LAUNCHER" doctor 2>&1 || true )
+assert "doctor names a legacy project file and the migrate command" \
+  "echo \"\$DOC\" | grep -q 'read from the legacy .code-copilot-team/config.toml. Run pi-code migrate'"
+RC=0; DRY=$(PATH="$BASE_PATH" "$LAUNCHER" migrate "$LEG" --dry-run 2>&1) || RC=$?
+assert "migrate --dry-run reports and moves nothing" \
+  "[[ '$RC' == '0' && -f '$LEG/.code-copilot-team/config.toml' && ! -e '$LEG/.cct.toml' ]] && echo \"\$DRY\" | grep -q 'would move .code-copilot-team/config.toml to .cct.toml'"
+RC=0; MIG=$(PATH="$BASE_PATH" "$LAUNCHER" migrate "$LEG" 2>&1) || RC=$?
+assert "migrate moves all three files and exits 0" \
+  "[[ '$RC' == '0' && -f '$LEG/.cct.toml' && -f '$LEG/.cct.local.toml' && -f '$LEG/.cct-init.json' ]]"
+assert "...keeping the config's bytes" "grep -q 'timeout_sec = 200' '$LEG/.cct.toml'"
+assert "...rewriting the manifest's config entry" \
+  "grep -q '\"path\": \".cct.toml\"' '$LEG/.cct-init.json' && ! grep -q 'code-copilot-team' '$LEG/.cct-init.json'"
+assert "...and removing the emptied legacy directory" "[[ ! -e '$LEG/.code-copilot-team' ]]"
+assert "...and making sure git ignores the moved .cct.local.toml" "git -C '$LEG' check-ignore -q .cct.local.toml"
+assert "...reporting the ignore line it added" "echo \"\$MIG\" | grep -q 'added .cct.local.toml to'"
+assert "migrate output is safe to paste back into a shell" \
+  "! printf '%s\n%s\n' \"\$DRY\" \"\$MIG\" | grep -qE '[<>|;&\$\`]'"
+RC=0; OUT=$(PATH="$BASE_PATH" "$LAUNCHER" migrate "$LEG" 2>&1) || RC=$?
+assert "a second migrate has nothing to do" "[[ '$RC' == '0' ]] && echo \"\$OUT\" | grep -q 'nothing to migrate'"
+
+KEEP="$TMP/proj-keep"; mkdir -p "$KEEP/.code-copilot-team"
+printf 'a = 1\n' > "$KEEP/.code-copilot-team/config.toml"; printf 'notes\n' > "$KEEP/.code-copilot-team/NOTES.md"
+OUT=$(PATH="$BASE_PATH" "$LAUNCHER" migrate "$KEEP" 2>&1 || true)
+assert "migrate keeps a legacy directory that still holds other files, and says so" \
+  "[[ -f '$KEEP/.code-copilot-team/NOTES.md' && -f '$KEEP/.cct.toml' ]] && echo \"\$OUT\" | grep -q 'kept the .code-copilot-team directory because it still holds other files'"
+
+CON="$TMP/proj-conflict"; mkdir -p "$CON/.code-copilot-team"
+printf 'old = 1\n' > "$CON/.code-copilot-team/config.toml"; printf 'new = 1\n' > "$CON/.cct.toml"
+RC=0; OUT=$(PATH="$BASE_PATH" "$LAUNCHER" migrate "$CON" 2>&1) || RC=$?
+assert "a conflict keeps both files and exits 1" \
+  "[[ '$RC' == '1' ]] && grep -q 'new' '$CON/.cct.toml' && grep -q 'old' '$CON/.code-copilot-team/config.toml'"
+DOC=$( cd "$CON" && PATH="$BASE_PATH" "$LAUNCHER" doctor 2>&1 || true )
+assert "doctor reports the shadowed legacy file" "echo \"\$DOC\" | grep -q 'is ignored because .cct.toml exists'"
+
+IGN="$TMP/proj-ignored"; mkdir -p "$IGN/.code-copilot-team"; git -C "$IGN" init -q
+printf 'a = 1\n' > "$IGN/.code-copilot-team/config.toml"; printf '.cct*\n' > "$IGN/.gitignore"
+RC=0; OUT=$(PATH="$BASE_PATH" "$LAUNCHER" migrate "$IGN" 2>&1) || RC=$?
+assert "migrate refuses when an ignore rule would hide .cct.toml (exit 1, nothing moved)" \
+  "[[ '$RC' == '1' && -f '$IGN/.code-copilot-team/config.toml' && ! -e '$IGN/.cct.toml' ]]"
+assert "...and names the rule" "echo \"\$OUT\" | grep -q '.gitignore:1:.cct'"
+mkdir -p "$TMP/proj-doc"; git -C "$TMP/proj-doc" init -q
+printf 'a = 1\n' > "$TMP/proj-doc/.cct.toml"; printf 'b = 1\n' > "$TMP/proj-doc/.cct.local.toml"; printf '.cct.toml\n' > "$TMP/proj-doc/.gitignore"
+DOC=$( cd "$TMP/proj-doc" && PATH="$BASE_PATH" "$LAUNCHER" doctor 2>&1 || true )
+assert "doctor warns when git ignores .cct.toml" "echo \"\$DOC\" | grep -q '.cct.toml is ignored by git'"
+assert "doctor warns when .cct.local.toml is not ignored" "echo \"\$DOC\" | grep -q '.cct.local.toml is not ignored by git'"
 
 # ── #179: init --extension-template (guardrails starter) ────
 EXT_DIR="$TMP/ext-proj"; mkdir -p "$EXT_DIR"
@@ -659,18 +729,18 @@ assert "init --extension-template scaffolds the template README" \
 assert "init --extension-template scaffolds the template tsconfig" \
   "test -f \"\$EXT_DIR/.pi/extensions/tsconfig.json\""
 assert "manifest records the template files with hashes" \
-  "grep -q 'extension-template' \"\$EXT_DIR/.code-copilot-team/.cct-init.json\" && grep -q '.pi/extensions/cct-guardrails.ts' \"\$EXT_DIR/.code-copilot-team/.cct-init.json\""
+  "grep -q 'extension-template' \"\$EXT_DIR/.cct-init.json\" && grep -q '.pi/extensions/cct-guardrails.ts' \"\$EXT_DIR/.cct-init.json\""
 assert "manifest is valid JSON with no empty hashes (P1/P5)" \
-  "python3 -c \"import json,sys;m=json.load(open('\$EXT_DIR/.code-copilot-team/.cct-init.json'));sys.exit(0 if all(e.get('hash') for e in m['generated']) else 1)\""
+  "python3 -c \"import json,sys;m=json.load(open('\$EXT_DIR/.cct-init.json'));sys.exit(0 if all(e.get('hash') for e in m['generated']) else 1)\""
 # Pre-existing-init path: files scaffolded, NO manifest-fragment leak, manifest untouched.
 EXT_DIR2="$TMP/ext-preinit"; mkdir -p "$EXT_DIR2"
 PATH="$BASE_PATH" "$LAUNCHER" init "$EXT_DIR2" >/dev/null 2>&1
-MANI_BEFORE=$(cat "$EXT_DIR2/.code-copilot-team/.cct-init.json")
+MANI_BEFORE=$(cat "$EXT_DIR2/.cct-init.json")
 PRE_OUT=$(PATH="$BASE_PATH" "$LAUNCHER" init "$EXT_DIR2" --extension-template 2>/dev/null)
 assert "pre-existing init scaffolds without leaking manifest fragments" \
   "test -f \"\$EXT_DIR2/.pi/extensions/cct-guardrails.ts\" && ! echo \"\$PRE_OUT\" | grep -q 'extension-template\", \"hash'"
 assert "pre-existing init leaves the manifest untouched" \
-  "[ \"\$MANI_BEFORE\" = \"\$(cat \"\$EXT_DIR2/.code-copilot-team/.cct-init.json\")\" ]"
+  "[ \"\$MANI_BEFORE\" = \"\$(cat \"\$EXT_DIR2/.cct-init.json\")\" ]"
 # A partial/stale template source must FAIL the scaffold, not half-succeed (P1).
 PART_HOME="$TMP/ext-partial-home"; mkdir -p "$PART_HOME/pi/resources/extension-template"
 printf '// stale partial\n' > "$PART_HOME/pi/resources/extension-template/cct-guardrails.ts"

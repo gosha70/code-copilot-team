@@ -12,6 +12,20 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Added
 
+- **A project's Pi configuration is `.cct.toml` at the repo root.** The
+  committed configuration moves from `.code-copilot-team/config.toml` to
+  `.cct.toml`, with the personal override `.cct.local.toml` (never
+  committed) and the `pi-code init` manifest `.cct-init.json` beside it;
+  `.cct/` stays untracked runtime state. `pi-code init` writes the new
+  files and makes sure `.cct/` and `.cct.local.toml` are ignored, deciding
+  with `git check-ignore`. `pi-code migrate [dir] [--dry-run]` is the only
+  mover: it never overwrites, makes sure `.cct.local.toml` is ignored
+  when it moves one, makes no git change, and refuses (exit 1) when an
+  ignore rule would hide `.cct.toml` or `.cct-init.json`.
+  `pi-code doctor` names legacy files and ignore problems. The legacy
+  files are still read while the fallback lasts: **if this ships in 2.1.0,
+  2.2 removes the fallback**, together with the user-home one; if it ships
+  later, the fallback lasts through the minor release after it (#460).
 - **One harness home: `~/.cct`.** Every reader in bash, Python and
   TypeScript resolves a user file through one rule,
   `${CCT_HOME:-~/.cct}/<entry>`, with `CCT_HOME` as the one override.
