@@ -97,9 +97,13 @@ purely untracked runtime state and needs no gitignore exception.
   `policy/env-scrub.ts`, the Pi configuration reference, the pointer in
   `docs/cct-home.md` and the CHANGELOG (2.1 move, 2.2 removal) say the
   new names.
-- **FR-9 Removal.** The first 2.2 change deletes the legacy branch of
-  FR-2 in the loader and `pi-code`; a test pins that the fallback exists
-  in 2.1.x, and the CHANGELOG names the removal.
+- **FR-9 Removal.** The legacy branch of FR-2 is deleted in the loader
+  and `pi-code` in the first change of the minor release after the one
+  #460 ships in: 2.2 when #460 ships in 2.1.0 (with the user-home
+  fallback), later if it slips, so projects always get at least one
+  full minor release to migrate (D4). A test pins that the fallback
+  exists until then, and the CHANGELOG entry that ships #460 states the
+  removal version.
 
 ## Constraints / What NOT to Build
 
@@ -136,7 +140,12 @@ purely untracked runtime state and needs no gitignore exception.
 - **D3 Migration.** An explicit command only; nothing moves silently.
   **Ruled 2026-11-18 by the owner.**
 - **D4 Fallback.** Through 2.1.x, removed in 2.2, with the user-home
-  fallback. **Ruled 2026-11-18 by the owner.**
+  fallback: the last tag is `v2.0.0` and #411 sits in Unreleased, so if
+  #460 ships in the same 2.1.0 release both legacy names disappear
+  together in 2.2. If #460 misses the 2.1.0 release, the old location is read through
+  the release after the one #460 ships in. Projects always get at least
+  one full minor release to migrate, and the CHANGELOG states the
+  removal version. **Ruled 2026-11-18 by the owner.**
 - **D5 Companion files (derived from D1).** The personal override is `.cct.local.toml` and the
   manifest is `.cct-init.json`, both at the repo root beside
   `.cct.toml`; `init` adds `.cct.local.toml` to the ignore lines beside
