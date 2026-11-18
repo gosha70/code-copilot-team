@@ -19,7 +19,7 @@ from . import constants as C
 from . import identity as IDENT
 from .config import AnalyticsConfig, ConfigError, load_config
 from .registry import UnknownAdapterError, list_adapter_ids
-from .relational.db import SchemaMismatch
+from .relational.db import SchemaMismatch, StoreUnavailable
 
 _log = logging.getLogger(__name__)
 
@@ -565,7 +565,7 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
     except UnknownAdapterError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return C.EXIT_USAGE
-    except SchemaMismatch:
+    except (SchemaMismatch, StoreUnavailable):
         raise  # the store predates the schema; main() prints the remedy
     except Exception as exc:  # noqa: BLE001 — surface as runtime failure
         _log.exception("ingest failed")
@@ -595,6 +595,8 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             db.close()
         except SchemaMismatch:
             raise  # the store predates the schema; main() prints the remedy
+        except StoreUnavailable as exc:
+            report["store"] = {"error": f"cannot open the store: {exc}"}
         except Exception as exc:  # noqa: BLE001
             report["store"] = {"error": str(exc)}
     else:
@@ -651,7 +653,7 @@ def _cmd_graph(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return C.EXIT_RUNTIME
-    except SchemaMismatch:
+    except (SchemaMismatch, StoreUnavailable):
         raise  # the store predates the schema; main() prints the remedy
     except Exception as exc:  # noqa: BLE001
         _log.exception("graph build failed")
@@ -723,7 +725,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return C.EXIT_USAGE
-    except SchemaMismatch:
+    except (SchemaMismatch, StoreUnavailable):
         raise  # the store predates the schema; main() prints the remedy
     except Exception as exc:  # noqa: BLE001
         _log.exception("export failed")
@@ -770,7 +772,7 @@ def _cmd_threads(args: argparse.Namespace) -> int:
     try:
         apply_ddl(db)
         stats = th.backfill(db)
-    except SchemaMismatch:
+    except (SchemaMismatch, StoreUnavailable):
         # Let it out: a store that predates the current schema is a
         # RUNTIME condition with one standard remedy, and main() is
         # where that remedy is printed. Swallowing it here would report
@@ -826,7 +828,7 @@ def _cmd_expectations(args: argparse.Namespace) -> int:
     try:
         apply_ddl(db)
         stats = exp.ingest_runs(db, root, project_dir=args.project_dir)
-    except SchemaMismatch:
+    except (SchemaMismatch, StoreUnavailable):
         raise
     finally:
         db.close()
@@ -874,7 +876,7 @@ def _cmd_correlate(args: argparse.Namespace) -> int:
             cor.run(db, args.runs_root, stats=stats)
         finally:
             db.close()
-    except SchemaMismatch:
+    except (SchemaMismatch, StoreUnavailable):
         raise  # the store predates the schema; main() prints the remedy
     except Exception as exc:  # noqa: BLE001
         # FR-4: the partial counters gathered before the failure are still
@@ -980,7 +982,7 @@ def _cmd_watch(args: argparse.Namespace) -> int:
             should_stop=stop.is_set,
             fail_fast_first=True,
         )
-    except SchemaMismatch:
+    except (SchemaMismatch, StoreUnavailable):
         raise  # the store predates the schema; main() prints the remedy
     except Exception:
         _log.exception("watch: initial ingest failed — check DSN / config")
@@ -1019,7 +1021,7 @@ def _cmd_archive(args: argparse.Namespace) -> int:
             project_id_rules=cfg.project_id_rules,
             stats=stats,
         )
-    except SchemaMismatch:
+    except (SchemaMismatch, StoreUnavailable):
         raise  # the store predates the schema; main() prints the remedy
     except Exception as exc:  # noqa: BLE001
         print(json.dumps(stats.as_dict(), indent=2), file=sys.stderr)
@@ -1062,7 +1064,7 @@ def _cmd_search(args: argparse.Namespace) -> int:
             results = arch.search_traces(db, args.query, limit=args.limit)
         finally:
             db.close()
-    except SchemaMismatch:
+    except (SchemaMismatch, StoreUnavailable):
         raise  # the store predates the schema; main() prints the remedy
     except Exception as exc:  # noqa: BLE001
         print(f"error: search failed: {exc}", file=sys.stderr)
@@ -1119,7 +1121,7 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
     except UnknownJudgeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return C.EXIT_USAGE
-    except SchemaMismatch:
+    except (SchemaMismatch, StoreUnavailable):
         raise  # the store predates the schema; main() prints the remedy
     except Exception as exc:  # noqa: BLE001
         _log.exception("analyze failed")
@@ -1203,7 +1205,7 @@ def _cmd_embed(args: argparse.Namespace) -> int:
             )
         finally:
             db.close()
-    except SchemaMismatch:
+    except (SchemaMismatch, StoreUnavailable):
         raise  # the store predates the schema; main() prints the remedy
     except Exception as exc:  # noqa: BLE001 — a refused pass (probe,
         #                       config) is a runtime error, reported
@@ -1369,7 +1371,7 @@ def _cmd_similar(args: argparse.Namespace) -> int:
         # exists but uninitialized: a prerequisite, with guidance.
         print(f"error: {exc}", file=sys.stderr)
         return C.EXIT_USAGE
-    except SchemaMismatch:
+    except (SchemaMismatch, StoreUnavailable):
         raise  # the store predates the schema; main() prints the remedy
     except Exception as exc:  # noqa: BLE001 — a torn pass rolled back;
         #                       the previous edge set stands.
@@ -1441,7 +1443,7 @@ def _cmd_clusters(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return C.EXIT_RUNTIME
-    except SchemaMismatch:
+    except (SchemaMismatch, StoreUnavailable):
         raise  # the store predates the schema; main() prints the remedy
     except Exception as exc:  # noqa: BLE001 — a read failure is reported,
         #                      never a traceback; nothing was written.
@@ -1471,7 +1473,7 @@ def _cmd_kpis(args: argparse.Namespace) -> int:
             stats = compute_kpis(db, rubric.name, session_id=args.session_id)
         finally:
             db.close()
-    except SchemaMismatch:
+    except (SchemaMismatch, StoreUnavailable):
         raise  # the store predates the schema; main() prints the remedy
     except Exception as exc:  # noqa: BLE001
         _log.exception("kpis failed")
@@ -1499,6 +1501,8 @@ def _cmd_gaps(args: argparse.Namespace) -> int:
             report = gap_report(db, cutoffs, noise=cfg.noise if args.exclude_noise else None)
         finally:
             db.close()
+    except (SchemaMismatch, StoreUnavailable):
+        raise  # main() reports the store refusal once
     except Exception as exc:
         _log.exception("gaps failed")
         print(f"error: gaps failed: {exc}", file=sys.stderr)
@@ -1526,7 +1530,7 @@ def _cmd_calibrate(args: argparse.Namespace) -> int:
         # message names what to fix
         print(f"error: {exc}", file=sys.stderr)
         return C.EXIT_USAGE
-    except SchemaMismatch:
+    except (SchemaMismatch, StoreUnavailable):
         raise  # the store predates the schema; main() prints the remedy
     except Exception as exc:  # noqa: BLE001
         _log.exception("calibrate failed")
@@ -1553,7 +1557,7 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return C.EXIT_RUNTIME
-    except SchemaMismatch:
+    except (SchemaMismatch, StoreUnavailable):
         raise  # the store predates the schema; main() prints the remedy
     except Exception as exc:  # noqa: BLE001
         _log.exception("mcp server failed")
@@ -1635,6 +1639,9 @@ def main(argv: Sequence[str]) -> int:
     # command; every handler's own catch-all lets it through.
     try:
         return handler(args)
+    except StoreUnavailable as exc:
+        print(f"error: cannot open the store: {exc}", file=sys.stderr)
+        return C.EXIT_RUNTIME
     except ConfigError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return C.EXIT_USAGE

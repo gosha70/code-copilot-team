@@ -195,18 +195,27 @@ class Database:
             import sqlite3
 
             target = sqlite_target(dsn)
-            if sqlite_mode and target != SQLITE_MEMORY:
-                conn = sqlite3.connect(
-                    f"{_sqlite_uri(target)}?mode={sqlite_mode}", uri=True
-                )
-            else:
-                conn = sqlite3.connect(target)
-            conn.execute("PRAGMA foreign_keys = ON")
+            try:
+                if sqlite_mode and target != SQLITE_MEMORY:
+                    conn = sqlite3.connect(
+                        f"{_sqlite_uri(target)}?mode={sqlite_mode}", uri=True
+                    )
+                else:
+                    conn = sqlite3.connect(target)
+                conn.execute("PRAGMA foreign_keys = ON")
+            except sqlite3.Error as exc:
+                raise StoreUnavailable(f"{target}: {exc}") from exc
             return cls(conn, DIALECT_SQLITE)
 
         import psycopg  # imported lazily so sqlite-only test runs need no psycopg
 
-        conn = psycopg.connect(dsn)
+        try:
+            conn = psycopg.connect(dsn)
+        except psycopg.Error as exc:
+            where = _redact_dsn(dsn)
+            # libpq quotes a malformed DSN verbatim, password included: show neither.
+            detail = "not a valid connection string" if where == _UNPARSEABLE_DSN else exc
+            raise StoreUnavailable(f"{where}: {detail}") from exc
         return cls(conn, DIALECT_POSTGRES)
 
     # ── helpers ────────────────────────────────────────────────────────
@@ -267,6 +276,34 @@ def _statements(sql_text: str) -> list[str]:
     lines = [ln for ln in sql_text.splitlines() if not ln.strip().startswith("--")]
     body = "\n".join(lines)
     return [s.strip() for s in body.split(";") if s.strip()]
+
+
+_UNPARSEABLE_DSN = "<postgres DSN>"
+
+
+def _redact_dsn(dsn: str) -> str:
+    """Where the store is, without credentials: this string reaches the terminal.
+
+    Parsed with libpq's own rules, so the URL, keyword (host=... password=...) and
+    ?password= forms are all covered. Called only after psycopg was imported."""
+    import psycopg
+    from psycopg.conninfo import conninfo_to_dict
+
+    try:
+        p = conninfo_to_dict(dsn)
+    except psycopg.Error:
+        return _UNPARSEABLE_DSN
+    where = f"{p.get('host', 'localhost')}:{p.get('port', '5432')}/{p.get('dbname', '')}"
+    return f"{p['user']}@{where}" if p.get("user") else where
+
+
+class StoreUnavailable(RuntimeError):
+    """The store could not be opened at all: a directory that does not exist, a file the
+    process may not read, an unreachable or refusing server.
+
+    A runtime condition the person must fix. It is raised at the boundary so every command
+    reports it as one line, instead of each handler meeting a driver traceback on its own.
+    """
 
 
 class SchemaMismatch(RuntimeError):
