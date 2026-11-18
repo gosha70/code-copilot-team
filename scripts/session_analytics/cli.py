@@ -593,8 +593,10 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             report["store"] = _store_counts(db)
             report["store"]["dsn_dialect"] = db.dialect
             db.close()
-        except (SchemaMismatch, StoreUnavailable):
+        except SchemaMismatch:
             raise  # the store predates the schema; main() prints the remedy
+        except StoreUnavailable as exc:
+            report["store"] = {"error": f"cannot open the store: {exc}"}
         except Exception as exc:  # noqa: BLE001
             report["store"] = {"error": str(exc)}
     else:

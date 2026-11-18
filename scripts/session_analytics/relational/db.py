@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from importlib import resources
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -213,7 +212,10 @@ class Database:
         try:
             conn = psycopg.connect(dsn)
         except psycopg.Error as exc:
-            raise StoreUnavailable(f"{_dsn_without_secret(dsn)}: {exc}") from exc
+            where = _redact_dsn(dsn)
+            # libpq quotes a malformed DSN verbatim, password included: show neither.
+            detail = "not a valid connection string" if where == _UNPARSEABLE_DSN else exc
+            raise StoreUnavailable(f"{where}: {detail}") from exc
         return cls(conn, DIALECT_POSTGRES)
 
     # ── helpers ────────────────────────────────────────────────────────
@@ -276,9 +278,23 @@ def _statements(sql_text: str) -> list[str]:
     return [s.strip() for s in body.split(";") if s.strip()]
 
 
-def _dsn_without_secret(dsn: str) -> str:
-    """The DSN with its password removed: this string reaches the terminal."""
-    return re.sub(r"://([^:/@]+):[^@]*@", r"://\1:***@", dsn)
+_UNPARSEABLE_DSN = "<postgres DSN>"
+
+
+def _redact_dsn(dsn: str) -> str:
+    """Where the store is, without credentials: this string reaches the terminal.
+
+    Parsed with libpq's own rules, so the URL, keyword (host=... password=...) and
+    ?password= forms are all covered. Called only after psycopg was imported."""
+    import psycopg
+    from psycopg.conninfo import conninfo_to_dict
+
+    try:
+        p = conninfo_to_dict(dsn)
+    except psycopg.Error:
+        return _UNPARSEABLE_DSN
+    where = f"{p.get('host', 'localhost')}:{p.get('port', '5432')}/{p.get('dbname', '')}"
+    return f"{p['user']}@{where}" if p.get("user") else where
 
 
 class StoreUnavailable(RuntimeError):

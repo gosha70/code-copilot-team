@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 import io
+import json
 import tempfile
 import unittest
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from session_analytics import constants as C
 from session_analytics.cli import main
-from session_analytics.relational.db import Database, StoreUnavailable, _dsn_without_secret
+from session_analytics.relational.db import Database, StoreUnavailable, _redact_dsn
+
+try:
+    import psycopg  # noqa: F401 — the redaction parses with libpq's rules
+    _HAS_PSYCOPG = True
+except ImportError:
+    _HAS_PSYCOPG = False
 
 BAD = "sqlite:////nonexistent/dir/x.db"
 
@@ -52,11 +59,35 @@ class AStoreThatCannotBeOpened(unittest.TestCase):
                 self.assertIn("error: cannot open the store:", err)
                 self.assertNotIn("Traceback", err)
 
+    def test_doctor_reports_the_store_it_cannot_open_and_still_exits_0(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code, _ = self.run_main(["doctor", "--db", BAD])
+        self.assertEqual(code, C.EXIT_OK)
+        report = json.loads(out.getvalue())
+        self.assertIn("sources", report)
+        self.assertIn("cannot open the store:", report["store"]["error"])
+        self.assertIn("/nonexistent/dir/x.db", report["store"]["error"])
+
+    @unittest.skipUnless(_HAS_PSYCOPG, "psycopg not installed")
     def test_a_password_in_the_dsn_never_reaches_the_message(self):
-        self.assertEqual(
-            _dsn_without_secret("postgresql://someone:hunter2@db.internal:5432/sessions"),
-            "postgresql://someone:***@db.internal:5432/sessions",
-        )
+        for dsn in (
+            "postgresql://someone:hunter2@db.internal:5432/sessions",
+            "host=db.internal user=someone password=hunter2 dbname=sessions",
+            "postgresql://db.internal/sessions?user=someone&password=hunter2",
+        ):
+            with self.subTest(dsn=dsn):
+                shown = _redact_dsn(dsn)
+                self.assertNotIn("hunter2", shown)
+                self.assertIn("db.internal", shown)
+
+    @unittest.skipUnless(_HAS_PSYCOPG, "psycopg not installed")
+    def test_a_malformed_dsn_is_not_echoed_with_its_password(self):
+        """libpq's parse error quotes the whole DSN; the message must carry neither."""
+        with self.assertRaises(StoreUnavailable) as caught:
+            Database.connect("postgresql://someone:hunter2@[bad/sessions")
+        self.assertNotIn("hunter2", str(caught.exception))
+        self.assertIn("not a valid connection string", str(caught.exception))
 
     def test_a_working_store_is_still_a_working_store(self):
         with tempfile.TemporaryDirectory() as tmp:
