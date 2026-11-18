@@ -297,6 +297,54 @@ class TestReplayRobustness(unittest.TestCase):
         defaults = [o for o in outputs if '"type":"result"' in o]
         self.assertEqual(len(defaults), 10)
 
+    def test_the_claim_does_not_depend_on_an_atomic_mkdir(self) -> None:
+        # #459: uutils mkdir (ubuntu-26.04 runners) reports success when the
+        # directory already exists, so two runs could both claim one index.
+        # A mkdir that ALWAYS succeeds on an existing directory is on PATH
+        # here; the claim must still hand out every event exactly once.
+        import os
+        import tempfile
+
+        shim = Path(tempfile.mkdtemp(prefix="cct-inject-mkdir."))
+        (shim / "mkdir").write_text(
+            '#!/usr/bin/env bash\n'
+            '# Non-atomic like uutils: an existing directory is "created" again.\n'
+            'for a; do case "$a" in -*) ;; *) [[ -d "$a" ]] && exit 0 ;; esac; done\n'
+            'exec /bin/mkdir "$@"\n'
+        )
+        (shim / "mkdir").chmod(0o755)
+        env = dict(os.environ, PATH=f"{shim}:{os.environ.get('PATH', '')}")
+        events = [
+            InjectedEvent(0, "usage_limit", f"2099-02-{d:02d}T00:00:00Z", None)
+            for d in range(1, 21)
+        ]
+        cmd = materialize_replay(events, self.base)
+        procs = [
+            subprocess.Popen(
+                ["bash", "-c", cmd], env=env,
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+            )
+            for _ in range(30)
+        ]
+        outputs = [p.communicate()[0] for p in procs]
+        expected = {transcript_for_event(e)[0] for e in events}
+        seen = [o for o in outputs if o in expected]
+        self.assertEqual(len(seen), 20, "an event was lost or duplicated under a non-atomic mkdir")
+        self.assertEqual(set(seen), expected)
+
+    def test_reset_clears_claim_files_and_old_claim_directories(self) -> None:
+        # Claims are files now (#459); a directory left by the earlier
+        # mkdir-based claim must be cleared too, so a rewind starts at 0.
+        events = [InjectedEvent(0, "usage_limit", "2099-03-01T00:00:00Z", None)]
+        cmd = materialize_replay(events, self.base)
+        subprocess.run(["bash", "-c", cmd], capture_output=True, text=True)
+        (self.base / "claim-7").mkdir()
+        self.assertTrue((self.base / "claim-0").is_file())
+        reset_replay(self.base)
+        self.assertEqual(sorted(p.name for p in self.base.glob("claim-*")), [])
+        first = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True).stdout
+        self.assertEqual(first, transcript_for_event(events[0])[0])
+
     def test_missing_declared_evidence_fails_closed(self) -> None:
         # The owner's reproduction: deleting an injected auth-failure
         # transcript turned it into a nonce pass. A declared index with
