@@ -41,7 +41,10 @@ const PATH_RULES = {
 
 // 1 ── trust gating (FR-004a fail-closed) ────────────────────────────────────
 test("BATTERY 1 — trust gating: untrusted project config is refused, not applied", () => {
-  const dir = tmpTree({ "proj/.code-copilot-team/config.toml": "[limits]\ntimeout_sec = 200\n" });
+  const dir = tmpTree({
+    "proj/.cct.toml": "[limits]\ntimeout_sec = 200\n",
+    "proj/.code-copilot-team/config.local.toml": "[limits]\ntimeout_sec = 300\n",
+  });
   const r = loadLayeredConfig({
     globalDir: "/nonexistent-global",
     projectDir: path.join(dir, "proj"),
@@ -50,6 +53,7 @@ test("BATTERY 1 — trust gating: untrusted project config is refused, not appli
     env: {},
   });
   assert.notEqual(r.resolved.get("limits.timeout_sec").value, 200, "project value must NOT apply untrusted");
+  assert.notEqual(r.resolved.get("limits.timeout_sec").value, 300, "nor the legacy project-local value (#460)");
   assert.ok(r.ignoredFiles.some((f) => /not positively trusted/.test(f.reason)), "fail-closed reason");
 });
 

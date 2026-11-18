@@ -132,8 +132,17 @@ export function gateBuild(projectRoot: string, featureId: string | null): SddGat
   return validateSpecDir(path.join(projectRoot, "specs", featureId));
 }
 
-/** Paths a blocked Build session may still write (spec US-4): specs tree + CCT state. */
+/** Project config files a blocked Build session may write (#460). */
+const PROJECT_CONFIG_FILES = new Set([".cct.toml", ".cct.local.toml", ".cct-init.json"]);
+
+/** Paths a blocked Build session may still write (spec US-4): specs tree + CCT state + project config. */
 export function isSpecPath(relPath: string): boolean {
   const p = relPath.replace(/\\/g, "/");
-  return p.startsWith("specs/") || p.startsWith(".cct/") || p.startsWith(".code-copilot-team/");
+  return (
+    p.startsWith("specs/") ||
+    p.startsWith(".cct/") ||
+    PROJECT_CONFIG_FILES.has(p) ||
+    // the legacy project directory, while the #460 fallback lasts
+    p.startsWith(".code-copilot-team/")
+  );
 }

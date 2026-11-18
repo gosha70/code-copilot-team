@@ -42,6 +42,15 @@ shared/skills/*/SKILL.md  →  scripts/generate.sh  →  adapters/<tool>/
 5. Commit with a clear message (`git commit -m "Add Go microservice template with gRPC agent team"`)
 6. Open a pull request
 
+## Spec-First for Features
+
+Non-security bug fixes, documentation-only changes and trivial or cosmetic changes take the `spec_mode: none` path: a `plan.md` with the `origin:` block, no `spec.md`, and the PR review is its approval. Everything else is agreed on first and specified before it is built, by risk rather than by file count: security, schema and integration changes are `spec_mode: full` even when they touch one file (the table is in `shared/skills/spec-workflow/SKILL.md`).
+
+1. **Agree on scope in the issue.** Comment on the issue with the approach you intend to take, and wait for a maintainer to agree before writing code. An issue that says a specification is required is not open for a direct implementation PR.
+2. **Features follow spec-driven development.** Create `specs/<feature-id>/` from `shared/templates/sdd/` with `status: draft` and the required `origin:` block. The artifacts per mode: `none` is `plan.md`; `lightweight` is `plan.md` and `spec.md`; `full` is `plan.md`, `spec.md` and `tasks.md`. The process is in [docs/spec-driven-development.md](docs/spec-driven-development.md) ("How It Works", "Getting Started with SDD"); the approval flow per `spec_mode` is in [shared/skills/spec-workflow/SKILL.md](shared/skills/spec-workflow/SKILL.md); the origin block and the alignment gate are in [shared/skills/origin-confirmation/SKILL.md](shared/skills/origin-confirmation/SKILL.md).
+3. **Validate the bundle** with `bash scripts/validate-spec.sh --feature-id <feature-id>` before opening the PR.
+4. **The spec PR comes first.** A maintainer reviews it and sets `status: approved`; the implementation PR follows and cites the approved `plan.md`. An implementation PR for a feature with no approved plan is sent back to this step.
+
 ## Pull Requests from Forks
 
 Contributions arrive as pull requests from forks, and CI runs on them:
@@ -92,7 +101,7 @@ commit** is on record. The mechanics (`.github/workflows/review-gate.yml`):
 To prevent instruction drift and outdated quality claims:
 
 1. Follow [shared/docs/alignment-maintenance.md](shared/docs/alignment-maintenance.md) for release and monthly health checks.
-2. Keep README test-count lines in sync with actual test output.
+2. Keep the suite counts in `docs/repo-structure.md` in sync with `tests/test-counts.env`; `tests/test-shared-structure.sh` fails when the two disagree, so change both in the same commit.
 3. Treat `tests/test-counts.env` as the source of truth for expected top-level suite totals when assertions change.
 4. Keep `.github/workflows/sync-check.yml` aligned with full gate coverage (all suites + setup before structure test).
 5. If structure tests fail on installed template parity, refresh local install and rerun:

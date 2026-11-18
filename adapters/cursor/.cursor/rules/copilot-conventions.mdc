@@ -29,6 +29,16 @@ Before planning, implementing, or approving agent-produced work:
 5. Complete the required path before optional improvements. Record useful extras as follow-up work instead of silently expanding scope.
 6. Before approval, ask: **What can be removed without weakening correctness, safety, or the acceptance criteria?**
 
+**Simplest complete change.** Before writing new code, take the first step that fully meets the approved requirement:
+
+1. No new code: the requirement is already met, or met by configuration.
+2. Existing project code: a helper, component, configuration, or workflow already in the repository.
+3. The language's standard library or a native platform capability.
+4. A dependency the project already uses, without a new abstraction around it.
+5. Only then, the simplest complete custom design.
+
+A smaller change is complete only when every caller, workflow, migration, and regression case still works: trace all callers first. A small local fix that misses another caller is incomplete, not simple. Simplicity never weakens security, authentication, privacy, data integrity, error handling, accessibility, or trust boundaries. When a material requirement is ambiguous, follow the clarification protocol (`shared/skills/clarification-protocol/SKILL.md`) to decide whether to ask, escalate, or proceed.
+
 For a handoff from Claude Code or any other agent, explicitly classify the change as `on-target`, `overcomplicated`, or `off-target`, and explain the evidence. Green tests do not compensate for scope drift. Judge the artifact rather than guessing at a vendor's intent; complexity required by a concrete failure mode is not overengineering when the link is explicit.
 
 ## Single Source of Truth

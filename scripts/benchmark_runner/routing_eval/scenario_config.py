@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
+from session_analytics.home import HOME_DEFAULT_REL, HOME_LEGACY_REL, cct_home_path
+
 MEASURED_BASIS = "measured"
 
 SCENARIO_HYBRID_ROUTING = "hybrid-routing"
@@ -129,11 +131,19 @@ def resolve_registry_path(
 ) -> Path:
     """Resolve the cct_router arm's registry deterministically.
 
-    ``~`` expands (the documented operator location); an absolute path
-    stands as-is; a relative path resolves against the CONFIG's source
-    directory — never the caller's cwd, which would let one preset bind
-    different policies depending on where the command started.
+    A path under the CCT home as written in docs (``~/.cct/<rest>``, or
+    the legacy ``~/.code-copilot-team/<rest>``) names the operator's CCT
+    home, so it resolves through the home resolver: ``CCT_HOME`` wins and
+    the 2.1.x legacy fallback applies (#411). Any other ``~`` expands; an
+    absolute path stands as-is; a relative path resolves against the
+    CONFIG's source directory — never the caller's cwd, which would let
+    one preset bind different policies depending on where the command
+    started.
     """
+    for rel in (HOME_DEFAULT_REL, HOME_LEGACY_REL):
+        prefix = f"~/{rel}/"
+        if arm_registry.startswith(prefix) and len(arm_registry) > len(prefix):
+            return cct_home_path(arm_registry[len(prefix):]).resolve()
     candidate = Path(arm_registry).expanduser()
     if candidate.is_absolute():
         return candidate.resolve()

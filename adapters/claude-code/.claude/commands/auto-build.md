@@ -6,7 +6,7 @@ Usage: `/auto-build <feature-id> [profile]` (profile defaults to `advisory`)
 
 - `specs/<feature-id>/plan.md` exists with `status: approved` (Plan Approval Gate)
 - `jq` must be installed
-- A gating reviewer configured in `~/.code-copilot-team/providers.toml`
+- A gating reviewer configured in `~/.cct/providers.toml`
 
 ## Steps
 

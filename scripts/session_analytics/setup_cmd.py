@@ -21,10 +21,11 @@ from typing import Mapping, Optional
 
 from . import config as cfgmod
 from . import constants as C
+from .home import cct_home_path
 
-# Zero-infra default store: a local SQLite file under ~/.cct (absolute path →
-# the four-slash sqlite URL the loader resolves to an absolute file).
-DEFAULT_DSN = f"sqlite:///{Path.home() / '.cct' / 'session-analytics.db'}"
+# Zero-infra default store: a local SQLite file in the CCT home (#411; an
+# absolute path → the four-slash sqlite URL the loader resolves to a file).
+DEFAULT_DSN = f"sqlite:///{cct_home_path('session-analytics.db')}"
 
 _JUDGE_CHOICES = {
     "1": ("ollama", "Local Ollama model (fully local — the default; nothing leaves the machine)"),

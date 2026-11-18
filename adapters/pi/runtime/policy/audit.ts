@@ -8,8 +8,8 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { cctHomePath } from "../config/home.ts";
 
 export interface AuditRecord {
   ts: string;
@@ -37,8 +37,7 @@ export function resolveAuditMode(interactive: boolean): string {
 }
 
 export function auditLogPath(): string {
-  const home = process.env.CCT_HOME ?? path.join(os.homedir(), ".code-copilot-team");
-  return path.join(home, "pi", "audit.log");
+  return cctHomePath(path.join("pi", "audit.log"));
 }
 
 export function audit(record: Omit<AuditRecord, "ts">): void {

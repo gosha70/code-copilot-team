@@ -1066,7 +1066,7 @@ assert_ok "test-counts has TEST_REVIEW_LOOP_EXPECTED_PASS numeric value" "$rc"
 COUNT_VARS=$(grep -Ec '^TEST_[A-Z_]+_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env")
 # 15 as of #239 C3 T4 (test-ui-harness.sh). Bump deliberately when a
 # suite is added, so a pin cannot go missing unnoticed.
-assert_eq "test-counts has exactly 27 expected-pass variables (the four wiki suites arrived with #384)" "27" "$COUNT_VARS"
+assert_eq "test-counts has exactly 28 expected-pass variables (the four wiki suites arrived with #384, cct-home with #411)" "28" "$COUNT_VARS"
 
 # ── #384 FR-10: assistant workflows keep their meaning after the engine swap ──
 # /promote-lesson stays a free-text, manual curator procedure that lints
@@ -2114,6 +2114,215 @@ assert_eq "the tape checker passes a tape whose commands work" "0" "$rc_good"
 assert_eq "it fails when a command in a pipeline breaks" "1" "$rc_broken"
 assert_eq "it fails when the output no longer contains what the tape expects" "1" "$rc_changed"
 assert_eq "it refuses a Type line it cannot parse rather than skipping its command" "1" "$rc_unparsed"
+
+# ══════════════════════════════════════════════════════════════
+# The CCT home has one resolver per language (#411)
+# ══════════════════════════════════════════════════════════════
+# ${CCT_HOME:-~/.cct} with ~/.code-copilot-team served as a fallback is
+# decided in scripts/lib/cct-home.sh, session_analytics/home.py and
+# adapters/pi/runtime/config/home.ts, and nowhere else. Installed scripts
+# that run without a checkout carry the bash block verbatim; any other code
+# that spells either home as a path would hide the move from the fallback
+# and the doctor.
+echo "=== CCT home: one resolver, verbatim copies, no stray spelling ==="
+HOME_LIB="$REPO_DIR/scripts/lib/cct-home.sh"
+home_block() { awk '/^# >>> cct-home resolver/{f=1} f{print} /^# <<< cct-home resolver/{f=0}' "$1"; }
+HOME_BLOCK=$(home_block "$HOME_LIB")
+rc=0; [[ -n "$HOME_BLOCK" ]] || rc=1
+assert_ok "scripts/lib/cct-home.sh has the marked resolver block" "$rc"
+for copy in adapters/claude-code/.claude/hooks/harness-stamp.sh adapters/claude-code/claude-code adapters/pi/bin/pi-code; do
+  rc=0; [[ "$(home_block "$REPO_DIR/$copy")" == "$HOME_BLOCK" ]] || rc=1
+  assert_ok "$copy carries the resolver block verbatim" "$rc"
+done
+# The guard (FR-9): no code outside the resolvers spells a CCT home. A
+# candidate is a non-comment line naming either directory after a tilde
+# (~/.cct, ~/.code-copilot-team), or a line that has a home lookup ($HOME,
+# ${HOME}, Path.home(), homedir(), os.environ["HOME"], environ.get("HOME"),
+# getenv("HOME"), process.env.HOME, env["HOME"], a bare "~" string as in
+# expanduser("~")) and EITHER directory token anywhere after it on the same
+# line, whatever sits between (joinpath, f-strings, concatenation). No file is exempt: the
+# resolvers spell both names through constants (CCT_HOME_DEFAULT_REL,
+# HOME_LEGACY_REL, ...), so their code produces no candidates, and any line
+# in them that does is compared like every other line. Only a line whose
+# FIRST non-blank characters are a comment marker (#, //, *, /*) is skipped;
+# a code line with a trailing comment is scanned like any other.
+#
+# Nothing is exempt by meaning either. Display-only occurrences (help text,
+# messages, docstrings, Studio copy) are listed one by one in
+# tests/fixtures/home-guard/baseline.txt as "<file><TAB><trimmed line>".
+# RULE: an entry there must be text a person reads, never a path the code
+# reads, writes, creates or passes on; a real path goes through a resolver.
+# Lines starting with # in the baseline are its own header, not entries. The
+# comparison is a multiset: a new occurrence anywhere, including a second
+# copy of a listed line in a listed file, fails until it is reviewed and
+# added; a listed occurrence that no longer exists fails too, so the list
+# stays exact.
+#
+# Best effort, by decision (FR-9): a lookup joined to either directory
+# through a variable or constant (home = Path.home() then home / ".cct", or a
+# new DOT = ".cct"), or split inside a multi-line string, is not detected;
+# review covers those. Do not grow the guard to chase further shapes.
+#
+# No \b: macOS `git grep -E` treats \b as matching nothing, which made an
+# earlier draft scan zero lines and pass. The candidate count proves the scan
+# reads something.
+HOME_END='([^[:alnum:]_-]|$)'
+HOME_ID_END='([^[:alnum:]_]|$)'
+HOME_Q='["'"'"'`]'
+HOME_SRC="(\\\$HOME$HOME_ID_END|\\\$\\{HOME[}:]|Path[[:space:]]*\\.[[:space:]]*home[[:space:]]*\\([[:space:]]*\\)|homedir[[:space:]]*\\([[:space:]]*\\)|environ[[:space:]]*\\[[[:space:]]*${HOME_Q}HOME${HOME_Q}|environ\\.get\\([[:space:]]*${HOME_Q}HOME${HOME_Q}|getenv\\([[:space:]]*${HOME_Q}HOME${HOME_Q}|env\\.HOME$HOME_ID_END|env\\[[[:space:]]*${HOME_Q}HOME${HOME_Q}|${HOME_Q}~${HOME_Q})"
+HOME_SPELLING="(~/\\.(code-copilot-team|cct)$HOME_END)|($HOME_SRC.*\\.(code-copilot-team|cct)$HOME_END)"
+HOME_BASELINE="$REPO_DIR/tests/fixtures/home-guard/baseline.txt"
+home_baseline() { grep -v '^#' "$HOME_BASELINE" | LC_ALL=C sort; }   # entries only, sorted
+home_occurrences() {  # stdin: "<file>:<line>:<text>" → sorted "<file><TAB><trimmed text>", one per occurrence
+  grep -E "$HOME_SPELLING" \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(#|//|\*|/\*)' \
+    | sed -E 's/^([^:]+):[0-9]+:[[:space:]]*/\1	/; s/[[:space:]]+$//' \
+    | LC_ALL=C sort || true
+}
+home_unreviewed() {  # stdin as above → occurrences not covered by the baseline (multiset)
+  LC_ALL=C comm -23 <(home_occurrences) <(home_baseline)
+}
+# A home construction split across lines (Path.home().joinpath( then ".cct"
+# on the next line) has no single line holding both parts. The expression
+# scan starts at each home lookup and follows the expression that contains
+# it, through balanced brackets or a trailing backslash, so the split form is
+# caught while the next independent statement (repo_root / ".cct") is not.
+# It needs python3, as the tape checker above does; without it the planted
+# split cases below fail loudly rather than passing.
+HOME_EXPR_SCAN="$REPO_DIR/tests/fixtures/home-guard/expr_scan.py"
+home_expr_occurrences() {  # [<repo dir>] → "<file><TAB><expression>" for split home constructions
+  (cd "${1:-$REPO_DIR}" && git grep -lz -E "$HOME_SRC" -- "${HOME_PATHSPEC[@]}" 2>/dev/null \
+    | HOME_SRC="$HOME_SRC" HOME_END="$HOME_END" python3 "$HOME_EXPR_SCAN")
+}
+home_all_occurrences() {  # [<repo dir>] → every occurrence, line scan and expression scan, sorted
+  { home_discover "${1:-$REPO_DIR}" | home_occurrences; home_expr_occurrences "${1:-$REPO_DIR}"; } | LC_ALL=C sort
+}
+# Discovery covers every tracked code and config file: prose (Markdown, the
+# generated .mdc rules, specs, the wiki, CHANGELOG, llms.txt) and test code
+# are the only exclusions.
+HOME_PATHSPEC=(. ':!*.md' ':!*.mdc' ':!specs' ':!knowledge' ':!CHANGELOG.md' ':!llms.txt' ':!*.jsonl' ':!tests' ':!*/tests/*')
+home_discover() {  # [<repo dir>] → "<file>:<line>:<text>" for every tracked line naming either directory
+  (cd "${1:-$REPO_DIR}" && git grep -n -E "\.(code-copilot-team|cct)$HOME_END" -- "${HOME_PATHSPEC[@]}" 2>/dev/null)
+}
+HOME_CANDIDATES=$(home_discover)
+rc=0; [[ $(grep -c . <<<"$HOME_CANDIDATES") -ge 20 ]] || rc=1
+assert_ok "the home guard's candidate scan reads lines (it is not a silent no-op)" "$rc"
+HOME_ALL=$(home_all_occurrences)
+STRAY=$(LC_ALL=C comm -23 <(printf '%s\n' "$HOME_ALL" | sed '/^$/d') <(home_baseline))
+rc=0; [[ -z "$STRAY" ]] || rc=1
+assert_ok "no detected CCT home spelling outside the resolvers is missing from the reviewed baseline${STRAY:+ (unreviewed: $(cut -f1 <<<"$STRAY" | sort -u | tr '\n' ' '))}" "$rc"
+GONE=$(LC_ALL=C comm -13 <(printf '%s\n' "$HOME_ALL" | sed '/^$/d') <(home_baseline))
+rc=0; [[ -z "$GONE" ]] || rc=1
+assert_ok "every baseline entry still occurs (the list is exact)${GONE:+ (stale: $(cut -f1 <<<"$GONE" | sort -u | tr '\n' ' '))}" "$rc"
+# The guard bites, through real discovery: each planted file goes into a
+# throwaway git repository and is found (or not) by home_discover, the same
+# git grep the real scan uses, so scope and matching are both exercised.
+# "<path>|<line>": the line is written to <path>; a listed baseline line
+# written twice into its own file proves the multiset (a second copy fails).
+home_flags_planted() {  # <path> <line>... → 0 if the guard flags the planted file (one line per argument)
+  local repo out
+  repo=$(mktemp -d)
+  mkdir -p "$repo/$(dirname "$1")"
+  printf '%s\n' "${@:2}" > "$repo/$1"
+  (cd "$repo" && git init -q . && git add -A) >/dev/null 2>&1
+  out=$(LC_ALL=C comm -23 <(home_all_occurrences "$repo" | sed '/^$/d') <(home_baseline))
+  rm -rf "$repo"
+  [[ -n "$out" ]]
+}
+FIRST_LISTED=$(home_baseline | head -1)
+while IFS='|' read -r ppath pline; do
+  [[ -n "$ppath" ]] || continue
+  rc=0; home_flags_planted "$ppath" "$pline" || rc=1
+  assert_ok "the home guard flags a planted spelling in $ppath: $pline" "$rc"
+done <<'PLANTED'
+scripts/lib/routing-state.sh|RS_FILE="${CCT_ROUTING_STATE:-$HOME/.code-copilot-team/routing-state.json}"
+scripts/session_analytics/config.py|_USER_CONFIG = Path.home() / ".cct" / "session-analytics.json"
+scripts/x.sh|cat ~/.cct/providers.toml
+scripts/x.sh|FILE=~/.cct/providers.toml
+scripts/x.py|p = Path(os.environ["HOME"]) / ".cct" / "providers.toml"
+scripts/x.py|p = os.environ.get("HOME") + "/.cct/routing.toml"
+adapters/pi/runtime/x.ts|const p = path.join(process.env.HOME!, ".cct", "llms.toml");
+adapters/pi/runtime/x.ts|const p = path.join(os.homedir(), ".code-copilot-team");
+scripts/x.py|REG = os.path.expanduser("~/.cct/routing.toml")
+scripts/cct|cat ~/.cct/providers.toml
+scripts/lib/cct_doctor.py|p = Path.home() / ".cct" / "secret"
+adapters/pi/bin/pi-code|STATE="$HOME/.cct/state"
+scripts/lib/cct-home.sh|cat "$HOME/.code-copilot-team/providers.toml"
+scripts/session_analytics/home.py|LEGACY = Path.home() / ".code-copilot-team"
+scripts/x.sh|cat ~/.cct/providers.toml   # read the profile
+scripts/x.py|open(Path.home() / ".cct" / "llms.toml")  # the catalog
+scripts/x.py|p = Path.home().joinpath(".cct", "providers.toml")
+scripts/x.py|p = Path(os.getenv("HOME")).joinpath(".cct")
+scripts/x.py|p = f"{Path.home()}/.cct/providers.toml"
+scripts/x.py|p = os.path.join(os.path.expanduser("~"), ".code-copilot-team", "pi")
+adapters/pi/runtime/x.ts|const p = `${os.homedir()}/.cct/llms.toml`;
+scripts/x.py|p = Path.home( ) / ".cct" / "providers.toml"
+benchmarks/presets/x.json|"registry": "~/.cct/other-routing.toml"
+.github/workflows/x.yml|run: cat ~/.cct/providers.toml
+shared/templates/x.toml|path = "${HOME}/.cct/providers.toml"
+PLANTED
+rc=0; home_flags_planted "${FIRST_LISTED%%	*}" "${FIRST_LISTED#*	}" "${FIRST_LISTED#*	}" || rc=1
+assert_ok "the home guard flags a second copy of a listed line in its listed file" "$rc"
+# Split constructions are flagged through the expression scan...
+rc=0; home_flags_planted scripts/x.py 'path = Path.home().joinpath(' '    ".cct", "providers.toml"' ')' || rc=1
+assert_ok "the home guard flags a Python home construction split across lines" "$rc"
+rc=0; home_flags_planted adapters/pi/runtime/x.ts 'const p = path.join(' '  os.homedir(),' '  ".cct",' '  "llms.toml",' ');' || rc=1
+assert_ok "the home guard flags a TypeScript home construction split across lines" "$rc"
+rc=0; home_flags_planted scripts/x.sh 'dest="${HOME}"\' '"/.cct/providers.toml"' || rc=1
+assert_ok "the home guard flags a shell home construction continued with a backslash" "$rc"
+rc=0; home_flags_planted .github/workflows/x.yml 'jobs:' '  x:' '    steps:' '      - run: |' '          cp profile.toml \' '            "$HOME"/\' '.cct/providers.toml' || rc=1
+assert_ok "the home guard flags a workflow home construction continued with a backslash" "$rc"
+# ...while the next independent statement after a home lookup is not part of it.
+for neg in py:'home = Path.home()|state = repo_root / ".cct" / "review"' ts:'const home = os.homedir();|const p = path.join(repoRoot, ".cct", "team.json");' sh:'log "$HOME"|STATE="$REPO/.cct/state.json"'; do
+  ext="${neg%%:*}"; body="${neg#*:}"
+  rc=0; home_flags_planted "scripts/neg.$ext" "${body%%|*}" "${body#*|}" && rc=1
+  assert_ok "the home guard does not flag a per-project .cct path in the statement after a home lookup ($ext)" "$rc"
+done
+# ...and does not flag look-alikes that are not a home: an identifier that
+# merely starts with HOME, a non-Path .home() method, a per-project .cct path.
+for lookalike in 'p="$HOMELESS/.cct/x"' 'p = account.home() + "/.cct"' 'p = os.path.join(repo_root, ".cct", "review")'; do
+  rc=0; home_flags_planted scripts/x.py "$lookalike" && rc=1
+  assert_ok "the home guard does not flag a look-alike: $lookalike" "$rc"
+done
+# The exactness check bites: a baseline entry with no occurrence is reported.
+rc=0; [[ -n "$(LC_ALL=C comm -13 <(home_occurrences <<<"$HOME_CANDIDATES") <(printf '%s\n' "$(home_baseline)" "scripts/x.sh	echo ~/.cct/removed" | LC_ALL=C sort))" ]] || rc=1
+assert_ok "the home guard reports a baseline entry that no longer occurs" "$rc"
+# ...while the resolver's constant (no home construction) and a comment are not candidates.
+PLANTED=$(printf '%s\n' 'scripts/lib/cct-home.sh:18:CCT_HOME_LEGACY_REL=".code-copilot-team"' 'scripts/setup.sh:3:# the legacy home is ~/.code-copilot-team' | home_occurrences)
+rc=0; [[ -z "$PLANTED" ]] || rc=1
+assert_ok "...while the resolver's name constant and a comment are not candidates" "$rc"
+
+# ══════════════════════════════════════════════════════════════
+# Simplest Complete Change (#389): the two collision rules ship
+# ══════════════════════════════════════════════════════════════
+# Text-presence checks (spec FR-008): they prove the rules ship, not that an
+# agent follows them. Each fails if its rule is removed from the source.
+
+echo ""
+echo "=== Simplest Complete Change (#389) ==="
+SCC_CONV="$SKILLS_DIR_PATH/copilot-conventions/SKILL.md"
+SCC_STD="$SKILLS_DIR_PATH/coding-standards/SKILL.md"
+# Collision 1, "tiny default vs configuration policy": configuration wins.
+rc=0; grep -q "A tiny in-code default is not the simpler choice when configuration policy applies" "$SCC_STD" || rc=1
+assert_ok "coding-standards keeps the precedence rule (tiny default vs configuration policy)" "$rc"
+# Collision 2, "small local fix misses another caller": completeness wins.
+rc=0; grep -q "A small local fix that misses another caller is incomplete, not simple" "$SCC_CONV" || rc=1
+assert_ok "copilot-conventions keeps the completeness rule (small local fix misses another caller)" "$rc"
+rc=0; grep -q "Only then, the simplest complete custom design" "$SCC_CONV" && ! grep -q "simplest complete custom design" "$SCC_STD" || rc=1
+assert_ok "the reuse ladder lives only in copilot-conventions (C-002)" "$rc"
+rc=0; grep -q "shared/skills/clarification-protocol/SKILL.md" "$SCC_CONV" || rc=1
+assert_ok "copilot-conventions points at the clarification protocol, tool-neutral (FR-003)" "$rc"
+rc=0; grep -q "retain selective, high-value decisions" "$SKILLS_DIR_PATH/memkernel-memory/SKILL.md" || rc=1
+assert_ok "memkernel-memory qualifies decision records as selective and high-value (FR-005)" "$rc"
+rc=0; grep -q "must also name the viable" "$SHARED_DIR/review/CODE_REVIEW.md" || rc=1
+assert_ok "CODE_REVIEW.md requires a named replacement for removal findings (FR-006)" "$rc"
+# The tracked Claude Code rule copies (~/.claude/rules links into them) must
+# stay the frontmatter-stripped skill bodies that setup.sh installs.
+for name in coding-standards copilot-conventions copyright-headers safety; do
+  rc=0
+  [[ "$(awk 'BEGIN{n=0} /^---$/{n++; if(n==2){found=1; next}} found{print}' "$SKILLS_DIR_PATH/$name/SKILL.md")" == "$(cat "$REPO_DIR/claude_code/.claude/rules/$name.md")" ]] || rc=1
+  assert_ok "claude_code/.claude/rules/$name.md matches its shared skill body" "$rc"
+done
 
 if [[ "$PASS" -ne "$TEST_SHARED_STRUCTURE_EXPECTED_PASS" ]]; then
   echo "  FAIL: assertion-count drift (expected $TEST_SHARED_STRUCTURE_EXPECTED_PASS, got $PASS)"

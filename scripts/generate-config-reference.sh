@@ -10,7 +10,7 @@
 #
 # Sources (only these):
 #   shared/schemas/automation.schema.json        per-feature auto-build config
-#   shared/schemas/providers.schema.json         ~/.code-copilot-team/providers.toml
+#   shared/schemas/providers.schema.json         ~/.cct/providers.toml
 #   scripts/session_analytics/config_data/defaults.json   analytics defaults
 #   scripts/session_analytics/config.py + constants.py    env var ↔ key pairs
 #

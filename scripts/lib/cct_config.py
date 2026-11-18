@@ -25,6 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import analytics_layers  # noqa: E402 — a sibling module, not a package
+import cct_home  # noqa: E402 — the CCT home (#411)
 
 LAYERS_DOC = "docs/configuration-reference.md"
 
@@ -52,7 +53,7 @@ def run(cmd: list[str], timeout: int = 120) -> tuple[int, str]:
 
 def cmd_validate(args: argparse.Namespace) -> int:
     repo = repo_dir()
-    profile = Path(os.environ.get("CCT_PROVIDER_PROFILE", Path.home() / ".code-copilot-team/providers.toml"))
+    profile = Path(os.environ.get("CCT_PROVIDER_PROFILE") or cct_home.cct_home_path("providers.toml"))
     checks: list[tuple[str, list[str], bool]] = [
         ("provider profile", ["bash", str(repo / "scripts/validate-providers-profile.sh"), str(profile)], True),
         ("feature catalog", ["bash", str(repo / "scripts/validate-features.sh")], False),
@@ -150,7 +151,7 @@ def schema_entries(repo: Path) -> dict[str, dict]:
                 "description": re.sub(r"\s+", " ", spec.get("description", "")).strip(),
                 "type": spec.get("type") or ("enum: " + " | ".join(map(str, spec["enum"])) if "enum" in spec else ""),
                 "owner": "provider" if external else "cct",
-                "source": "~/.code-copilot-team/providers.toml",
+                "source": "~/.cct/providers.toml",
                 "required": name in (provider.get("required") or []),
             }
 

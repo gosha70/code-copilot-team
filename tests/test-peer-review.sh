@@ -755,6 +755,10 @@ assert_contains "…and names it as the verdict parser" "$_out" "verdict parser"
 # the runner parses it exactly as it would a real reviewer's.
 mkdir -p "$INST/lib"
 cp "$SCRIPT_DIR/../scripts/lib/review-verdict.sh" "$INST/lib/review-verdict.sh"
+# WITH the parser but WITHOUT the home resolver (#411): refuses, names it.
+_out=$(bash "$INST/peer-review-runner.sh" "$INST/marker.json" 2>&1 || true)
+assert_contains "the runner without the home resolver refuses to run" "$_out" "cct-home.sh"
+cp "$SCRIPT_DIR/../scripts/lib/cct-home.sh" "$INST/lib/cct-home.sh"
 
 cat > "$INST/stub-review.sh" <<'STUB'
 #!/usr/bin/env bash

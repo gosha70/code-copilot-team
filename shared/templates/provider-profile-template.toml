@@ -1,4 +1,4 @@
-# Provider Profile — ~/.code-copilot-team/providers.toml
+# Provider Profile — ~/.cct/providers.toml
 #
 # Defines peer providers for cross-copilot review.
 # See provider-collaboration-protocol.md for the full protocol.

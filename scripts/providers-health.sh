@@ -7,7 +7,7 @@ set -euo pipefail
 # Reports a pass/fail table.
 #
 # Usage: providers-health.sh [--profile PATH] [--provider NAME [--subject NAME]]
-# Default profile: ~/.code-copilot-team/providers.toml
+# Default profile: ~/.cct/providers.toml (the CCT home, #411)
 #
 # --provider NAME: check only the named provider plus the subject's
 #   fallback_chain entries (targeted preflight for the auto-build driver);
@@ -16,7 +16,10 @@ set -euo pipefail
 
 # ── Parse arguments ───────────────────────────────────────────
 
-PROFILE="$HOME/.code-copilot-team/providers.toml"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/cct-home.sh
+source "$SCRIPT_DIR/lib/cct-home.sh"   # the CCT home (#411)
+PROFILE="$(cct_home_path providers.toml)"
 TARGET_PROVIDER=""
 SUBJECT="claude"
 
@@ -36,7 +39,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         -h|--help)
             echo "Usage: providers-health.sh [--profile PATH] [--provider NAME [--subject NAME]]"
-            echo "Default profile: ~/.code-copilot-team/providers.toml"
+            echo "Default profile: ~/.cct/providers.toml"
             exit 0
             ;;
         *)

@@ -24,6 +24,22 @@ from session_analytics.tests.support import CLAUDE_CODE_ROOT, RegistryResetTestC
 
 _REPO = Path(__file__).resolve().parents[3]
 _HOOK = _REPO / "adapters" / "claude-code" / ".claude" / "hooks" / "harness-stamp.sh"
+
+# These tests pin the DEFAULT ledger location under a temp HOME
+# (~/.cct/harness-stamps.jsonl). CCT_HOME is the one override (#411) and
+# would move it, so an inherited value (a CI step, a developer's shell) is
+# removed for the module and put back afterwards.
+_SAVED_CCT_HOME: str | None = None
+
+
+def setUpModule() -> None:
+    global _SAVED_CCT_HOME
+    _SAVED_CCT_HOME = os.environ.pop("CCT_HOME", None)
+
+
+def tearDownModule() -> None:
+    if _SAVED_CCT_HOME is not None:
+        os.environ["CCT_HOME"] = _SAVED_CCT_HOME
 _SETTINGS = _REPO / "adapters" / "claude-code" / ".claude" / "settings.json"
 _PLUGIN_HOOKS = _REPO / "adapters" / "claude-code" / "plugin" / "hooks" / "hooks.json"
 _GENERATE = _REPO / "scripts" / "generate.sh"
@@ -436,6 +452,7 @@ class TestLedgerPathEndToEnd(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.home, True)
         self.addCleanup(shutil.rmtree, self.work, True)
         self.addCleanup(shutil.rmtree, Path(tempfile.gettempdir()) / self.tag, True)
+        self.addCleanup(shutil.rmtree, Path("/tmp") / self.tag, True)
 
     def _forms(self) -> list[str]:
         base = Path(tempfile.gettempdir()).as_posix() + "/" + self.tag

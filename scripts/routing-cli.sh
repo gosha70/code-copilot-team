@@ -27,9 +27,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/routing-config.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/supervisor-defaults.sh"
+# shellcheck source=lib/cct-home.sh
+source "$SCRIPT_DIR/lib/cct-home.sh"   # the CCT home (#411)
 
-REGISTRY="${CCT_ROUTING_REGISTRY:-$HOME/.code-copilot-team/routing.toml}"
-STATE="${CCT_ROUTING_STATE:-$HOME/.code-copilot-team/routing-state.json}"
+REGISTRY="${CCT_ROUTING_REGISTRY:-$(cct_home_path routing.toml)}"
+STATE="${CCT_ROUTING_STATE:-$(cct_home_path routing-state.json)}"
 SPECS_DIR="${CCT_SPECS_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)/specs}"
 CONFIG=""
 TICK_DUE=0
@@ -65,7 +67,7 @@ usage: cct routing <command> [options]
   explain --route-class <class>         pure config-resolution dry run
           [--role <role>] [--config automation.json]
 
-options: --registry <path> (default ~/.code-copilot-team/routing.toml)
+options: --registry <path> (default ~/.cct/routing.toml)
          --ledger-root <path> (wake/failback ledger root; when omitted,
                               discover this repository's git worktrees)
 EOF

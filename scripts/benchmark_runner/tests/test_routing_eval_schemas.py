@@ -302,10 +302,36 @@ class TestCompareConfigRejection(unittest.TestCase):
         home = resolve_registry_path("~/.code-copilot-team/routing.toml", None)
         self.assertTrue(home.is_absolute())
         self.assertNotIn("~", str(home))
+        other = resolve_registry_path("~/elsewhere/reg.toml", None)
+        self.assertEqual(other, P("~/elsewhere/reg.toml").expanduser().resolve())
         rel = resolve_registry_path("reg.toml", P("/base/dir"))
         self.assertEqual(rel, P("/base/dir/reg.toml"))
         with self.assertRaisesRegex(ScenarioConfigError, "no source directory"):
             resolve_registry_path("reg.toml", None)
+
+    def test_a_cct_home_registry_follows_the_home_resolver(self) -> None:
+        # The shipped preset names ~/.cct/routing.toml; that must mean the
+        # operator's CCT home: CCT_HOME wins, the legacy fallback applies (#411).
+        import os
+        import tempfile
+        from unittest import mock
+        from pathlib import Path as P
+        from benchmark_runner.routing_eval.scenario_config import resolve_registry_path
+
+        tmp = P(tempfile.mkdtemp(prefix="cct-home-reg-")).resolve()
+        self.addCleanup(lambda: __import__("shutil").rmtree(tmp, True))
+        with mock.patch.dict(os.environ, {"HOME": str(tmp), "CCT_HOME": str(tmp / "srv")}):
+            for written in ("~/.cct/routing.toml", "~/.code-copilot-team/routing.toml"):
+                self.assertEqual(resolve_registry_path(written, None), tmp / "srv" / "routing.toml")
+        env = {k: v for k, v in os.environ.items() if k != "CCT_HOME"}
+        env["HOME"] = str(tmp)
+        with mock.patch.dict(os.environ, env, clear=True):
+            (tmp / ".code-copilot-team").mkdir()
+            (tmp / ".code-copilot-team" / "routing.toml").write_text("")
+            self.assertEqual(resolve_registry_path("~/.cct/routing.toml", None), tmp / ".code-copilot-team" / "routing.toml")
+            (tmp / ".cct").mkdir()
+            (tmp / ".cct" / "routing.toml").write_text("")
+            self.assertEqual(resolve_registry_path("~/.cct/routing.toml", None), tmp / ".cct" / "routing.toml")
 
     def test_events_on_delegated_tasks_are_refused(self) -> None:
         # Provider events are the Tier-1 seam's vocabulary; scheduling

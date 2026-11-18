@@ -135,9 +135,14 @@ jobs:
         # ingests the fixture as `metadata-only`, and the archive stores
         # under the STRICTER of config and ingest-recorded mode (FR-4
         # floor) — leaving text with no searchable words in it.
+        # CCT_HOME (#411) only for this step, which writes the analytics
+        # user config there and reads it back through the resolver; set
+        # here, not job-wide, so the unit suite keeps its default home.
+        env:
+          CCT_HOME: ${{ runner.temp }}/cct-home
         run: |
-          mkdir -p ~/.cct
-          cat > ~/.cct/session-analytics.json <<'JSON'
+          mkdir -p "$CCT_HOME"
+          cat > "$CCT_HOME/session-analytics.json" <<'JSON'
           {
             "projects": {
               "demo-project": { "trace_archive": true }
@@ -228,12 +233,17 @@ jobs:
           assert cur.fetchone() == (0,), "index text survived a purge"
           print("OK purge reaches the index")
           PY
-          rm -f ~/.cct/session-analytics.json search.json
+          rm -f "$CCT_HOME/session-analytics.json" search.json
 
       - name: "Per-project redaction override survives PostgreSQL (E8, #84)"
+        # CCT_HOME (#411) only for this step, which writes the analytics
+        # user config there and reads it back through the resolver; set
+        # here, not job-wide, so the unit suite keeps its default home.
+        env:
+          CCT_HOME: ${{ runner.temp }}/cct-home
         run: |
-          mkdir -p ~/.cct
-          cat > ~/.cct/session-analytics.json <<'JSON'
+          mkdir -p "$CCT_HOME"
+          cat > "$CCT_HOME/session-analytics.json" <<'JSON'
           {
             "projects": {
               "demo-project": { "redaction_mode": "metadata-only" }
@@ -256,7 +266,7 @@ jobs:
           assert rows == [("metadata-only",)], rows  # per-project override, not the global 'code' default
           print("OK per-project override under Postgres:", rows)
           PY
-          rm -f ~/.cct/session-analytics.json
+          rm -f "$CCT_HOME/session-analytics.json"
 
       - name: Build + assert the Kùzu graph
         run: |

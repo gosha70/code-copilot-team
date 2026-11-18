@@ -16,6 +16,7 @@ from typing import Any, Optional
 
 from .. import archive as arch
 from .. import constants as C
+from .. import home as _home
 from .. import feedback as fb
 from .. import identity as IDENT
 from ..config import load_config
@@ -961,7 +962,7 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             # Places a store is actually likely to be, so the common case
             # is one click rather than a walk from /.
             "shortcuts": [
-                p for p in (str(_P.home()), str(_P.home() / ".cct"))
+                p for p in (str(_P.home()), str(_home.cct_home()), str(_home.legacy_home()))
                 if _P(p).is_dir()
             ],
         }
