@@ -23,6 +23,13 @@ from typing import Any, Mapping, Optional
 from . import constants as C
 from .home import cct_home_path
 
+# Raised for invalid configuration: a bad value in the environment, a malformed
+# .env, a defaults file that cannot be parsed. It subclasses ValueError so existing
+# callers keep working, and it is specific so main() can turn it into a usage error
+# without swallowing a ValueError from a handler bug.
+class ConfigError(ValueError):
+    """Invalid configuration: the user must fix a value, not a bug report."""
+
 # Env vars / .env keys (presence-checked, never logged for secrets).
 # The database key is CCT_SA_DB. It was CCT_SA_DSN until 2026-09 ("what
 # does DSN stand for?" — the owner's first-contact finding); the old name
@@ -96,7 +103,7 @@ def shared_ledger_path(value: str, *, windows: bool) -> str:
     if absolute:
         return value
     example = "C:/Users/you/.cct/harness-stamps.jsonl" if windows else "/home/you/.cct/harness-stamps.jsonl"
-    raise ValueError(
+    raise ConfigError(
         f"{ENV_HARNESS_STAMPS}={value!r} would send the hook and Session Analytics "
         f"to different files. Set it to an absolute path such as {example}; "
         "a ~, a relative path, or on Windows a path without a drive "
@@ -110,11 +117,24 @@ def _coerce_like(template: Any, raw: str) -> Any:
     override raises rather than silently changing type."""
     if isinstance(template, bool):
         return raw.lower() in ("1", "true", "yes")
-    if isinstance(template, int) and not isinstance(template, bool):
-        return int(raw)
-    if isinstance(template, float):
-        return float(raw)
+    try:
+        if isinstance(template, int):
+            return int(raw)
+        if isinstance(template, float):
+            return float(raw)
+    except ValueError:
+        kind = "an integer" if isinstance(template, int) else "a number"
+        raise ConfigError(f"expected {kind}, got {raw!r}") from None
     return raw
+
+
+def _int_setting(name: str, raw: Any) -> int:
+    """An integer setting from env or config; a value that is not one is the
+    user's configuration error (#450), named, not a ValueError traceback."""
+    try:
+        return int(str(raw))
+    except (TypeError, ValueError):
+        raise ConfigError(f"{name} must be an integer, got {raw!r}") from None
 
 
 # Keys the Studio config page exposes (order = display order). Secret-bearing
@@ -206,20 +226,20 @@ def _sim_threshold(value: Any) -> float:
     """similarity.threshold: a finite number in [-1.0, 1.0] — the
     range cosine can produce. Booleans and non-finite values refuse."""
     if isinstance(value, bool):
-        raise ValueError(
+        raise ConfigError(
             f"similarity.threshold must be a number, got boolean {value!r}")
     try:
         f = float(value)
     except (TypeError, ValueError):
-        raise ValueError(
+        raise ConfigError(
             f"similarity.threshold {value!r} is not a number") from None
     import math as _math
     if not _math.isfinite(f):
-        raise ValueError(
+        raise ConfigError(
             f"similarity.threshold {value!r} is not finite — NaN/inf "
             f"would silently empty or saturate every neighbor set")
     if not (-1.0 <= f <= 1.0):
-        raise ValueError(
+        raise ConfigError(
             f"similarity.threshold {f} is outside [-1.0, 1.0], the "
             f"range cosine similarity can produce")
     return f
@@ -230,7 +250,7 @@ def _sim_top_k(value: Any) -> int:
     values, and non-positive values refuse — int() would silently
     turn True into 1 and 1.9 into 1."""
     if isinstance(value, bool):
-        raise ValueError(
+        raise ConfigError(
             f"similarity.top_k must be an integer, got boolean {value!r}")
     if isinstance(value, int):
         k = value
@@ -238,16 +258,16 @@ def _sim_top_k(value: Any) -> int:
         try:
             k = int(value, 10)
         except ValueError:
-            raise ValueError(
+            raise ConfigError(
                 f"similarity.top_k {value!r} is not an integer") from None
     elif isinstance(value, float):
-        raise ValueError(
+        raise ConfigError(
             f"similarity.top_k {value!r} has a fractional type — an "
             f"integer count is required, not truncated")
     else:
-        raise ValueError(f"similarity.top_k {value!r} is not an integer")
+        raise ConfigError(f"similarity.top_k {value!r} is not an integer")
     if k <= 0:
-        raise ValueError(f"similarity.top_k must be positive, got {k}")
+        raise ConfigError(f"similarity.top_k must be positive, got {k}")
     return k
 
 
@@ -501,7 +521,7 @@ def is_initialized() -> bool:
 def _load_json_text(text: str) -> dict[str, Any]:
     data = json.loads(text) if text.strip() else {}
     if not isinstance(data, dict):
-        raise ValueError("config root must be a mapping")
+        raise ConfigError("config root must be a mapping")
     return data
 
 
@@ -544,17 +564,17 @@ def _load_pricing(data: Mapping[str, Any]) -> PricingConfig:
     currencies: set[str] = set()
     for model_id, entry in raw_models.items():
         if not isinstance(entry, Mapping):
-            raise ValueError(f"pricing.models[{model_id!r}] must be a mapping of rates")
+            raise ConfigError(f"pricing.models[{model_id!r}] must be a mapping of rates")
         currency = str(entry.get(C.CFG_PRICE_CURRENCY) or "")
         if not currency:
-            raise ValueError(f"pricing.models[{model_id!r}] is missing 'currency'")
+            raise ConfigError(f"pricing.models[{model_id!r}] is missing 'currency'")
         currencies.add(currency)
         # effective_date is the price version stamped into
         # copilot_turn.cost_price_version; a blank version would break the
         # audit/reproducibility guarantee (FR-1/FR-3), so require it.
         effective_date = str(entry.get(C.CFG_PRICE_EFFECTIVE_DATE) or "")
         if not effective_date:
-            raise ValueError(f"pricing.models[{model_id!r}] is missing 'effective_date'")
+            raise ConfigError(f"pricing.models[{model_id!r}] is missing 'effective_date'")
 
         # Rate values must be present + numeric + non-negative. A missing or
         # misspelled rate key must NOT silently become 0 (that would price
@@ -562,18 +582,18 @@ def _load_pricing(data: Mapping[str, Any]) -> PricingConfig:
         # 0.0 is allowed, an absent key is not.
         def _rate(field_key: str) -> float:
             if field_key not in entry:
-                raise ValueError(
+                raise ConfigError(
                     f"pricing.models[{model_id!r}] is missing rate {field_key!r}"
                 )
             try:
                 val = float(entry[field_key])
             except (TypeError, ValueError):
-                raise ValueError(
+                raise ConfigError(
                     f"pricing.models[{model_id!r}] rate {field_key!r} is not a "
                     f"number: {entry[field_key]!r}"
                 )
             if val < 0:
-                raise ValueError(
+                raise ConfigError(
                     f"pricing.models[{model_id!r}] rate {field_key!r} is negative"
                 )
             return val
@@ -588,7 +608,7 @@ def _load_pricing(data: Mapping[str, Any]) -> PricingConfig:
         )
 
     if len(currencies) > 1:
-        raise ValueError(
+        raise ConfigError(
             f"pricing table mixes currencies {sorted(currencies)!r} without "
             "normalization; a price table must use a single currency"
         )
@@ -608,18 +628,18 @@ def _load_projects(
     if isinstance(pdata, Mapping):
         for key, entry in pdata.items():
             if not isinstance(entry, Mapping):
-                raise ValueError(f"projects[{key!r}] must be a mapping")
+                raise ConfigError(f"projects[{key!r}] must be a mapping")
 
             mode = entry.get(C.CFG_REDACTION)
             if mode is not None and mode not in C.REDACTION_MODES:
-                raise ValueError(
+                raise ConfigError(
                     f"projects[{key!r}]: invalid redaction mode {mode!r}; "
                     f"expected one of {C.REDACTION_MODES}"
                 )
 
             ingest_val = entry.get(C.CFG_PROJECT_INGEST, C.INGEST_ON)
             if ingest_val not in C.INGEST_MODES:
-                raise ValueError(
+                raise ConfigError(
                     f"projects[{key!r}]: invalid ingest mode {ingest_val!r}; "
                     f"expected one of {C.INGEST_MODES}"
                 )
@@ -629,7 +649,7 @@ def _load_projects(
             # surface; reject them loudly instead).
             trace_archive = entry.get(C.CFG_PROJECT_TRACE_ARCHIVE, False)
             if not isinstance(trace_archive, bool):
-                raise ValueError(
+                raise ConfigError(
                     f"projects[{key!r}]: {C.CFG_PROJECT_TRACE_ARCHIVE} must be "
                     f"a boolean, got {trace_archive!r}"
                 )
@@ -643,13 +663,13 @@ def _load_projects(
     if isinstance(idata, list):
         for entry in idata:
             if not isinstance(entry, Mapping):
-                raise ValueError("project_ids[] entries must be mappings")
+                raise ConfigError("project_ids[] entries must be mappings")
             match = entry.get(C.CFG_PROJECT_ID_MATCH)
             pid = entry.get(C.CFG_PROJECT_ID_ID)
             if not isinstance(match, str) or not match:
-                raise ValueError("project_ids[] entry is missing non-empty 'match'")
+                raise ConfigError("project_ids[] entry is missing non-empty 'match'")
             if not isinstance(pid, str) or not pid:
-                raise ValueError("project_ids[] entry is missing non-empty 'id'")
+                raise ConfigError("project_ids[] entry is missing non-empty 'id'")
             rules.append(ProjectIdRule(match=match, id=pid))
 
     return projects, tuple(rules)
@@ -663,7 +683,7 @@ def _developer_id_cfg(data: Mapping[str, Any]) -> Optional[str]:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise ValueError(
+        raise ConfigError(
             f"config '{C.CFG_DEVELOPER_ID}' must be a string, got {type(value).__name__}"
         )
     return value
@@ -681,10 +701,10 @@ def _load_auto_build(data: Mapping[str, Any], env) -> AutoBuildConfig:
     try:
         window = int(str(raw_window))
     except (TypeError, ValueError):
-        raise ValueError(
+        raise ConfigError(
             f"{C.CFG_AUTO_BUILD}.{C.CFG_AUTO_BUILD_ACTIVE_WINDOW} must be an integer, got {raw_window!r}") from None
     if window <= 0:
-        raise ValueError(f"{C.CFG_AUTO_BUILD}.{C.CFG_AUTO_BUILD_ACTIVE_WINDOW} must be positive, got {window}")
+        raise ConfigError(f"{C.CFG_AUTO_BUILD}.{C.CFG_AUTO_BUILD_ACTIVE_WINDOW} must be positive, got {window}")
     return AutoBuildConfig(ledger_root=root, active_window_seconds=window)
 
 
@@ -698,9 +718,9 @@ def _load_team(data: Mapping[str, Any], env) -> TeamConfig:
         try:
             value = int(str(raw))
         except (TypeError, ValueError):
-            raise ValueError(f"{C.CFG_TEAM}.{name} must be an integer, got {raw!r}") from None
+            raise ConfigError(f"{C.CFG_TEAM}.{name} must be an integer, got {raw!r}") from None
         if value <= 0:
-            raise ValueError(f"{C.CFG_TEAM}.{name} must be positive, got {value}")
+            raise ConfigError(f"{C.CFG_TEAM}.{name} must be positive, got {value}")
         return value
 
     def budget(name: str, env_key: str) -> Optional[float]:
@@ -712,9 +732,9 @@ def _load_team(data: Mapping[str, Any], env) -> TeamConfig:
         try:
             value = float(str(raw))
         except ValueError:
-            raise ValueError(f"{C.CFG_TEAM}.{C.CFG_TEAM_BUDGETS}.{name} must be a number of USD, got {raw!r}") from None
+            raise ConfigError(f"{C.CFG_TEAM}.{C.CFG_TEAM_BUDGETS}.{name} must be a number of USD, got {raw!r}") from None
         if value != value or value < 0:  # nan or negative
-            raise ValueError(f"{C.CFG_TEAM}.{C.CFG_TEAM_BUDGETS}.{name} must be a non-negative number, got {raw!r}")
+            raise ConfigError(f"{C.CFG_TEAM}.{C.CFG_TEAM_BUDGETS}.{name} must be a non-negative number, got {raw!r}")
         return value
 
     def runaway(name: str, env_key: str, kind):
@@ -724,9 +744,9 @@ def _load_team(data: Mapping[str, Any], env) -> TeamConfig:
         try:
             value = kind(str(raw))
         except (TypeError, ValueError):
-            raise ValueError(f"{C.CFG_TEAM}.{C.CFG_TEAM_RUNAWAY}.{name} must be a number, got {raw!r}") from None
+            raise ConfigError(f"{C.CFG_TEAM}.{C.CFG_TEAM_RUNAWAY}.{name} must be a number, got {raw!r}") from None
         if value != value or value <= 0:
-            raise ValueError(f"{C.CFG_TEAM}.{C.CFG_TEAM_RUNAWAY}.{name} must be positive, got {raw!r}")
+            raise ConfigError(f"{C.CFG_TEAM}.{C.CFG_TEAM_RUNAWAY}.{name} must be positive, got {raw!r}")
         return value
 
     def aliases() -> Mapping[str, str]:
@@ -741,13 +761,13 @@ def _load_team(data: Mapping[str, Any], env) -> TeamConfig:
             if block_value is None:
                 return {}
             if not isinstance(block_value, Mapping):
-                raise ValueError(
+                raise ConfigError(
                     f"{where} must be a mapping of developer id to display "
                     f"name, got {block_value!r}")
             out: dict[str, str] = {}
             for dev, name in block_value.items():
                 if not isinstance(dev, str) or not dev.strip() or not isinstance(name, str) or not name.strip():
-                    raise ValueError(
+                    raise ConfigError(
                         f"{where}: {dev!r}: {name!r} is not a developer id "
                         f"mapped to a non-empty display name")
                 out[dev.strip()] = name.strip()
@@ -758,7 +778,7 @@ def _load_team(data: Mapping[str, Any], env) -> TeamConfig:
             dev, sep, name = entry.partition("=")
             dev, name = dev.strip(), name.strip()
             if not sep or not dev or not name:
-                raise ValueError(
+                raise ConfigError(
                     f"{where}: {entry!r} is not 'id=Name' — {ENV_TEAM_ALIASES} "
                     f"is a comma-separated list of id=Name entries")
             out[dev] = name
@@ -766,7 +786,7 @@ def _load_team(data: Mapping[str, Any], env) -> TeamConfig:
 
     share = runaway(C.CFG_RUNAWAY_MAX_ERROR_SHARE, ENV_RUNAWAY_MAX_ERROR_SHARE, float)
     if share > 1:
-        raise ValueError(f"{C.CFG_TEAM}.{C.CFG_TEAM_RUNAWAY}.{C.CFG_RUNAWAY_MAX_ERROR_SHARE} is a share (0–1), got {share}")
+        raise ConfigError(f"{C.CFG_TEAM}.{C.CFG_TEAM_RUNAWAY}.{C.CFG_RUNAWAY_MAX_ERROR_SHARE} is a share (0–1), got {share}")
     return TeamConfig(
         active_window_seconds=positive_int(
             C.CFG_TEAM_ACTIVE_WINDOW, env(ENV_TEAM_ACTIVE_WINDOW) or block.get(C.CFG_TEAM_ACTIVE_WINDOW)),
@@ -793,17 +813,17 @@ def _load_idle_cutoff(data: Mapping[str, Any], env) -> int:
     block = data.get(C.CFG_SESSIONS)
     name = f"{C.CFG_SESSIONS}.{C.CFG_SESSIONS_IDLE_CUTOFF}"
     if not isinstance(block, Mapping) or C.CFG_SESSIONS_IDLE_CUTOFF not in block:
-        raise ValueError(
+        raise ConfigError(
             f"config has no '{name}'; defaults.json is the single source of the active-time cutoff")
     raw = env(ENV_IDLE_CUTOFF) or block.get(C.CFG_SESSIONS_IDLE_CUTOFF)
     if isinstance(raw, bool):
-        raise ValueError(f"{name} must be an integer, got boolean {raw!r}")
+        raise ConfigError(f"{name} must be an integer, got boolean {raw!r}")
     try:
         seconds = int(str(raw))
     except (TypeError, ValueError):
-        raise ValueError(f"{name} must be an integer, got {raw!r}") from None
+        raise ConfigError(f"{name} must be an integer, got {raw!r}") from None
     if seconds <= 0:
-        raise ValueError(f"{name} must be positive, got {seconds}")
+        raise ConfigError(f"{name} must be positive, got {seconds}")
     return seconds
 
 
@@ -814,7 +834,7 @@ def _load_noise(data: Mapping[str, Any], env) -> NoiseConfig:
     block = data.get(C.CFG_SESSIONS)
     ndata = block.get(C.CFG_SESSIONS_NOISE) if isinstance(block, Mapping) else None
     if not isinstance(ndata, Mapping):
-        raise ValueError(
+        raise ConfigError(
             "config has no 'sessions.noise' block — defaults.json is the "
             "single source of noise defaults"
         )
@@ -823,19 +843,19 @@ def _load_noise(data: Mapping[str, Any], env) -> NoiseConfig:
         if k not in ndata
     ]
     if missing:
-        raise ValueError(f"sessions.noise config is missing {', '.join(missing)}")
+        raise ConfigError(f"sessions.noise config is missing {', '.join(missing)}")
 
     def _count(key: str, env_key: str) -> int:
         raw = env(env_key)
         value = raw if raw is not None else ndata[key]
         if isinstance(value, bool):
-            raise ValueError(f"sessions.noise.{key} must be an integer, got boolean {value!r}")
+            raise ConfigError(f"sessions.noise.{key} must be an integer, got boolean {value!r}")
         try:
             n = int(value)
         except (TypeError, ValueError):
-            raise ValueError(f"sessions.noise.{key} {value!r} is not an integer") from None
+            raise ConfigError(f"sessions.noise.{key} {value!r} is not an integer") from None
         if n < 0:
-            raise ValueError(f"sessions.noise.{key} must be >= 0, got {n}")
+            raise ConfigError(f"sessions.noise.{key} must be >= 0, got {n}")
         return n
 
     raw_patterns = env(ENV_NOISE_PATH_PATTERNS)
@@ -844,7 +864,7 @@ def _load_noise(data: Mapping[str, Any], env) -> NoiseConfig:
     else:
         patterns = ndata[C.CFG_NOISE_PATH_PATTERNS]
     if not isinstance(patterns, (list, tuple)) or not all(isinstance(p, str) for p in patterns):
-        raise ValueError("sessions.noise.path_patterns must be a list of strings")
+        raise ConfigError("sessions.noise.path_patterns must be a list of strings")
     return NoiseConfig(
         min_turns=_count(C.CFG_NOISE_MIN_TURNS, ENV_NOISE_MIN_TURNS),
         min_duration_seconds=_count(C.CFG_NOISE_MIN_DURATION, ENV_NOISE_MIN_DURATION),
@@ -863,7 +883,13 @@ def load_config(
     data = _read_defaults()
     user_config = _user_config_path()
     if user_config.is_file():
-        data = _deep_merge(data, _load_json_text(user_config.read_text(encoding="utf-8")))
+        try:
+            user_data = _load_json_text(user_config.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ConfigError(
+                f"{user_config}: not valid JSON (line {exc.lineno}, column {exc.colno}): {exc.msg}"
+            ) from None
+        data = _deep_merge(data, user_data)
     if extra_overrides:
         data = _deep_merge(data, extra_overrides)
 
@@ -907,7 +933,7 @@ def load_config(
             try:
                 calibration[key] = _coerce_like(calibration[key], ov)
             except ValueError:
-                raise ValueError(
+                raise ConfigError(
                     f"{ENV_CALIBRATION_PREFIX}{key.upper()}={ov!r} cannot "
                     f"be coerced to the type of the configured "
                     f"'{key}' value — refusing a silently mistyped "
@@ -944,7 +970,7 @@ def load_config(
         redaction_mode or env(ENV_REDACTION) or data.get(C.CFG_REDACTION) or C.REDACT_CODE
     )
     if resolved_redaction not in C.REDACTION_MODES:
-        raise ValueError(
+        raise ConfigError(
             f"invalid redaction mode {resolved_redaction!r}; expected one of {C.REDACTION_MODES}"
         )
 
@@ -971,7 +997,7 @@ def load_config(
         override=override,
         by_copilot=by_copilot,
         default=default_spec,
-        workers=int(env(ENV_JUDGE_WORKERS) or jdata.get(C.CFG_JUDGE_WORKERS) or 2),
+        workers=_int_setting(ENV_JUDGE_WORKERS, env(ENV_JUDGE_WORKERS) or jdata.get(C.CFG_JUDGE_WORKERS) or 2),
         ollama_url=str(env(ENV_OLLAMA_URL) or jdata.get(C.CFG_OLLAMA_URL) or "http://localhost:11434"),
         base_url=str(env(ENV_JUDGE_BASE_URL) or jdata.get(C.CFG_JUDGE_BASE_URL) or ""),
         api_key=str(env(ENV_JUDGE_API_KEY) or ""),
@@ -995,7 +1021,7 @@ def load_config(
     # Ollama is the operating assumption.
     edata = data.get(C.CFG_EMBEDDING)
     if not isinstance(edata, Mapping):
-        raise ValueError(
+        raise ConfigError(
             "config has no 'embedding' block — defaults.json is the single "
             "source of embedding defaults, and the loader refuses to "
             "reconstruct them in code"
@@ -1006,7 +1032,7 @@ def load_config(
     )
     _embed_missing = [k for k in _embed_required if k not in edata]
     if _embed_missing:
-        raise ValueError(
+        raise ConfigError(
             f"embedding config is missing {', '.join(_embed_missing)} — "
             f"defaults.json is the single source of embedding defaults"
         )
@@ -1025,8 +1051,8 @@ def load_config(
         backend=str(_embed_value(C.CFG_EMBEDDING_BACKEND, ENV_EMBED_BACKEND)),
         model=str(_embed_value(C.CFG_EMBEDDING_MODEL, ENV_EMBED_MODEL)),
         ollama_url=str(_embed_value(C.CFG_OLLAMA_URL, ENV_OLLAMA_URL)),
-        input_cap_chars=int(_embed_value(C.CFG_EMBEDDING_INPUT_CAP, ENV_EMBED_INPUT_CAP)),
-        workers=int(_embed_value(C.CFG_EMBEDDING_WORKERS, ENV_EMBED_WORKERS)),
+        input_cap_chars=_int_setting(ENV_EMBED_INPUT_CAP, _embed_value(C.CFG_EMBEDDING_INPUT_CAP, ENV_EMBED_INPUT_CAP)),
+        workers=_int_setting(ENV_EMBED_WORKERS, _embed_value(C.CFG_EMBEDDING_WORKERS, ENV_EMBED_WORKERS)),
     )
 
     # similarity (#287): the same discipline as embedding — the data
@@ -1034,7 +1060,7 @@ def load_config(
     # CLI (the similarity block of extra_overrides) is highest.
     sdata = data.get(C.CFG_SIMILARITY)
     if not isinstance(sdata, Mapping):
-        raise ValueError(
+        raise ConfigError(
             "config has no 'similarity' block — defaults.json is the "
             "single source of similarity defaults, and the loader refuses "
             "to reconstruct them in code"
@@ -1042,7 +1068,7 @@ def load_config(
     _sim_required = (C.CFG_SIMILARITY_THRESHOLD, C.CFG_SIMILARITY_TOP_K)
     _sim_missing = [k for k in _sim_required if k not in sdata]
     if _sim_missing:
-        raise ValueError(
+        raise ConfigError(
             f"similarity config is missing {', '.join(_sim_missing)} — "
             f"defaults.json is the single source of similarity defaults"
         )

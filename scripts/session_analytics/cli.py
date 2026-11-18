@@ -17,7 +17,7 @@ from typing import Sequence
 
 from . import constants as C
 from . import identity as IDENT
-from .config import AnalyticsConfig, load_config
+from .config import AnalyticsConfig, ConfigError, load_config
 from .registry import UnknownAdapterError, list_adapter_ids
 from .relational.db import SchemaMismatch
 
@@ -1635,6 +1635,9 @@ def main(argv: Sequence[str]) -> int:
     # command; every handler's own catch-all lets it through.
     try:
         return handler(args)
+    except ConfigError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return C.EXIT_USAGE
     except SchemaMismatch as exc:
         print(f"error: {exc}", file=sys.stderr)
         return C.EXIT_RUNTIME
