@@ -46,7 +46,8 @@ state. Projects created before #460 keep `.code-copilot-team/config.toml`,
 fallback lasts (through the minor release after the one that ships #460; the
 CHANGELOG names it), the new file wins when both exist, and `pi-code doctor`
 names any legacy file. `pi-code migrate [dir] [--dry-run]` moves them; it never
-overwrites, makes no git change, and refuses (exit 1) when an ignore rule
+overwrites, makes sure `.cct.local.toml` is ignored when it moves one, makes no
+git change, and refuses (exit 1) when an ignore rule
 would hide `.cct.toml` or `.cct-init.json`. Commit the renamed files afterwards.
 
 Env (`CCT_*`) and CLI flags override files; a `session` layer is the most local.

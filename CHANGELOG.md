@@ -19,8 +19,9 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   `.cct/` stays untracked runtime state. `pi-code init` writes the new
   files and makes sure `.cct/` and `.cct.local.toml` are ignored, deciding
   with `git check-ignore`. `pi-code migrate [dir] [--dry-run]` is the only
-  mover: it never overwrites, makes no git change, and refuses (exit 1)
-  when an ignore rule would hide `.cct.toml` or `.cct-init.json`.
+  mover: it never overwrites, makes sure `.cct.local.toml` is ignored
+  when it moves one, makes no git change, and refuses (exit 1) when an
+  ignore rule would hide `.cct.toml` or `.cct-init.json`.
   `pi-code doctor` names legacy files and ignore problems. The legacy
   files are still read while the fallback lasts: **if this ships in 2.1.0,
   2.2 removes the fallback**, together with the user-home one; if it ships

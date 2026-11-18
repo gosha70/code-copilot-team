@@ -679,10 +679,18 @@ assert "...keeping the config's bytes" "grep -q 'timeout_sec = 200' '$LEG/.cct.t
 assert "...rewriting the manifest's config entry" \
   "grep -q '\"path\": \".cct.toml\"' '$LEG/.cct-init.json' && ! grep -q 'code-copilot-team' '$LEG/.cct-init.json'"
 assert "...and removing the emptied legacy directory" "[[ ! -e '$LEG/.code-copilot-team' ]]"
+assert "...and making sure git ignores the moved .cct.local.toml" "git -C '$LEG' check-ignore -q .cct.local.toml"
+assert "...reporting the ignore line it added" "echo \"\$MIG\" | grep -q 'added .cct.local.toml to'"
 assert "migrate output is safe to paste back into a shell" \
   "! printf '%s\n%s\n' \"\$DRY\" \"\$MIG\" | grep -qE '[<>|;&\$\`]'"
 RC=0; OUT=$(PATH="$BASE_PATH" "$LAUNCHER" migrate "$LEG" 2>&1) || RC=$?
 assert "a second migrate has nothing to do" "[[ '$RC' == '0' ]] && echo \"\$OUT\" | grep -q 'nothing to migrate'"
+
+KEEP="$TMP/proj-keep"; mkdir -p "$KEEP/.code-copilot-team"
+printf 'a = 1\n' > "$KEEP/.code-copilot-team/config.toml"; printf 'notes\n' > "$KEEP/.code-copilot-team/NOTES.md"
+OUT=$(PATH="$BASE_PATH" "$LAUNCHER" migrate "$KEEP" 2>&1 || true)
+assert "migrate keeps a legacy directory that still holds other files, and says so" \
+  "[[ -f '$KEEP/.code-copilot-team/NOTES.md' && -f '$KEEP/.cct.toml' ]] && echo \"\$OUT\" | grep -q 'kept the .code-copilot-team directory because it still holds other files'"
 
 CON="$TMP/proj-conflict"; mkdir -p "$CON/.code-copilot-team"
 printf 'old = 1\n' > "$CON/.code-copilot-team/config.toml"; printf 'new = 1\n' > "$CON/.cct.toml"

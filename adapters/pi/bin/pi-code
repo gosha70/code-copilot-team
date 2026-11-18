@@ -327,6 +327,12 @@ cct_migrate() {
       fi
     done
   fi
+  # A personal override is about to become .cct.local.toml: make sure git
+  # ignores it (and .cct/) first, so the rename cannot be committed by
+  # accident. Same check-ignore rule as init; --dry-run only reports.
+  if project_present "$proj/$(project_legacy_name local)"; then
+    project_ensure_ignores "$proj" "$dry"
+  fi
   for kind in config local manifest; do
     legacy="$(project_legacy_name "$kind")"; new="$(project_new_name "$kind")"
     project_present "$proj/$legacy" || continue
@@ -355,7 +361,11 @@ cct_migrate() {
   if [[ "$dry" == "true" ]]; then
     echo "dry run: nothing changed"
   else
-    rmdir -- "${proj:?}/${PROJECT_LEGACY_DIR:?}" 2>/dev/null && echo "removed the empty $PROJECT_LEGACY_DIR directory"
+    if rmdir -- "${proj:?}/${PROJECT_LEGACY_DIR:?}" 2>/dev/null; then
+      echo "removed the empty $PROJECT_LEGACY_DIR directory"
+    elif [[ -d "$proj/$PROJECT_LEGACY_DIR" ]]; then
+      echo "kept the $PROJECT_LEGACY_DIR directory because it still holds other files"
+    fi
     [[ $moved -gt 0 ]] && echo "commit the renamed files so the team gets them"
   fi
   [[ $conflicts -eq 0 ]] || return 1
