@@ -144,7 +144,7 @@ def providers_section(repo: Path) -> str:
         for key, sub in (spec.get("patternProperties") or spec.get("properties") or {}).items():
             label = key.replace("^", "").replace("$", "").replace("\\\\", "").replace("\\", "")
             top.append((f"`[{name}] {label}`", type_of(sub), "", one_line(sub.get("description", ""))))
-    return (f"""## `~/.code-copilot-team/providers.toml`
+    return (f"""## `~/.cct/providers.toml`
 
 The reviewers available on this machine and the default pairings. Seeded by
 `setup.sh` from `shared/templates/provider-profile-template.toml`; validated

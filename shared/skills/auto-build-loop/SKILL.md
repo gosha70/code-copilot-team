@@ -105,7 +105,7 @@ scripts/auto-build-loop.sh <feature-id> \
 Config lives at `specs/<feature-id>/automation.json` (template:
 `shared/templates/sdd/automation-template.json`; scaffold with `/auto-build`).
 Reviewers are a list with `specialization`, `scope`, and `gating` fields,
-resolved through `~/.code-copilot-team/providers.toml`. The panel is **one
+resolved through `~/.cct/providers.toml`. The panel is **one
 gating reviewer + N advisory (non-gating) reviewers**:
 
 - The single `gating: true` reviewer drives the review round loop and decides

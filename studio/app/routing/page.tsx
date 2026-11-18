@@ -68,7 +68,7 @@ function InvalidSetRow({ set }: { set: RoutingInvalidEvidenceSet }) {
 // ROUTING HAS TWO HALVES, and the page says which is which:
 //
 //   1. the runtime registry the supervisor actually routes under
-//      (~/.code-copilot-team/routing.toml) — shown first, or a clear
+//      (~/.cct/routing.toml) — shown first, or a clear
 //      "not configured" state with the one command that opts in;
 //   2. the evidence that says whether a route is earned — rendered only
 //      when evidence roots exist, with its calibration gates.
@@ -130,8 +130,8 @@ export default function RoutingPage() {
               From the repository root:
             </p>
             <pre className="text-xs bg-slate-50 border border-slate-200 rounded p-3 overflow-x-auto">
-              {`mkdir -p ~/.code-copilot-team
-cp shared/templates/routing/routing.toml.example ~/.code-copilot-team/routing.toml
+              {`mkdir -p ~/.cct
+cp shared/templates/routing/routing.toml.example ~/.cct/routing.toml
 ./scripts/cct routing validate`}
             </pre>
             <p className="text-xs text-slate-500">

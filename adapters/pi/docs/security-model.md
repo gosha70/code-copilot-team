@@ -100,7 +100,7 @@ from a trusted scope (prefix keeps never apply to carriers).
 
 Configuration is trust-asymmetric (`security.env_scrub`,
 `security.env_scrub_keep`, `security.env_scrub_extra`): **both** in-repo
-layers (`config.toml`, `config.local.toml`) may only tighten; turning
+layers (`.cct.toml`, `.cct.local.toml`) may only tighten; turning
 scrubbing off or adding keeps requires a user-controlled scope (global
 config, `CCT_CONFIG__*` env, `--set`), and a later user-controlled setting
 always beats an earlier repo one. A repo you cloned can therefore never

@@ -946,6 +946,19 @@ assert_eq "a positional project dir is still accepted" "0" "$PW_RC"
 assert_contains "--playwright is documented in --help" \
   "$(cd "$PW_STUB" && bash scripts/setup.sh --help 2>&1)" "--playwright"
 
+# The CCT home notice (#411 FR-6): one line when a legacy home has entries,
+# nothing at all otherwise. The stub gets the resolver the summary sources.
+mkdir -p "$PW_STUB/scripts/lib"
+cp "$REPO_DIR/scripts/lib/cct-home.sh" "$PW_STUB/scripts/lib/cct-home.sh"
+HOME_STUB=$(mktemp -d)
+PW_OUT=$(cd "$PW_STUB" && HOME="$HOME_STUB" CCT_HOME= bash scripts/setup.sh --claude-code 2>&1 || true)
+assert_eq "a fresh home prints no Home line" "0" "$(grep -c 'Home:' <<<"$PW_OUT")"
+mkdir -p "$HOME_STUB/.code-copilot-team"; printf 'x\n' > "$HOME_STUB/.code-copilot-team/providers.toml"
+PW_OUT=$(cd "$PW_STUB" && HOME="$HOME_STUB" CCT_HOME= bash scripts/setup.sh --claude-code 2>&1 || true)
+assert_contains "a legacy home prints the notice with the migrate command" "$PW_OUT" "cct home migrate"
+assert_contains "...naming the entry" "$PW_OUT" "providers.toml"
+rm -r "$HOME_STUB"
+
 # ══════════════════════════════════════════════════════════════
 # setup.sh prompts when nobody can answer (#214 Phase 6.2)
 #

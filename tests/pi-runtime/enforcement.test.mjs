@@ -214,6 +214,9 @@ test("sdd: no active feature fails gate with actionable reason; spec paths exemp
   assert.match(gate.reasons[0], /cct:phase build/);
   assert.ok(isSpecPath("specs/x/plan.md"));
   assert.ok(isSpecPath(".cct/pi-workflow.json"));
+  // #460: the project config files, and the legacy directory while the fallback lasts.
+  for (const p of [".cct.toml", ".cct.local.toml", ".cct-init.json", ".code-copilot-team/config.toml"]) assert.ok(isSpecPath(p), p);
+  assert.ok(!isSpecPath(".cct.tomlx"), "only the exact names");
   assert.ok(!isSpecPath("src/app.ts"));
 });
 

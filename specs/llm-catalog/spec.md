@@ -94,7 +94,7 @@ task rows when its issue opens.
 ## User Scenarios
 
 1. **Configure once, pick per launch.** A developer adds a provider,
-   an endpoint, an LLM and a binding to `~/.code-copilot-team/
+   an endpoint, an LLM and a binding to `~/.cct/
    llms.toml`, names the credential's environment variable, and runs
    `cct llm validate`. Later they start Claude Code on a project with
    `claude-code --llm deepseek-pro .`; the session runs against the
@@ -163,10 +163,12 @@ task rows when its issue opens.
 
 ### Catalog
 
-- **FR-1 File and location.** The catalog is
-  `~/.code-copilot-team/llms.toml` (D2). One user-home helper resolves
-  the catalog, the compatibility records and the session stamps, and
-  honours `CCT_LLM_HOME` for tests, so #411 moves all three together.
+- **FR-1 File and location.** The catalog is `llms.toml` in the CCT
+  home, `${CCT_HOME:-~/.cct}/llms.toml` (D2; *amended 2026-11-14 when
+  #411 landed first*: the home helper is #411's resolver,
+  `scripts/session_analytics/home.py` / `scripts/lib/cct-home.sh`, and
+  `CCT_HOME` is the one override, so no `CCT_LLM_HOME`). The same
+  resolver places the compatibility records and the session stamps.
   The file has `schema_version = 1`, `[providers.<id>]`,
   `[endpoints.<id>]`, `[llms.<id>]` and `[bindings.<id>]` tables. Ids
   match `[A-Za-z0-9][A-Za-z0-9_-]*` and are unique within their table.
@@ -689,6 +691,8 @@ before slice D builds; the approved spec's history stays in git.
   compatibility records and the stamps, through one helper so #411
   moves them together. Alternative: wait for #411. Recommended:
   proceed now. **Ruled 2026-11-10 by the owner: accepted as recommended.**
+  *Amended 2026-11-14:* #411 landed before slice A started, so the home
+  is `${CCT_HOME:-~/.cct}` through #411's resolver (FR-1 as amended).
 - **D3 Three files.** `llms.toml` is new and separate; `routing.toml`
   references it in G; `providers.toml` stays the reviewer profile.
   Recommended: separate. **Ruled 2026-11-10 by the owner: accepted as recommended.**

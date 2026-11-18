@@ -12,7 +12,7 @@ cd code-copilot-team
 
 # 2. Install for your tool(s)
 ./scripts/setup.sh --claude-code                    # Claude Code → ~/.claude/
-./scripts/setup.sh --pi                             # Pi (enforced) → ~/.code-copilot-team/pi/
+./scripts/setup.sh --pi                             # Pi (enforced) → ~/.cct/pi/
 ./scripts/setup.sh --codex                          # OpenAI Codex → ~/.codex/
 ./scripts/setup.sh --cursor ~/my-project            # Cursor → project/.cursor/
 ./scripts/setup.sh --github-copilot ~/my-project    # GH Copilot → project/.github/

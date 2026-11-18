@@ -12,6 +12,8 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=lib/cct-home.sh
+source "$REPO_DIR/scripts/lib/cct-home.sh"   # the CCT home (#411)
 # CCT_SPECS_DIR overrides the default specs/ root (same pattern as
 # check-origin-alignment.sh; used by the auto-build driver and tests).
 SPECS_DIR="${CCT_SPECS_DIR:-$REPO_DIR/specs}"
@@ -513,7 +515,7 @@ validate_admission() {
   # operator-command execution and must wait for governance (finding 5).
   local conf_health_eval="" conf_health_cmd=""
   if [[ "$conf_required" == "true" ]]; then
-    local profile_toml="${CCT_PROVIDER_PROFILE:-$HOME/.code-copilot-team/providers.toml}"
+    local profile_toml="${CCT_PROVIDER_PROFILE:-$(cct_home_path providers.toml)}"
     if [[ "$autocfg_ok" != "true" ]]; then
       fail "$id: conformance is required (runtime_conformance mapping) but the automation config was rejected above — evaluator availability cannot be verified"
     elif ! jq -e '.verification.conformance | type == "object"' "$autocfg" >/dev/null 2>&1; then

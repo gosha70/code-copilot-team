@@ -75,12 +75,12 @@ so this table cannot drift from what the adapters actually deliver.
 | Tool | What it gives you | Install |
 |---|---|---|
 | `claude-code` | **15 features enforced** — a gate that can block — and 0 more as rules it reads | `./scripts/setup.sh --claude-code` |
-| `pi` | **8 features enforced** — a gate that can block — and 6 more as rules it reads | `./scripts/setup.sh --pi` |
+| `pi` | **8 features enforced** — a gate that can block — and 7 more as rules it reads | `./scripts/setup.sh --pi` |
 | `codex` | **6 features enforced** — a gate that can block — and 9 more as rules it reads | `./scripts/setup.sh --codex` |
-| `aider` | 9 features as rules the tool reads; no runtime gate | `./scripts/setup.sh --aider` |
+| `aider` | 5 features as rules the tool reads; no runtime gate | `./scripts/setup.sh --aider` |
 | `cursor` | 9 features as rules the tool reads; no runtime gate | `./scripts/setup.sh --cursor` |
 | `github-copilot` | 9 features as rules the tool reads; no runtime gate | `./scripts/setup.sh --github-copilot` |
-| `windsurf` | 9 features as rules the tool reads; no runtime gate | `./scripts/setup.sh --windsurf` |
+| `windsurf` | 5 features as rules the tool reads; no runtime gate | `./scripts/setup.sh --windsurf` |
 <!-- generated:end choose-adapter -->
 
 What "enforced" and "advisory" mean, per feature and per capability, is in
@@ -111,7 +111,7 @@ provider profile and each installed adapter, and says which is missing. Then
 ### Your first peer review
 
 ```bash
-# Declare a reviewer in ~/.code-copilot-team/providers.toml, then prove it
+# Declare a reviewer in ~/.cct/providers.toml, then prove it
 # answers — the probe command:
 scripts/review-round-runner.sh . --probe --peer <name> --subject claude --out /tmp/probe.json
 jq '{provider, verdict, duration_sec, error}' /tmp/probe.json

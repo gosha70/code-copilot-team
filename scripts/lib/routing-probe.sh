@@ -66,7 +66,9 @@ rb_tools_implied() { [[ " $RB_TOOL_PROFILES " == *" $1 "* ]]; }
 RB_MARKER="CCT_PROBE_OK"
 RB_TOOL_MARKER="CCT_TOOL_OK"
 
-RB_LEDGER="${CCT_ROUTING_PROBE_LEDGER:-$HOME/.code-copilot-team/routing-probe-ledger.json}"
+# shellcheck source=cct-home.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cct-home.sh"   # the CCT home (#411)
+RB_LEDGER="${CCT_ROUTING_PROBE_LEDGER:-$(cct_home_path routing-probe-ledger.json)}"
 RB_LEDGER_SKELETON='{"schema_version":1,"probes":[]}'
 
 if ! declare -F rb_journal >/dev/null 2>&1; then

@@ -21,6 +21,7 @@ Applied to all code generation and review sessions.
 ## Prohibited Patterns
 
 - No hard-coded structured data (JSON/XML literals) inside source — use config files or env vars. This includes default values on Python dataclasses/Pydantic models and equivalents in other languages — define only the schema in code; put actual defaults in `config/defaults.yaml` (or equivalent). A config loader reads the file and populates the schema; env vars or override files layer on top.
+- Configuration before constants: a schema default, fallback default, or operator-tunable value stays in configuration (the rule above), even when an in-code value would be shorter. A tiny in-code default is not the simpler choice when configuration policy applies. Named constants are for fixed internal values that genuinely cannot be configured at runtime.
 - No magic numbers or strings — use named constants. When a string key crosses a module boundary (config key, variable name, prompt template name), define it as a constant in the lowest common ancestor package and import it everywhere. A hardcoded string in two modules is a silent breakage waiting to happen.
 - No secrets in source — use env vars or a secrets manager.
 - No print() debugging in committed code — use structured logging.
@@ -80,6 +81,16 @@ Before planning, implementing, or approving agent-produced work:
 4. Keep tests, documentation, and proof proportional to the risk and acceptance criteria. More artifacts are not evidence of better alignment.
 5. Complete the required path before optional improvements. Record useful extras as follow-up work instead of silently expanding scope.
 6. Before approval, ask: **What can be removed without weakening correctness, safety, or the acceptance criteria?**
+
+**Simplest complete change.** Before writing new code, take the first step that fully meets the approved requirement:
+
+1. No new code: the requirement is already met, or met by configuration.
+2. Existing project code: a helper, component, configuration, or workflow already in the repository.
+3. The language's standard library or a native platform capability.
+4. A dependency the project already uses, without a new abstraction around it.
+5. Only then, the simplest complete custom design.
+
+A smaller change is complete only when every caller, workflow, migration, and regression case still works: trace all callers first. A small local fix that misses another caller is incomplete, not simple. Simplicity never weakens security, authentication, privacy, data integrity, error handling, accessibility, or trust boundaries. When a material requirement is ambiguous, follow the clarification protocol (`shared/skills/clarification-protocol/SKILL.md`) to decide whether to ask, escalate, or proceed.
 
 For a handoff from Claude Code or any other agent, explicitly classify the change as `on-target`, `overcomplicated`, or `off-target`, and explain the evidence. Green tests do not compensate for scope drift. Judge the artifact rather than guessing at a vendor's intent; complexity required by a concrete failure mode is not overengineering when the link is explicit.
 

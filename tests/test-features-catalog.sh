@@ -407,6 +407,81 @@ done
 assert "every feature title links to its guide" "[[ \$(grep -c '^| \\[' <<<\"\$OUT\") -eq $N ]]"
 assert "index links the maturity definitions" "grep -q '(maturity.md)' <<<\"\$OUT\""
 
+# ── a claimed adapter reach is a shipped one ─────────────────
+# `advisory` means the adapter receives the feature as content it reads, and
+# `enforced` adds a gate on top (docs/maturity.md). For a feature that rests on
+# skills, then, the artifacts the adapter actually delivers must carry at least
+# one of them. memkernel-memory claimed advisory for windsurf and aider while
+# neither generated rules file mentioned MemKernel at all.
+#
+# Only DELIVERED artifacts count — what generate.sh and the installers hand to
+# the tool — never setup scripts, docs or comments under adapters/<a>/ (a
+# mention there satisfied an earlier draft of this guard; review of PR #454).
+# A skill counts as delivered when its id appears in an artifact's path or text
+# (Cursor .mdc, Copilot .instructions.md, the Codex on-demand table, Pi and
+# plugin skill copies), or when its body's first H1 does (always-on skills are
+# concatenated without their id into windsurf/aider/codex/copilot rules).
+#
+# delivery_gaps <catalog> [<adapters-dir>] — one "feature adapter" line per
+# advisory/enforced claim on a skill-backed feature with no shipped skill.
+delivery_gaps() {
+  LANG=C.UTF-8 LC_ALL=C.UTF-8 ruby -ryaml -e '
+    catalog, adapters_dir, skills_dir = ARGV
+    delivered = {
+      "claude-code"    => ["plugin/skills/**/*"],
+      "codex"          => ["AGENTS.md", ".agents/skills/**/*"],
+      "cursor"         => [".cursor/rules/*.mdc"],
+      "github-copilot" => [".github/copilot-instructions.md", ".github/instructions/*.instructions.md"],
+      "windsurf"       => [".windsurf/rules/*.md"],
+      "aider"          => ["CONVENTIONS.md"],
+      "pi"             => ["resources/skills/**/*", "resources/prompts/**/*", "resources/context/**/*"],
+    }
+    files = Hash.new do |h, a|
+      globs = delivered.fetch(a) { abort "delivery_gaps: no delivered-artifact map for adapter #{a}" }
+      h[a] = globs.flat_map { |g| Dir.glob(File.join(adapters_dir, a, g), File::FNM_DOTMATCH) }
+                  .select { |p| File.file?(p) }
+                  .map { |p| [p, File.read(p, encoding: "UTF-8").scrub] }
+    end
+    (YAML.load_file(catalog)["features"] || []).each do |f|
+      skills = f["skills"] || []
+      next if skills.empty?
+      (f["adapters"] || {}).each do |a, v|
+        next unless %w[advisory enforced].include?(v)
+        shipped = skills.any? do |s|
+          h1 = File.read(File.join(skills_dir, s, "SKILL.md"), encoding: "UTF-8")[/^# .+$/]
+          files[a].any? { |p, text| p.include?(s) || text.include?(s) || (h1 && text.include?(h1)) }
+        end
+        puts "#{f["id"]} #{a}" unless shipped
+      end
+    end
+  ' "$1" "${2:-$REPO_DIR/adapters}" "$REPO_DIR/shared/skills" | sort
+}
+
+GAPS_OUT=$(delivery_gaps "$CATALOG")
+assert "every advisory/enforced claim on a skill-backed feature ships a skill" "[[ -z \"\$GAPS_OUT\" ]]"
+[[ -n "$GAPS_OUT" ]] && sed 's/^/    unshipped claim: /' <<<"$GAPS_OUT"
+# The check must bite: restoring the old memkernel claim is caught.
+sed '/^  - id: memkernel-memory$/,/^  - id: /s/^      windsurf: unsupported$/      windsurf: advisory/' \
+  "$CATALOG" > "$TMP/advisory-windsurf.yaml"
+assert "fixture flips memkernel-memory windsurf back to advisory" \
+  "! diff -q '$CATALOG' '$TMP/advisory-windsurf.yaml' >/dev/null"
+assert "an advisory claim with no shipped skill is reported (memkernel-memory windsurf)" \
+  "delivery_gaps '$TMP/advisory-windsurf.yaml' | grep -qx 'memkernel-memory windsurf'"
+# …only a DELIVERED artifact can satisfy it: a mention in the adapter's setup
+# script changes nothing, the skill's H1 in the generated rules file does.
+MUT="$TMP/adapters-mut"
+cp -R "$REPO_DIR/adapters" "$MUT"
+printf '\n# memkernel-memory\n' >> "$MUT/windsurf/setup.sh"
+assert "a mention outside the delivered artifacts (setup.sh) does not satisfy the guard" \
+  "delivery_gaps '$TMP/advisory-windsurf.yaml' '$MUT' | grep -qx 'memkernel-memory windsurf'"
+MK_H1=$(grep -m1 '^# ' "$REPO_DIR/shared/skills/memkernel-memory/SKILL.md")
+printf '\n%s\n' "$MK_H1" >> "$MUT/windsurf/.windsurf/rules/rules.md"
+assert "the skill's H1 in the delivered rules file satisfies it" \
+  "! delivery_gaps '$TMP/advisory-windsurf.yaml' '$MUT' | grep -q '^memkernel-memory windsurf'"
+# Pi carries the skill as a copied Agent Skill resource, so its advisory claim is shipped.
+assert "pi's copied skill resource is the delivered artifact (memkernel-memory pi)" \
+  "[[ -f '$REPO_DIR/adapters/pi/resources/skills/memkernel-memory/SKILL.md' ]]"
+
 # ── the feature table never degrades silently ────────────────
 # A missing catalog must fail the render (and so --check), not print an
 # index with the headline table quietly gone.

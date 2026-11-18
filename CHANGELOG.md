@@ -12,6 +12,41 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Added
 
+- **Simplest complete change.** `copilot-conventions` now carries an
+  ordered reuse ladder (no new code, existing project code, the standard
+  library or platform, an already-used dependency, and only then the
+  simplest complete custom design), with two invariants: a smaller change
+  is complete only when every caller still works, and simplicity never
+  weakens safety. `coding-standards` states that configuration wins over a
+  tiny in-code default. `memkernel-memory` retains only selective,
+  high-value decisions, and `CODE_REVIEW.md` requires a removal or
+  replacement finding to name the replacement and the requirement it keeps
+  satisfied. Delivered to every adapter through its existing path (#389).
+- **A project's Pi configuration is `.cct.toml` at the repo root.** The
+  committed configuration moves from `.code-copilot-team/config.toml` to
+  `.cct.toml`, with the personal override `.cct.local.toml` (never
+  committed) and the `pi-code init` manifest `.cct-init.json` beside it;
+  `.cct/` stays untracked runtime state. `pi-code init` writes the new
+  files and makes sure `.cct/` and `.cct.local.toml` are ignored, deciding
+  with `git check-ignore`. `pi-code migrate [dir] [--dry-run]` is the only
+  mover: it never overwrites, makes sure `.cct.local.toml` is ignored
+  when it moves one, makes no git change, and refuses (exit 1) when an
+  ignore rule would hide `.cct.toml` or `.cct-init.json`.
+  `pi-code doctor` names legacy files and ignore problems. The legacy
+  files are still read while the fallback lasts: **if this ships in 2.1.0,
+  2.2 removes the fallback**, together with the user-home one; if it ships
+  later, the fallback lasts through the minor release after it (#460).
+- **One harness home: `~/.cct`.** Every reader in bash, Python and
+  TypeScript resolves a user file through one rule,
+  `${CCT_HOME:-~/.cct}/<entry>`, with `CCT_HOME` as the one override.
+  Through the 2.1.x line a top-level entry absent from `~/.cct` but present
+  in the legacy `~/.code-copilot-team` is served from there, reads and
+  writes alike, so a directory is never split between the homes; `cct doctor` and
+  `setup.sh` list what is still served that way, and `cct home migrate`
+  (`--dry-run` to preview) moves it, never overwriting and never deleting.
+  **2.2 removes the fallback**: a legacy file is then not found and the
+  message names the migrate command. The per-project
+  `.code-copilot-team/` directory is unchanged. See `docs/cct-home.md` (#411).
 - **Auto-build moves the pitch's hill chart.** A driver-built Shape-Up
   cycle (`claude-code build <pitch-id>`, resolved under
   `specs/pitches/<id>/`) moves each scope `downhill` when a phase naming
@@ -133,6 +168,14 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Fixed
 
+- **`cct home migrate` output is safe to paste back into a shell.** It
+  printed `moved: x -> /path/x`; pasted into zsh, the `>` opened
+  `/path/x` for writing before the unknown command `moved:` failed, which
+  emptied the file just migrated. Lines now read `moved x into /path`,
+  and no line `migrate` or `--dry-run` prints contains `>`, `<`, `|`,
+  `;`, `&`, `$` or a backtick. A regression test migrates a non-empty
+  profile with backups and a ledger and compares every file's sha256;
+  `docs/cct-home.md` documents recovering an emptied file (#463).
 - **The home-path scrub no longer leaves the username when the home
   follows a letter.** The left boundary added to the home match kept
   `scrub_text` from touching a home that came straight after a word
@@ -212,6 +255,16 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   session and records the answers before reporting (#407).
 
 ### Changed
+
+- **CONTRIBUTING.md states the spec-first process.** A "Spec-First for
+  Features" section says to agree on scope in the issue, to create
+  `specs/<feature-id>/` from the SDD templates with `status: draft` and
+  the `origin:` block, to validate it with `scripts/validate-spec.sh`, and
+  to open the spec PR before the implementation PR; the stale "README
+  test-count lines" item now names `docs/repo-structure.md` and
+  `tests/test-counts.env`. The PR template asks for the linked issue and
+  the approved plan; the feature-request template asks for the
+  `spec_mode` (#441).
 
 - **memkernel decision records in the `memkernel-memory` skill.** The skill
   carries the decision record form (`requirement`, `chosen`, `rejected`,

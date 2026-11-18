@@ -1,7 +1,7 @@
 # session_analytics.routing_registry — a read-only summary of the routing
 # registry for the Studio.
 #
-# The registry itself is TOML at ~/.code-copilot-team/routing.toml
+# The registry itself is TOML at ~/.cct/routing.toml (the CCT home, #411)
 # (CCT_ROUTING_REGISTRY overrides the path). This module does NOT validate
 # the constrained grammar — `cct routing validate` is authoritative — it
 # parses the file and returns the declarations the page can safely show.
@@ -16,7 +16,9 @@ import tomllib
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-DEFAULT_REGISTRY = "~/.code-copilot-team/routing.toml"
+from .home import cct_home_path
+
+REGISTRY_NAME = "routing.toml"   # under the CCT home (#411)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 #: The CONSTRAINED validator the supervisor and `cct routing` use. The
@@ -41,9 +43,10 @@ _PROFILE_FIELDS = (
 
 
 def registry_path() -> Path:
-    return Path(
-        os.environ.get("CCT_ROUTING_REGISTRY") or DEFAULT_REGISTRY
-    ).expanduser()
+    override = os.environ.get("CCT_ROUTING_REGISTRY")
+    if override:
+        return Path(override).expanduser()
+    return cct_home_path(REGISTRY_NAME)
 
 
 def _display(path: Path) -> str:

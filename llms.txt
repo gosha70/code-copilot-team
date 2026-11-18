@@ -27,6 +27,7 @@ Experimental: llms.txt is a proposal (llmstxt.org), not a standard. This file is
 - [Repo Structure](https://raw.githubusercontent.com/gosha70/code-copilot-team/master/docs/repo-structure.md): Where everything lives in this repository, for contributors
 - [Configuration Layers](https://raw.githubusercontent.com/gosha70/code-copilot-team/master/docs/configuration-layers.md): Where each rule, skill, agent and hook is installed, and which layer wins when two of them say different things. **More specific always wins:** a project's `CLAUDE.md` overrides the global manifest, and `CLAUDE.local.md` overrides both
 - [Install Options](https://raw.githubusercontent.com/gosha70/code-copilot-team/master/docs/install.md): Every install path, for every tool
+- [The CCT home](https://raw.githubusercontent.com/gosha70/code-copilot-team/master/docs/cct-home.md): Everything CCT keeps for a user lives in one directory, the **CCT home** `${CCT_HOME:-~/.cct}`, with the legacy `~/.code-copilot-team` read as a fallback through 2.1.x and `cct home migrate` to move what is left there
 
 ## Analytics & benchmarks
 

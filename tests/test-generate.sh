@@ -162,6 +162,44 @@ assert_contains "Windsurf carries target-alignment rule" "$ADAPTERS/windsurf/.wi
 assert_contains "Aider carries target-alignment rule" "$ADAPTERS/aider/CONVENTIONS.md" "$ALIGNMENT_HEADING"
 assert_contains "Pi carries target-alignment rule" "$ADAPTERS/pi/resources/context/always-context.md" "$ALIGNMENT_HEADING"
 
+# #389 Simplest Complete Change: both collision rules reach every adapter that
+# loads the always-on skills, and the decision-memory qualification reaches
+# exactly the adapters that carry memkernel-memory today (FR-007, FR-008).
+echo ""
+echo "=== Simplest Complete Change delivery (#389) ==="
+PRECEDENCE_RULE="A tiny in-code default is not the simpler choice when configuration policy applies"
+COMPLETENESS_RULE="A small local fix that misses another caller is incomplete"
+SELECTIVE_MEMORY="retain selective, high-value decisions"
+for f in \
+  "$ADAPTERS/claude-code/plugin/skills/coding-standards/SKILL.md" \
+  "$ADAPTERS/cursor/.cursor/rules/coding-standards.mdc" \
+  "$ADAPTERS/github-copilot/.github/copilot-instructions.md" \
+  "$ADAPTERS/windsurf/.windsurf/rules/rules.md" \
+  "$ADAPTERS/aider/CONVENTIONS.md" \
+  "$ADAPTERS/codex/AGENTS.md" \
+  "$ADAPTERS/pi/resources/context/always-context.md"; do
+  assert_contains "precedence rule (tiny default vs configuration policy) in ${f#$ADAPTERS/}" "$f" "$PRECEDENCE_RULE"
+done
+for f in \
+  "$ADAPTERS/claude-code/plugin/skills/copilot-conventions/SKILL.md" \
+  "$ADAPTERS/cursor/.cursor/rules/copilot-conventions.mdc" \
+  "$ADAPTERS/github-copilot/.github/copilot-instructions.md" \
+  "$ADAPTERS/windsurf/.windsurf/rules/rules.md" \
+  "$ADAPTERS/aider/CONVENTIONS.md" \
+  "$ADAPTERS/codex/AGENTS.md" \
+  "$ADAPTERS/pi/resources/context/always-context.md"; do
+  assert_contains "completeness rule (small local fix misses another caller) in ${f#$ADAPTERS/}" "$f" "$COMPLETENESS_RULE"
+done
+for f in \
+  "$ADAPTERS/claude-code/plugin/skills/memkernel-memory/SKILL.md" \
+  "$ADAPTERS/cursor/.cursor/rules/memkernel-memory.mdc" \
+  "$ADAPTERS/github-copilot/.github/instructions/memkernel-memory.instructions.md" \
+  "$ADAPTERS/pi/resources/skills/memkernel-memory/SKILL.md"; do
+  assert_contains "selective decision memory in ${f#$ADAPTERS/}" "$f" "$SELECTIVE_MEMORY"
+done
+assert "no new memkernel delivery to Windsurf or Aider (FR-007)" \
+  "! grep -q '$SELECTIVE_MEMORY' '$ADAPTERS/windsurf/.windsurf/rules/rules.md' && ! grep -q '$SELECTIVE_MEMORY' '$ADAPTERS/aider/CONVENTIONS.md'"
+
 # ── Section 5: Codex adapter structure ────────────────────
 
 echo ""

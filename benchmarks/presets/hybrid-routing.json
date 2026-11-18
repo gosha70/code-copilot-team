@@ -55,7 +55,7 @@
     },
     {
       "kind": "cct_router",
-      "registry": "~/.code-copilot-team/routing.toml"
+      "registry": "~/.cct/routing.toml"
     }
   ],
   "delegate_tasks": [

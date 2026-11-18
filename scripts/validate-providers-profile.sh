@@ -16,13 +16,15 @@
 # Run from the repo root:
 #   bash scripts/validate-providers-profile.sh [profile.toml] [schema.json]
 #
-# Defaults to ~/.code-copilot-team/providers.toml; the arguments exist so
+# Defaults to ~/.cct/providers.toml; the arguments exist so
 # tests can run the same checks against fixtures.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-PROFILE="${1:-$HOME/.code-copilot-team/providers.toml}"
+# shellcheck source=lib/cct-home.sh
+source "$SCRIPT_DIR/lib/cct-home.sh"   # the CCT home (#411)
+PROFILE="${1:-$(cct_home_path providers.toml)}"
 SCHEMA="${2:-$REPO_DIR/shared/schemas/providers.schema.json}"
 
 [[ -f "$SCHEMA" ]] || { echo "[ERROR] schema not found: $SCHEMA"; exit 1; }

@@ -141,7 +141,7 @@
     "routing": {
       "type": "object",
       "additionalProperties": false,
-      "description": "#248 (increment A of #109): TRUST-ASYMMETRIC by construction — a repository may only NARROW what the user-level registry (~/.code-copilot-team/routing.toml) permits. There is deliberately NO field here that could define a profile, credential, endpoint, protocol, or capability; the validator additionally refuses those keys by name; `tier2` was promoted with #254 T6 and `recovery` with #257 D T3 (both restriction-only). Cross-checks against the registry (unknown ids, unknown route class) happen in the effective-policy merge.",
+      "description": "#248 (increment A of #109): TRUST-ASYMMETRIC by construction — a repository may only NARROW what the user-level registry (~/.cct/routing.toml) permits. There is deliberately NO field here that could define a profile, credential, endpoint, protocol, or capability; the validator additionally refuses those keys by name; `tier2` was promoted with #254 T6 and `recovery` with #257 D T3 (both restriction-only). Cross-checks against the registry (unknown ids, unknown route class) happen in the effective-policy merge.",
       "properties": {
         "enabled": { "type": "boolean" },
         "allowed_profiles": {

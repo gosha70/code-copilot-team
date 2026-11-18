@@ -10,7 +10,7 @@ read-only inspection commands that later increments act on. With no
 routing registry configured, existing build and execution behavior is
 unchanged.
 
-- **The registry** (`~/.code-copilot-team/routing.toml`, template at
+- **The registry** (`~/.cct/routing.toml`, template at
   `shared/templates/routing/routing.toml.example`) declares execution
   profiles — each a validated combination of backend (`claude-code`,
   `codex`, `pi`), provider, model, capability tier (CLOSED vocabulary:

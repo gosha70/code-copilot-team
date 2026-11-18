@@ -83,7 +83,7 @@ accepted.
 | `caps.cost_usd` | number |  |  |
 | `notify` | object |  |  |
 | `merge` | object |  |  |
-| `routing` | object |  | #248 (increment A of #109): TRUST-ASYMMETRIC by construction — a repository may only NARROW what the user-level registry (~/.code-copilot-team/routing.toml) permits. There is deliberately NO field here that could define a profile, credential, endpoint, protocol, or capability; the validator additionally refuses those keys by name; `tier2` was promoted with #254 T6 and `recovery` with #257 D T3 (both restriction-only). Cross-checks against the registry (unknown ids, unknown route class) happen in the effective-policy merge. |
+| `routing` | object |  | #248 (increment A of #109): TRUST-ASYMMETRIC by construction — a repository may only NARROW what the user-level registry (~/.cct/routing.toml) permits. There is deliberately NO field here that could define a profile, credential, endpoint, protocol, or capability; the validator additionally refuses those keys by name; `tier2` was promoted with #254 T6 and `recovery` with #257 D T3 (both restriction-only). Cross-checks against the registry (unknown ids, unknown route class) happen in the effective-policy merge. |
 | `routing.enabled` | boolean |  |  |
 | `routing.allowed_profiles` | array of string |  | Restriction only: the effective set is the INTERSECTION of these ids with the user registry's profiles. An id the registry does not define is a named violation at merge time, never a silent widen or drop. |
 | `routing.default_task_route` | string |  |  |
@@ -101,7 +101,7 @@ accepted.
 | `unattended.budget.estimate_unmetered` | boolean |  |  |
 | `unattended.budget.estimate_usd_per_invocation` | number |  | Conservative worst-case debit for an invocation whose real cost is unmeasurable. Debits the SAME caps.cost_usd (no separate allowance); flagged estimated:true in the ledger. |
 
-## `~/.code-copilot-team/providers.toml`
+## `~/.cct/providers.toml`
 
 The reviewers available on this machine and the default pairings. Seeded by
 `setup.sh` from `shared/templates/provider-profile-template.toml`; validated
