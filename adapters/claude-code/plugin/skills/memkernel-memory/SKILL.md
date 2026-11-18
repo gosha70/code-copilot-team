@@ -28,6 +28,10 @@ session checkpoints.
 
 ## Decision Records
 
+When MemKernel is configured, retain selective, high-value decisions: a reuse or
+architecture choice among real alternatives that a later session could otherwise
+re-litigate. Do not record every small implementation choice.
+
 A `decision` memory says what was chosen, what was rejected and why, and when to
 look again. Retain one decision per memory in this form; the first line is what
 recall's preview shows, so make it a complete sentence:

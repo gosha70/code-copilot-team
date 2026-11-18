@@ -12,6 +12,16 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Added
 
+- **Simplest complete change.** `copilot-conventions` now carries an
+  ordered reuse ladder (no new code, existing project code, the standard
+  library or platform, an already-used dependency, and only then the
+  simplest complete custom design), with two invariants: a smaller change
+  is complete only when every caller still works, and simplicity never
+  weakens safety. `coding-standards` states that configuration wins over a
+  tiny in-code default. `memkernel-memory` retains only selective,
+  high-value decisions, and `CODE_REVIEW.md` requires a removal or
+  replacement finding to name the replacement and the requirement it keeps
+  satisfied. Delivered to every adapter through its existing path (#389).
 - **A project's Pi configuration is `.cct.toml` at the repo root.** The
   committed configuration moves from `.code-copilot-team/config.toml` to
   `.cct.toml`, with the personal override `.cct.local.toml` (never

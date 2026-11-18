@@ -57,6 +57,8 @@ assert "managed doc requires target-alignment classification" \
   "grep -q 'on-target.*overcomplicated.*off-target' '$P1/docs/CODE_REVIEW.md'"
 assert "managed doc requires a simplification pass" \
   "grep -q 'What can be removed without weakening' '$P1/docs/CODE_REVIEW.md'"
+assert "managed doc requires a named replacement for removal findings (#389)" \
+  "grep -q 'must also name the viable' '$P1/docs/CODE_REVIEW.md' && grep -q 'replacement and cite the requirement(s) that stay satisfied' '$P1/docs/CODE_REVIEW.md'"
 assert "creates AGENTS.md when absent" "[[ -f '$P1/AGENTS.md' ]]"
 assert "loader block present with markers" \
   "grep -q 'BEGIN CCT-REVIEWER (codex)' '$P1/AGENTS.md' && grep -q 'END CCT-REVIEWER (codex)' '$P1/AGENTS.md'"
