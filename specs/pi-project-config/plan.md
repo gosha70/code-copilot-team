@@ -60,9 +60,9 @@ different languages and the launcher must work without the runtime:
 
 | Risk | Mitigation |
 |---|---|
-| A project's ignore rules hide `.cct.toml` | FR-7: `git check-ignore` warning in `pi-code doctor` |
+| A project's ignore rules hide `.cct.toml` | FR-6: `migrate` refuses (exit 1) and names the rule; FR-7: `pi-code doctor` warns |
 | `.cct.local.toml` gets committed | FR-4 adds it to the ignore lines; FR-7 warns when it is not ignored |
-| `init` duplicates or mangles `.gitignore` lines | append only missing lines; recognise `.cct/`, `/.cct/`, `.cct`; `--dry-run` shows the change |
+| `init` duplicates or mangles `.gitignore` lines | decide "already ignored" with the read-only `git check-ignore` (any spelling, `.git/info/exclude`, a global gitignore); append only lines still missing; `--dry-run` shows the change |
 | migrate loses a file | no-replace moves (hard link then unlink, inside one project, so one filesystem); conflicts keep both sides; the manifest is written to its new name exclusively before the legacy one is removed |
 | Pasted output does damage | FR-6: no shell metacharacter in migrate output, pinned by a test |
 | The trust gate regresses | the security battery keeps an untrusted project reading neither location |
