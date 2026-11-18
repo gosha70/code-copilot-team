@@ -2292,6 +2292,38 @@ PLANTED=$(printf '%s\n' 'scripts/lib/cct-home.sh:18:CCT_HOME_LEGACY_REL=".code-c
 rc=0; [[ -z "$PLANTED" ]] || rc=1
 assert_ok "...while the resolver's name constant and a comment are not candidates" "$rc"
 
+# ══════════════════════════════════════════════════════════════
+# Simplest Complete Change (#389): the two collision rules ship
+# ══════════════════════════════════════════════════════════════
+# Text-presence checks (spec FR-008): they prove the rules ship, not that an
+# agent follows them. Each fails if its rule is removed from the source.
+
+echo ""
+echo "=== Simplest Complete Change (#389) ==="
+SCC_CONV="$SKILLS_DIR_PATH/copilot-conventions/SKILL.md"
+SCC_STD="$SKILLS_DIR_PATH/coding-standards/SKILL.md"
+# Collision 1, "tiny default vs configuration policy": configuration wins.
+rc=0; grep -q "A tiny in-code default is not the simpler choice when configuration policy applies" "$SCC_STD" || rc=1
+assert_ok "coding-standards keeps the precedence rule (tiny default vs configuration policy)" "$rc"
+# Collision 2, "small local fix misses another caller": completeness wins.
+rc=0; grep -q "A small local fix that misses another caller is incomplete, not simple" "$SCC_CONV" || rc=1
+assert_ok "copilot-conventions keeps the completeness rule (small local fix misses another caller)" "$rc"
+rc=0; grep -q "Only then, the simplest complete custom design" "$SCC_CONV" && ! grep -q "simplest complete custom design" "$SCC_STD" || rc=1
+assert_ok "the reuse ladder lives only in copilot-conventions (C-002)" "$rc"
+rc=0; grep -q "shared/skills/clarification-protocol/SKILL.md" "$SCC_CONV" || rc=1
+assert_ok "copilot-conventions points at the clarification protocol, tool-neutral (FR-003)" "$rc"
+rc=0; grep -q "retain selective, high-value decisions" "$SKILLS_DIR_PATH/memkernel-memory/SKILL.md" || rc=1
+assert_ok "memkernel-memory qualifies decision records as selective and high-value (FR-005)" "$rc"
+rc=0; grep -q "must also name the viable" "$SHARED_DIR/review/CODE_REVIEW.md" || rc=1
+assert_ok "CODE_REVIEW.md requires a named replacement for removal findings (FR-006)" "$rc"
+# The tracked Claude Code rule copies (~/.claude/rules links into them) must
+# stay the frontmatter-stripped skill bodies that setup.sh installs.
+for name in coding-standards copilot-conventions copyright-headers safety; do
+  rc=0
+  [[ "$(awk 'BEGIN{n=0} /^---$/{n++; if(n==2){found=1; next}} found{print}' "$SKILLS_DIR_PATH/$name/SKILL.md")" == "$(cat "$REPO_DIR/claude_code/.claude/rules/$name.md")" ]] || rc=1
+  assert_ok "claude_code/.claude/rules/$name.md matches its shared skill body" "$rc"
+done
+
 if [[ "$PASS" -ne "$TEST_SHARED_STRUCTURE_EXPECTED_PASS" ]]; then
   echo "  FAIL: assertion-count drift (expected $TEST_SHARED_STRUCTURE_EXPECTED_PASS, got $PASS)"
   FAIL=$((FAIL + 1))

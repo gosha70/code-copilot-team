@@ -275,6 +275,12 @@ Each finding must:
 - Suggest a minimal correction direction
 - Include confidence: `high` or `medium`
 
+A finding that recommends removing or replacing code, an abstraction, a
+dependency, or a duplicated implementation must also name the viable
+replacement and cite the requirement(s) that stay satisfied, after checking
+every caller, compatibility, safety, and tests. Without a named replacement it
+is an open question, not a finding.
+
 Do not report:
 
 - Pure formatting preferences handled by tooling

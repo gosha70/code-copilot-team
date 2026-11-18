@@ -14,6 +14,7 @@ Applied to all code generation and review sessions.
 ## Prohibited Patterns
 
 - No hard-coded structured data (JSON/XML literals) inside source — use config files or env vars. This includes default values on Python dataclasses/Pydantic models and equivalents in other languages — define only the schema in code; put actual defaults in `config/defaults.yaml` (or equivalent). A config loader reads the file and populates the schema; env vars or override files layer on top.
+- Configuration before constants: a schema default, fallback default, or operator-tunable value stays in configuration (the rule above), even when an in-code value would be shorter. A tiny in-code default is not the simpler choice when configuration policy applies. Named constants are for fixed internal values that genuinely cannot be configured at runtime.
 - No magic numbers or strings — use named constants. When a string key crosses a module boundary (config key, variable name, prompt template name), define it as a constant in the lowest common ancestor package and import it everywhere. A hardcoded string in two modules is a silent breakage waiting to happen.
 - No secrets in source — use env vars or a secrets manager.
 - No print() debugging in committed code — use structured logging.
