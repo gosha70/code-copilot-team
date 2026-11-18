@@ -36,6 +36,36 @@ class ConfigErrorsAreUsageErrors(unittest.TestCase):
         self.assertNotIn("Traceback", err)
         self.assertEqual(err.count("\n"), 1)
 
+    def assert_one_usage_line(self, code, err, needle):
+        self.assertEqual(code, C.EXIT_USAGE)
+        self.assertIn(f"error: {needle}" if not needle.startswith("error:") else needle, err)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(err.count("\n"), 1, err)
+
+    def test_a_bad_judge_worker_count_reports_one_line(self):
+        with mock.patch.dict(os.environ, {"CCT_SA_JUDGE_WORKERS": "bogus"}, clear=False):
+            code, err = self.run_main(
+                ["ingest", "--db", "sqlite:///:memory:", "--copilot", "claude-code"])
+        self.assert_one_usage_line(code, err, "CCT_SA_JUDGE_WORKERS must be an integer")
+
+    def test_a_bad_embedding_worker_count_reports_one_line(self):
+        with mock.patch.dict(os.environ, {"CCT_SA_EMBED_WORKERS": "bogus"}, clear=False):
+            code, err = self.run_main(
+                ["ingest", "--db", "sqlite:///:memory:", "--copilot", "claude-code"])
+        self.assert_one_usage_line(code, err, "CCT_SA_EMBED_WORKERS must be an integer")
+
+    def test_a_malformed_user_config_file_is_named(self):
+        import tempfile
+        from pathlib import Path
+        from session_analytics import config as cfgmod
+
+        bad = Path(tempfile.mkdtemp(prefix="cct-sa-badcfg-")) / "session-analytics.json"
+        bad.write_text("{bad", encoding="utf-8")
+        with mock.patch.object(cfgmod, "_USER_CONFIG", bad):
+            code, err = self.run_main(
+                ["ingest", "--db", "sqlite:///:memory:", "--copilot", "claude-code"])
+        self.assert_one_usage_line(code, err, f"error: {bad}: not valid JSON (line 1")
+
     def test_load_config_raises_config_error_not_bare_valueerror(self):
         with mock.patch.dict(os.environ, {"CCT_SA_REDACTION": "bogus"}, clear=False):
             with self.assertRaises(ConfigError) as caught:

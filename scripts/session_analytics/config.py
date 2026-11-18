@@ -117,11 +117,24 @@ def _coerce_like(template: Any, raw: str) -> Any:
     override raises rather than silently changing type."""
     if isinstance(template, bool):
         return raw.lower() in ("1", "true", "yes")
-    if isinstance(template, int) and not isinstance(template, bool):
-        return int(raw)
-    if isinstance(template, float):
-        return float(raw)
+    try:
+        if isinstance(template, int):
+            return int(raw)
+        if isinstance(template, float):
+            return float(raw)
+    except ValueError:
+        kind = "an integer" if isinstance(template, int) else "a number"
+        raise ConfigError(f"expected {kind}, got {raw!r}") from None
     return raw
+
+
+def _int_setting(name: str, raw: Any) -> int:
+    """An integer setting from env or config; a value that is not one is the
+    user's configuration error (#450), named, not a ValueError traceback."""
+    try:
+        return int(str(raw))
+    except (TypeError, ValueError):
+        raise ConfigError(f"{name} must be an integer, got {raw!r}") from None
 
 
 # Keys the Studio config page exposes (order = display order). Secret-bearing
@@ -870,7 +883,13 @@ def load_config(
     data = _read_defaults()
     user_config = _user_config_path()
     if user_config.is_file():
-        data = _deep_merge(data, _load_json_text(user_config.read_text(encoding="utf-8")))
+        try:
+            user_data = _load_json_text(user_config.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ConfigError(
+                f"{user_config}: not valid JSON (line {exc.lineno}, column {exc.colno}): {exc.msg}"
+            ) from None
+        data = _deep_merge(data, user_data)
     if extra_overrides:
         data = _deep_merge(data, extra_overrides)
 
@@ -978,7 +997,7 @@ def load_config(
         override=override,
         by_copilot=by_copilot,
         default=default_spec,
-        workers=int(env(ENV_JUDGE_WORKERS) or jdata.get(C.CFG_JUDGE_WORKERS) or 2),
+        workers=_int_setting(ENV_JUDGE_WORKERS, env(ENV_JUDGE_WORKERS) or jdata.get(C.CFG_JUDGE_WORKERS) or 2),
         ollama_url=str(env(ENV_OLLAMA_URL) or jdata.get(C.CFG_OLLAMA_URL) or "http://localhost:11434"),
         base_url=str(env(ENV_JUDGE_BASE_URL) or jdata.get(C.CFG_JUDGE_BASE_URL) or ""),
         api_key=str(env(ENV_JUDGE_API_KEY) or ""),
@@ -1032,8 +1051,8 @@ def load_config(
         backend=str(_embed_value(C.CFG_EMBEDDING_BACKEND, ENV_EMBED_BACKEND)),
         model=str(_embed_value(C.CFG_EMBEDDING_MODEL, ENV_EMBED_MODEL)),
         ollama_url=str(_embed_value(C.CFG_OLLAMA_URL, ENV_OLLAMA_URL)),
-        input_cap_chars=int(_embed_value(C.CFG_EMBEDDING_INPUT_CAP, ENV_EMBED_INPUT_CAP)),
-        workers=int(_embed_value(C.CFG_EMBEDDING_WORKERS, ENV_EMBED_WORKERS)),
+        input_cap_chars=_int_setting(ENV_EMBED_INPUT_CAP, _embed_value(C.CFG_EMBEDDING_INPUT_CAP, ENV_EMBED_INPUT_CAP)),
+        workers=_int_setting(ENV_EMBED_WORKERS, _embed_value(C.CFG_EMBEDDING_WORKERS, ENV_EMBED_WORKERS)),
     )
 
     # similarity (#287): the same discipline as embedding — the data
