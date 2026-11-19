@@ -85,9 +85,16 @@ auto-merge at finalize (the driver never merges locally):
   that was closed by hand is journaled `pr_stale` and a new PR is created;
   a merged one parks `pr_error`. A closed PR on the branch is never
   adopted. The driver never merges.
-- **Close target**: the PR title's `(Closes #N)` marker comes from config
-  `pr.closes` (a list), else the spec's `origin:` issue number; missing →
-  parks `pr_config`. Optional `pr.title` overrides the title prefix.
+- **Close target**: config `pr.closes` (a list), else the spec's `origin:`
+  issue number; missing → parks `pr_config`. The PR body carries one
+  `Closes #N` line per target, since GitHub links closing keywords only from
+  the body and commit messages; the title gets a `(Closes #N)` marker for the
+  first. After `gh pr create` or `gh pr edit` the driver reads
+  `closingIssuesReferences` (three tries, `CCT_PR_CLOSES_RETRY_SEC` apart,
+  default 2) and parks `pr_error` unless it equals the close targets (#471).
+  A PR into a base other than the repository's default branch only warns:
+  GitHub links closing keywords on the default branch alone. Optional
+  `pr.title` overrides the title prefix.
 - **WIP-push-on-escalation**: parking under `pr`/`merge` pushes the feature
   branch (best-effort — a push failure is journaled and never blocks the
   park); `advisory` parks locally only.

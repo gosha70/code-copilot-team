@@ -15,6 +15,10 @@
 #      recovery edit can fail silently. Title must be set inline at
 #      `gh pr create` time.
 #
+#   4. A close keyword only in the title links no issue (#471): GitHub
+#      reads closing keywords from the body and commit messages, so
+#      each --closes number must appear in one of them.
+#
 #   3. --body-file path not visible to gh because of sandbox/host
 #      filesystem split (also PR #41). Body file existence must be
 #      verified in the same shell that will run `gh`, immediately
@@ -102,6 +106,10 @@ else
     EXPECTED_IDS+=("$trimmed")
   done
 fi
+
+# IDs a close keyword in a commit message or the body names (#471):
+# GitHub links closing keywords from those two, never from the title.
+LINKED_IDS=()
 
 # Helper: is an ID in the expected list?
 id_expected() {
@@ -191,6 +199,7 @@ scan_line() {
     found_id="$(echo "$match" | grep -oE '[0-9]+' | head -1)"
     if id_expected "$found_id"; then
       printf '  [ok]   %s: #%s (intended; match=%q)\n' "$context" "$found_id" "$match"
+      [[ "$context" != "title" ]] && LINKED_IDS+=("$found_id")
     else
       printf '  [FAIL] %s: #%s NOT in --closes (%s)\n' "$context" "$found_id" "$CLOSES" >&2
       printf '         line:  %s\n' "$line" >&2
@@ -261,6 +270,27 @@ else
   done < "$BODY_FILE"
 fi
 echo
+
+# ── Check 2b: every --closes ID is linked by the body or a commit ─────
+
+if [[ "$NO_CLOSE" -eq 0 ]]; then
+  echo "=== pre-pr-check: each --closes issue is linked ==="
+  for id in "${EXPECTED_IDS[@]}"; do
+    linked=0
+    # bash 3.2 + set -u: an empty array cannot be expanded.
+    if [[ "${#LINKED_IDS[@]}" -gt 0 ]]; then
+      for l in "${LINKED_IDS[@]}"; do [[ "$l" == "$id" ]] && linked=1; done
+    fi
+    if [[ "$linked" -eq 1 ]]; then
+      echo "  [PASS] #$id has a close keyword in the body or a commit message"
+    else
+      echo "  [FAIL] #$id has no close keyword in the body or a commit message — GitHub ignores the title, so merging would not close it" >&2
+      OVERALL_OK=0
+      ANY_FAIL_REASON+="#$id not linked by the body or a commit message; "
+    fi
+  done
+  echo
+fi
 
 # ── Check 3: title sanity ─────────────────────────────────────────────
 
