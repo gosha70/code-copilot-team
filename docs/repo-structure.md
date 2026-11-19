@@ -58,7 +58,7 @@ code-copilot-team/
 │   ├── test-peer-review.sh             95 peer-review runner tests
 │   ├── test-review-loop.sh           237 review loop integration tests
 │   ├── test-setup-reviewer.sh           43 copilot reviewer installer tests
-│   ├── test-auto-build-loop.sh        1381 auto-build driver tests
+│   ├── test-auto-build-loop.sh        1403 auto-build driver tests
 │   ├── test-ui-harness.sh              87 visual-harness contract tests
 │   ├── test-routing-config.sh         365 execution-profile registry + result + cli tests
 │   ├── test-routing-failover.sh       227 circuit + action + selection + supervisor + identity tests (#251 B)
@@ -66,7 +66,7 @@ code-copilot-team/
 │   ├── test-routing-packet.sh          99 immutable delegation-packet tests (#254 C T2)
 │   ├── test-routing-delegation.sh     180 route-class + packet execution + reconciliation tests (#254 C T3-T5)
 │   ├── test-routing-recovery.sh       375 probe-state + timing + probe + tick-wake tests (#257 D)
-│   ├── test-pre-pr-check.sh           11 close-keyword audit tests (#408)
+│   ├── test-pre-pr-check.sh           17 close-keyword audit tests (#408)
 │   ├── test-github-hardening.sh       14 hardening audit tests (classic + ruleset sources)
 │   ├── test-cct-home.sh               146 home resolver + `cct home` tests (#411)
 │   ├── test-wiki-setup.sh             54 managed wiki-studio install tests (#384)

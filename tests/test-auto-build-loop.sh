@@ -178,6 +178,12 @@ TOML
 # Logs every invocation's argv to $GH_LOG. Simulates PR existence via
 # $GH_PR_STATE.{n,url} so `pr view` after `pr create` returns the PR (drives
 # resume idempotency). Set GH_AUTH_FAIL=1 to make `gh auth status` fail.
+# `pr create`/`pr edit` keep their --body-file in $GH_PR_STATE.body, and
+# `pr view --json closingIssuesReferences` parses close keywords from that
+# body only, as GitHub does (#471); GH_CLOSING_REFS='[n,...]' overrides it,
+# and GH_CLOSING_LAG=N answers [] to the first N reads (GitHub still linking).
+# `repo view --json defaultBranchRef` names GH_DEFAULT_BRANCH (default main-dev,
+# the fixtures' base).
 
 GH_BIN_DIR=$(mktemp -d)
 cat > "$GH_BIN_DIR/gh" << 'GH'
@@ -185,18 +191,29 @@ cat > "$GH_BIN_DIR/gh" << 'GH'
 LOG="${GH_LOG:-/dev/null}"
 STATE="${GH_PR_STATE:-/tmp/mock-gh-pr}"
 printf '%s\n' "$*" >> "$LOG"
+keep_body() {
+    while [[ $# -gt 0 ]]; do
+        [[ "$1" == "--body-file" ]] && { cp "$2" "$STATE.body"; return; }
+        shift
+    done
+}
 if [[ "${1:-}" == "--version" ]]; then echo "gh version 0.0.0 (mock)"; exit 0; fi
 if [[ "${1:-}" == "auth" ]]; then
     [[ "${GH_AUTH_FAIL:-}" == "1" ]] && exit 1
     exit 0
 fi
 # api (branch protection probe): 0 = protected, non-zero = unprotected.
+if [[ "${1:-} ${2:-}" == "repo view" ]]; then
+    printf '{"defaultBranchRef":{"name":"%s"}}\n' "${GH_DEFAULT_BRANCH:-main-dev}"
+    exit 0
+fi
 if [[ "${1:-}" == "api" ]]; then
     [[ "${GH_BRANCH_PROTECTED:-}" == "1" ]] && exit 0
     exit 1
 fi
 case "${1:-} ${2:-}" in
     "pr create")
+        keep_body "$@"
         n=$(( $(cat "$STATE.n" 2>/dev/null || echo 0) + 1 ))
         echo "$n" > "$STATE.n"
         url="https://github.com/mock/repo/pull/$n"
@@ -208,6 +225,22 @@ case "${1:-} ${2:-}" in
         # autoMergeRequest query: report armed state from $STATE.armed.
         if [[ "$*" == *autoMergeRequest* ]]; then
             [[ -f "$STATE.armed" ]] && echo '{"enabledAt":"now"}' || echo "null"
+            exit 0
+        fi
+        if [[ "$*" == *closingIssuesReferences* ]]; then
+            [[ -f "$STATE.url" ]] || exit 1
+            reads=$(( $(cat "$STATE.reads" 2>/dev/null || echo 0) + 1 ))
+            echo "$reads" > "$STATE.reads"
+            if (( reads <= ${GH_CLOSING_LAG:-0} )); then
+                refs="[]"
+            elif [[ -n "${GH_CLOSING_REFS:-}" ]]; then
+                refs="$GH_CLOSING_REFS"
+            else
+                refs=$(grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#[0-9]+' "$STATE.body" 2>/dev/null \
+                    | grep -oE '[0-9]+' | sort -nu | paste -sd, -)
+                refs="[$refs]"
+            fi
+            jq -cn --argjson r "$refs" '{closingIssuesReferences: ($r | map({number: .}))}'
             exit 0
         fi
         # state query (#427): OPEN unless a test wrote $STATE.state.
@@ -229,7 +262,7 @@ case "${1:-} ${2:-}" in
             echo "[]"
         fi
         exit 0 ;;
-    "pr edit") exit 0 ;;
+    "pr edit") keep_body "$@"; exit 0 ;;
     "pr merge")
         [[ "${GH_MERGE_FAIL:-}" == "1" ]] && exit 1
         echo "armed" > "$STATE.armed"
@@ -1233,6 +1266,76 @@ assert_contains "branch pushed (events journal)" "$(cat "$P/.cct/auto-build/demo
 RC2=0; git -C "$BARE" rev-parse --verify -q feature/demo-feat >/dev/null 2>&1 || RC2=$?
 assert_exit "feature branch present on remote" 0 "$RC2"
 assert_eq "no --force in any gh argv" "0" "$(grep -c -- '--force' "$GH_LOG")"
+assert_contains "#471: the PR body carries the close keyword" "$(cat "$GH_PR_STATE.body")" "Closes #99"
+assert_contains "#471: finalize reads the closing issues GitHub linked" "$(grep '^pr view' "$GH_LOG")" "closingIssuesReferences"
+assert_contains "#471: the linked closing issues are journaled as verified" "$(cat "$P/.cct/auto-build/demo-feat/events.jsonl")" "pr_closes_verified"
+rm -rf "$P" "$BARE" "$GH_LOG"
+
+# A2 (#471): every pr.closes entry gets its own close keyword in the body.
+P=$(setup_project)
+cfg_set "$P" '.profile="pr" | .phases.milestone_every=0 | .pr={closes:[99,100],title:""}'
+BARE=$(add_remote "$P")
+GH_LOG=$(mktemp); GH_PR_STATE=$(mktemp -u); export GH_LOG GH_PR_STATE
+run_driver "$P"
+assert_exit "#471: a PR closing two issues completes" 0 "$RC"
+assert_contains "#471: the body closes the first issue" "$(cat "$GH_PR_STATE.body")" "Closes #99"
+assert_contains "#471: the body closes the second issue" "$(cat "$GH_PR_STATE.body")" "Closes #100"
+assert_contains "#471: both are verified" "$(cat "$P/.cct/auto-build/demo-feat/events.jsonl")" "closes #99, #100"
+rm -rf "$P" "$BARE" "$GH_LOG"
+
+# A3 (#471): GitHub links other issues than pr.closes (none here, as for a
+#     PR into a non-default branch) → park pr_error, naming both lists; the
+#     PR stays in the ledger so --resume adopts it instead of duplicating.
+P=$(setup_project)
+cfg_set "$P" '.profile="pr" | .phases.milestone_every=0 | .pr={closes:[99],title:""}'
+BARE=$(add_remote "$P")
+GH_LOG=$(mktemp); GH_PR_STATE=$(mktemp -u); export GH_LOG GH_PR_STATE
+GH_CLOSING_REFS='[]' CCT_PR_CLOSES_RETRY_SEC=0 run_driver "$P"
+assert_exit "#471: a PR that would close nothing parks" 4 "$RC"
+assert_eq "#471: the read is tried three times before parking" "3" "$(grep -c 'closingIssuesReferences' "$GH_LOG")"
+ESC="$P/.cct/auto-build/demo-feat/escalations/esc-1.json"
+assert_eq "#471: the park reason is pr_error" "pr_error" "$(jq -r '.reason' "$ESC" 2>/dev/null)"
+assert_contains "#471: the park names what GitHub linked and what was expected" "$(jq -r '.detail' "$ESC" 2>/dev/null)" "links closing issue(s) [none] but its close targets are [99]"
+assert_eq "#471: the PR is still recorded for --resume" "1" "$(jq -r '.pr.number' "$P/.cct/auto-build/demo-feat/state.json")"
+rm -rf "$P" "$BARE" "$GH_LOG"
+
+# A4 (#471): GitHub links the body's keyword only on the second read → the
+#     retry absorbs the lag and the run completes without parking.
+P=$(setup_project)
+cfg_set "$P" '.profile="pr" | .phases.milestone_every=0 | .pr={closes:[99],title:""}'
+BARE=$(add_remote "$P")
+GH_LOG=$(mktemp); GH_PR_STATE=$(mktemp -u); export GH_LOG GH_PR_STATE
+GH_CLOSING_LAG=1 CCT_PR_CLOSES_RETRY_SEC=0 run_driver "$P"
+assert_exit "#471: a late link is retried, not parked" 0 "$RC"
+assert_eq "#471: ...after exactly two reads" "2" "$(grep -c 'closingIssuesReferences' "$GH_LOG")"
+assert_contains "#471: ...and verified" "$(cat "$P/.cct/auto-build/demo-feat/events.jsonl")" "pr_closes_verified"
+rm -rf "$P" "$BARE" "$GH_LOG"
+
+# A5 (#471): a PR into a branch that is not the default one gets a warning,
+#     not a park: GitHub links closing keywords only on the default branch.
+P=$(setup_project)
+cfg_set "$P" '.profile="pr" | .phases.milestone_every=0 | .pr={closes:[99],title:""}'
+BARE=$(add_remote "$P")
+GH_LOG=$(mktemp); GH_PR_STATE=$(mktemp -u); export GH_LOG GH_PR_STATE
+GH_DEFAULT_BRANCH=trunk GH_CLOSING_REFS='[]' run_driver "$P"
+assert_exit "#471: a PR into a non-default base completes" 0 "$RC"
+assert_contains "#471: ...with a warning naming both branches" "$OUTPUT" "targets 'main-dev', not the default branch 'trunk'"
+assert_contains "#471: ...journaled" "$(cat "$P/.cct/auto-build/demo-feat/events.jsonl")" "pr_closes_not_linked"
+assert_eq "#471: ...and no closing-issues read to wait on" "0" "$(grep -c 'closingIssuesReferences' "$GH_LOG")"
+rm -rf "$P" "$BARE" "$GH_LOG"
+
+# A6 (#471): with no pr.closes the close target is the plan's origin issue
+#     (derive_close_ids), and that is what the linked issues are checked against.
+P=$(setup_project)
+cfg_set "$P" '.profile="pr" | .phases.milestone_every=0 | .pr={title:""}'
+printf -- '---\nspec_mode: lightweight\nfeature_id: demo-feat\nstatus: approved\ndate: 2026-07-13\nissue: 4242\norigin:\n  type: internal\n  reason: driver test fixture\n  origin_claim: |\n    Toy feature for auto-build driver tests.\n---\n# Plan: demo\n' > "$P/specs/demo-feat/plan.md"
+git -C "$P" add -A && git -C "$P" commit -q -m "plan names its issue"
+BARE=$(add_remote "$P")
+GH_LOG=$(mktemp); GH_PR_STATE=$(mktemp -u); export GH_LOG GH_PR_STATE
+run_driver "$P"
+assert_exit "#471: a PR closing the plan's origin issue completes" 0 "$RC"
+assert_contains "#471: the body closes the origin issue" "$(cat "$GH_PR_STATE.body")" "Closes #4242"
+assert_contains "#471: the origin issue is what the linked issues are checked against" "$(cat "$P/.cct/auto-build/demo-feat/events.jsonl")" "closes #4242"
 rm -rf "$P" "$BARE" "$GH_LOG"
 
 # B: resume detects the existing PR and edits — no duplicate create

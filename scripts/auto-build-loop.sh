@@ -5981,10 +5981,16 @@ resume_parked() {
 
 
 compose_pr_body() {
-    # compose_pr_body <out-file>
-    local out="$1"
+    # compose_pr_body <out-file> <closes-csv>
+    local out="$1" closes="$2" id
     {
         echo "## Autonomous build — $FEATURE_ID"
+        echo
+        # #471: GitHub links a closing keyword only from the PR body and
+        # commit messages, never the title; one line per close target.
+        for id in ${closes//,/ }; do
+            echo "Closes #$id"
+        done
         echo
         echo "Built by \`scripts/auto-build-loop.sh\` under the \`$PROFILE\` profile."
         # #404: a bypassed phase is reported as bypassed, never folded
@@ -6025,16 +6031,16 @@ open_or_update_pr() {
     # wiki-studio 0.9.0 run wrote its body onto a PR a human had closed
     # during the park, journaled pr_updated and landed with no open PR.
     local body="$LEDGER_DIR/pr-body.md"
-    compose_pr_body "$body"
 
     # Close target and title are needed on both paths: a PR the driver
-    # adopts gets the same title marker and the same audit as one it
-    # creates, so a hand-opened PR does not keep GitHub's default title.
+    # adopts gets the same body, title marker and audit as one it creates,
+    # so a hand-opened PR does not keep GitHub's default title.
     local closes first_close title
     closes=$(derive_close_ids)
     if [[ -z "$closes" ]]; then
         dispose "pr_config" "no PR close target — set pr.closes in $CONFIG_PATH or an origin issue in plan.md frontmatter" "null"
     fi
+    compose_pr_body "$body" "$closes"
     first_close="${closes%%,*}"
     title=$(cfg '.pr.title' "feat($FEATURE_ID): autonomous build")
     title="$title (Closes #$first_close)"
@@ -6085,6 +6091,7 @@ open_or_update_pr() {
         PR_ACTION="updated"
         state_set '.pr.number = ($n | tonumber) | .pr.url = $u' --arg n "$PR_NUMBER" --arg u "$PR_URL"
         journal "pr_updated" "#$PR_NUMBER"
+        verify_closing_issues "$closes"
         return 0
     fi
 
@@ -6101,6 +6108,56 @@ open_or_update_pr() {
     PR_ACTION="opened"
     state_set '.pr.number = ($n | tonumber) | .pr.url = $u' --arg n "$PR_NUMBER" --arg u "$PR_URL"
     journal "pr_opened" "#$PR_NUMBER $PR_URL"
+    verify_closing_issues "$closes"
+}
+
+# GitHub can take a moment to link the closing keywords of a body it was
+# just given; the read is retried before the run parks (#471).
+PR_CLOSES_READ_ATTEMPTS=3
+
+verify_closing_issues() {
+    # verify_closing_issues <closes-csv> (#471): read the issues GitHub
+    # actually linked to PR_NUMBER as closing, and park pr_error unless they
+    # are exactly the close targets from derive_close_ids (pr.closes, else
+    # the plan's origin issue): a PR that merges without closing its issue,
+    # or closes another, is not a finished PR. The PR is already in the
+    # ledger, so --resume adopts and re-edits it, then checks again.
+    local want got="" out default attempt read_ok=0
+    want=$(printf '%s\n' ${1//,/ } | sort -nu | paste -sd, -)
+
+    # GitHub links closing keywords only for a PR into the default branch.
+    # Into any other base there is nothing to check: warn and go on. An
+    # unreadable default branch is not a reason to skip the check.
+    default=$( ( cd "$PROJECT_DIR" && "$GH_BIN" repo view --json defaultBranchRef ) 2>/dev/null \
+        | jq -r '.defaultBranchRef.name // empty' 2>/dev/null || true )
+    if [[ -n "$default" && "$default" != "$BRANCH_BASE" ]]; then
+        echo "[auto-build] WARNING: PR #$PR_NUMBER targets '$BRANCH_BASE', not the default branch '$default'; GitHub links closing keywords only on the default branch, so merging it will not close #${want//,/, #}" >&2
+        journal "pr_closes_not_linked" "#$PR_NUMBER targets $BRANCH_BASE, not the default branch $default: merging it will not close #${want//,/, #}"
+        return 0
+    fi
+
+    for (( attempt = 1; attempt <= PR_CLOSES_READ_ATTEMPTS; attempt++ )); do
+        if (( attempt > 1 )); then
+            sleep "${CCT_PR_CLOSES_RETRY_SEC:-2}"
+        fi
+        read_ok=0
+        if out=$( ( cd "$PROJECT_DIR" && "$GH_BIN" pr view "$PR_NUMBER" --json closingIssuesReferences ) 2>/dev/null ) \
+           && got=$(printf '%s' "$out" | jq -er '[.closingIssuesReferences[].number] | unique | map(tostring) | join(",")' 2>/dev/null); then
+            read_ok=1
+            if [[ "$got" == "$want" ]]; then
+                journal "pr_closes_verified" "#$PR_NUMBER closes #${want//,/, #}"
+                return 0
+            fi
+        fi
+    done
+
+    if (( read_ok == 0 )); then
+        dispose "pr_error" "could not read the closing issues of PR #$PR_NUMBER after $PR_CLOSES_READ_ATTEMPTS attempts (gh pr view failed) — cannot confirm merging it closes #${want//,/, #}" "null"
+        return 1
+    fi
+    dispose "pr_error" "PR #$PR_NUMBER links closing issue(s) [${got:-none}] but its close targets are [$want] — merging it would not close exactly those. GitHub links closing keywords only from the body and commit messages; fix the PR's body or linked issues, then --resume" \
+        "$(jq -n --arg got "$got" --arg want "$want" '{closing_issues_linked: $got, closing_issues_expected: $want}')"
+    return 1
 }
 
 # arm_auto_merge (FR-2..FR-5, merge profile): arm GitHub-native gated
