@@ -37,6 +37,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..ingest.redaction import OutboundPolicy
 from ..relational.db import Database
 
 # The FR-1 allowlist, single-sourced into the query.
@@ -65,10 +66,24 @@ class ComposedInput:
     unembeddable: bool
 
 
-def compose_input(db: Database, session_id: int, *, cap_chars: int) -> ComposedInput:
-    """Compose the deterministic, redacted embedding input for a session."""
+def compose_input(
+    db: Database, session_id: int, *, cap_chars: int, policy: OutboundPolicy | None = None,
+) -> ComposedInput:
+    """Compose the deterministic, redacted embedding input for a session.
+
+    The input goes to the embedding provider, off the machine, so each
+    preview passes the outbound floor (#457): a project tightened after
+    ingest sends markers. An opted-out session is never composed — the
+    runner does not select it — and composing one here yields nothing.
+    """
     if cap_chars <= 0:
         raise ValueError(f"cap_chars must be positive, got {cap_chars}")
+    policy = policy if policy is not None else OutboundPolicy.load(db, session_id=session_id)
+    if not policy.keeps(session_id):
+        return ComposedInput(
+            session_id=session_id, text="", turns_used=0,
+            truncated=False, unembeddable=True,
+        )
 
     rows = db.query(_SELECT, (session_id,))
 
@@ -88,7 +103,7 @@ def compose_input(db: Database, session_id: int, *, cap_chars: int) -> ComposedI
         previous_seq = sequence_num
         if preview is None or preview == "":
             continue  # a turn with no preview contributes nothing
-        parts.append(f"{role}: {preview}")
+        parts.append(f"{role}: {policy.text(session_id, preview)}")
 
     if not parts:
         return ComposedInput(

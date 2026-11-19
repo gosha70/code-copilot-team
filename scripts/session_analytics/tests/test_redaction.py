@@ -104,5 +104,39 @@ class TestStoreRedaction(RegistryResetTestCase):
             db.close()
 
 
+
+class OutboundFloor(unittest.TestCase):
+    """#457 FR-005: the rule every off-machine path applies."""
+
+    def test_the_stricter_mode_wins(self):
+        from session_analytics.ingest.redaction import outbound_mode
+
+        self.assertEqual(outbound_mode(C.REDACT_NONE, C.REDACT_CODE, False), C.REDACT_CODE)
+        self.assertEqual(outbound_mode(C.REDACT_METADATA_ONLY, C.REDACT_CODE, False), C.REDACT_METADATA_ONLY)
+        self.assertEqual(outbound_mode(None, C.REDACT_CODE, False), C.REDACT_CODE)
+
+    def test_an_unknown_mode_fails_closed(self):
+        from session_analytics.ingest.redaction import outbound_mode
+
+        self.assertEqual(outbound_mode("bogus", C.REDACT_NONE, False), C.REDACT_METADATA_ONLY)
+
+    def test_an_opted_out_project_is_skipped(self):
+        from session_analytics.ingest.redaction import outbound_mode
+
+        self.assertIsNone(outbound_mode(C.REDACT_METADATA_ONLY, C.REDACT_METADATA_ONLY, True))
+
+    def test_text_tightened_after_ingest_leaves_as_a_marker_not_a_rerun(self):
+        from session_analytics.ingest.redaction import outbound_text
+
+        # A preview stored under none is already cut at 500 chars, so a
+        # fence opened before the cut has no closing marker: re-redacting
+        # it under code would leave the secret. The marker never does.
+        cut = ("x" * 480) + "```\nsk-secret"
+        self.assertNotIn("sk-secret", outbound_text(cut, C.REDACT_NONE, C.REDACT_CODE))
+        self.assertTrue(outbound_text(cut, C.REDACT_NONE, C.REDACT_CODE).startswith("[redacted"))
+        self.assertEqual(outbound_text("kept", C.REDACT_CODE, C.REDACT_CODE), "kept")
+        self.assertIsNone(outbound_text(None, C.REDACT_NONE, C.REDACT_METADATA_ONLY))
+
+
 if __name__ == "__main__":
     unittest.main()

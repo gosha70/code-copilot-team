@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
@@ -23,6 +24,7 @@ from .. import archive as arch
 from .. import constants as C
 from ..config import NoiseConfig
 from ..embedding.cluster_reader import KuzuGraphSnapshot
+from ..ingest.redaction import OutboundPolicy
 from ..mcp import tools as mcp_tools
 from ..relational.db import Database
 from ..session_filter import keep_clause
@@ -60,6 +62,9 @@ class AskContext:
     db: Database
     kuzu_path: str
     noise: Optional[NoiseConfig]
+    # The outbound floor (#457): everything a tool returns is sent to the
+    # Ask model. Loaded per question by the caller; None loads it per call.
+    outbound: Optional[OutboundPolicy] = None
 
 
 ToolFn = Callable[[AskContext, Mapping[str, Any]], dict[str, Any]]
@@ -82,6 +87,26 @@ def _keep(ctx: AskContext, alias: str) -> tuple[str, tuple[Any, ...]]:
     still reads that session — asking about a thing by name is not a
     discovery."""
     return keep_clause(ctx.noise, alias) if ctx.noise else ("1=1", ())
+
+
+def _policy(ctx: AskContext) -> OutboundPolicy:
+    return ctx.outbound if ctx.outbound is not None else OutboundPolicy.load(ctx.db)
+
+
+def _opted_out(sid: int) -> dict[str, Any]:
+    """The answer for a session whose project is opted out: it names the
+    rule, not the session's contents (#457 D2)."""
+    return {"error": f"session {sid} is not available: its project is opted out"}
+
+
+def _names_skipped(policy: OutboundPolicy, value: Any) -> bool:
+    """Whether a graph value names an opted-out session or project: its
+    session key, its project path, or a path inside that project."""
+    if not isinstance(value, str) or not value:
+        return False
+    if not policy.keeps_key(value) or not policy.keeps_project(value):
+        return True
+    return any(value.startswith(p.rstrip("/") + "/") for p in policy.excluded_projects)
 
 
 def _open_graph(ctx: AskContext):
@@ -175,7 +200,8 @@ def find_sessions(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
         )
     except (mcp_tools.UnknownSortError, mcp_tools.UnknownTagError) as exc:
         raise BadArgumentsError(str(exc)) from None
-    sessions = [_session_row(s) for s in rows]
+    policy = _policy(ctx)
+    sessions = [_session_row(s) for s in rows if policy.keeps(s["id"])]
     return {"sessions": sessions, "count": len(sessions), "sort": sort}
 
 
@@ -183,6 +209,9 @@ def session_summary(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
     from ..judge.session_analysis import all_analyses
 
     sid = _int(args, "session_id", None, lo=1, hi=2**31)
+    policy = _policy(ctx)
+    if not policy.keeps(sid):
+        return _opted_out(sid)
     details = mcp_tools.get_session_details(ctx.db, sid)
     if "error" in details:
         return {"error": details["error"]}
@@ -192,7 +221,10 @@ def session_summary(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
     summary["tools"] = details["tool_usage"]
     # `errors` stays the session's COUNT (as in find_sessions); the
     # messages are a sample, named as one.
-    summary["error_samples"] = details["errors"][:ERRORS_SHOWN]
+    summary["error_samples"] = [
+        {**e, "message": policy.text(sid, e["message"]), "error_type": policy.error_type(sid, e["error_type"])}
+        for e in details["errors"][:ERRORS_SHOWN]
+    ]
     summary["response_time"] = details.get("latency")
     summary["archived_turns"] = sum(1 for t in details["turns"] if t["archived"])
     summary["analyses"] = {
@@ -202,7 +234,7 @@ def session_summary(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def session_turns(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
-    from ..judge.session_analysis import build_transcript, load_spec, render_transcript
+    from ..judge.session_analysis import SessionOptedOut, build_transcript, load_spec, render_transcript
 
     sid = _int(args, "session_id", None, lo=1, hi=2**31)
     start = _int(args, "from_turn", 1, lo=1, hi=2**31)
@@ -210,9 +242,12 @@ def session_turns(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
     if ctx.db.query_one("SELECT id FROM copilot_session WHERE id = ?", (sid,)) is None:
         return {"error": f"session {sid} not found"}
     spec = load_spec()
-    transcript = build_transcript(
-        ctx.db, sid, max_chars=spec.max_transcript_chars, per_turn_cap=spec.per_turn_cap_chars
-    )
+    try:
+        transcript = build_transcript(
+            ctx.db, sid, max_chars=spec.max_transcript_chars, per_turn_cap=spec.per_turn_cap_chars
+        )
+    except SessionOptedOut:
+        return _opted_out(sid)
     window = [t for t in transcript.all_turns if start <= t.sequence_num < start + count]
     total = len(transcript.all_turns)
     return {
@@ -233,12 +268,22 @@ def session_analyses(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]
     sid = _int(args, "session_id", None, lo=1, hi=2**31)
     if ctx.db.query_one("SELECT id FROM copilot_session WHERE id = ?", (sid,)) is None:
         return {"error": f"session {sid} not found"}
+    policy = _policy(ctx)
+    if not policy.keeps(sid):
+        return _opted_out(sid)
     out: dict[str, Any] = {"session_id": sid}
     for kind, row in all_analyses(ctx.db, sid).items():
         if row is None:
             out[kind] = {"status": "not run"}
         elif row["parse_status"] != PARSE_OK:
-            out[kind] = {"status": row["parse_status"], "error": row["error"]}
+            out[kind] = {"status": row["parse_status"], "error": policy.text(sid, row["error"])}
+        elif policy.floors(sid):
+            # A stored analysis quotes the turns it was given; a project
+            # tightened since then sends a marker in its place (#457).
+            out[kind] = {
+                "status": "ok", "judge": row["judge_model"],
+                "result": policy.text(sid, json.dumps(row["result"], ensure_ascii=False)),
+            }
         else:
             out[kind] = {"status": "ok", "judge": row["judge_model"], "result": row["result"]}
     return out
@@ -250,6 +295,7 @@ def search_text(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
         raise BadArgumentsError("query is required")
     limit = _int(args, "limit", 20, lo=1, hi=SEARCH_MAX)
     keep_sql, keep_params = _keep(ctx, "s")
+    policy = _policy(ctx)
     hits: list[dict[str, Any]] = []
     seen: set[tuple[int, int]] = set()
     # Same policy as every list on the pages: noise is left out of a
@@ -257,10 +303,12 @@ def search_text(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
     for h in arch.search_traces(ctx.db, query, limit=limit, noise=ctx.noise):
         key = (h["session_ref"], h["sequence_num"])
         seen.add(key)
+        if not policy.keeps(h["session_ref"]):
+            continue
         hits.append({
             "session_id": h["session_ref"], "turn": h["sequence_num"],
             "project_path": h["project_path"], "source": "archive",
-            "snippet": h["snippet"][:SNIPPET_CHARS],
+            "snippet": policy.text(h["session_ref"], h["snippet"][:SNIPPET_CHARS]),
         })
     if len(hits) < limit:
         # Previews exist for EVERY session; archived text only where a
@@ -281,9 +329,12 @@ def search_text(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
             if key in seen:
                 continue
             seen.add(key)
+            if not policy.keeps(sid):
+                continue
             hits.append({
                 "session_id": int(sid), "turn": int(seq), "project_path": project,
-                "source": "preview", "snippet": arch.make_snippet(preview or "", query)[:SNIPPET_CHARS],
+                "source": "preview",
+                "snippet": policy.text(sid, arch.make_snippet(preview or "", query)[:SNIPPET_CHARS]),
             })
             if len(hits) >= limit:
                 break
@@ -291,18 +342,25 @@ def search_text(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def patterns(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
-    return mcp_tools.analyze_patterns(
+    policy = _policy(ctx)
+    out = mcp_tools.analyze_patterns(
         ctx.db,
         workspace=_str(args, "workspace") or None,
         tool=_str(args, "tool") or None,
         error_type=_str(args, "error_type") or None,
         noise=ctx.noise,
+        outbound_filter=policy.project_filter_sql("s.project_path"),
     )
+    out["errors"] = policy.error_types(out["errors"])
+    return out
 
 
 def similar_sessions(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
     sid = _int(args, "session_id", None, lo=1, hi=2**31)
     limit = _int(args, "limit", 8, lo=1, hi=SIMILAR_MAX)
+    policy = _policy(ctx)
+    if not policy.keeps(sid):
+        return _opted_out(sid)
     try:
         out = mcp_tools.similar_sessions(ctx.db, ctx.kuzu_path, sid, limit=limit)
     except ImportError:
@@ -310,6 +368,7 @@ def similar_sessions(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]
     if "neighbors" in out:
         out["neighbors"] = [
             {k: v for k, v in n.items() if k != "kpi"} for n in out["neighbors"]
+            if policy.keeps_key(n["session_key"]) and policy.keeps(n["id"])
         ]
     return out
 
@@ -353,7 +412,26 @@ def graph_question(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
     # A graph-rendered answer carries its evidence as nodes and
     # relationships, not rows; the model gets them in a form it can read.
     elements = result.pop("elements", None)
+    policy = _policy(ctx)
+    if result.get("rows"):
+        result["rows"] = [
+            r for r in result["rows"] if not any(_names_skipped(policy, v) for v in r.values())
+        ]
     if elements is not None:
+        # Nothing names an opted-out session or project (#457 D2): its
+        # nodes go, and so do the relationships that touch them.
+        dropped = {
+            n["id"] for n in elements["nodes"]
+            if _names_skipped(policy, n.get("key"))
+            or any(_names_skipped(policy, v) for v in (n.get("props") or {}).values())
+        }
+        elements = {
+            "nodes": [n for n in elements["nodes"] if n["id"] not in dropped],
+            "edges": [
+                e for e in elements["edges"]
+                if e["source"] not in dropped and e["target"] not in dropped
+            ],
+        }
         # No empty `rows` beside the nodes: a model reads "rows: []" as
         # "nothing found" and argues with the relationships under it.
         result.pop("rows", None)
@@ -450,12 +528,14 @@ def store_facts(ctx: AskContext) -> dict[str, Any]:
             keep_params,
         )
     ]
+    # Totals may count an opted-out project; the list never names one (#457).
+    out_sql, out_params = _policy(ctx).project_filter_sql("project_path")
     projects = [
         {"project_path": r[0], "sessions": int(r[1])}
         for r in db.query(
-            f"SELECT project_path, COUNT(*) FROM copilot_session WHERE {keep_sql} "
+            f"SELECT project_path, COUNT(*) FROM copilot_session WHERE {keep_sql} AND {out_sql} "
             f"GROUP BY project_path ORDER BY 2 DESC LIMIT {TOP_PROJECTS}",
-            keep_params,
+            (*keep_params, *out_params),
         )
     ]
     # The same universe as the counts above: an archived or analysed

@@ -1419,9 +1419,13 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
     # ── Ask: a question in words, answered from the store ───────────────
     def _ask_context(conn: Database):
         from ..ask.tools import AskContext
+        from ..ingest.redaction import OutboundPolicy
 
         cfg = load_config()
-        return AskContext(db=conn, kuzu_path=kuzu_path or cfg.kuzu_path, noise=cfg.noise)
+        return AskContext(
+            db=conn, kuzu_path=kuzu_path or cfg.kuzu_path, noise=cfg.noise,
+            outbound=OutboundPolicy.load(conn, cfg),
+        )
 
     @app.get("/api/ask")
     def ask_info() -> dict[str, Any]:
@@ -1719,6 +1723,17 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             try:
                 row = sa.analyze_session(
                     conn, session_id, kind, judge=judge, force=req.force,
+                )
+            except sa.SessionOptedOut:
+                # Not a judge failure: the project is opted out, so nothing
+                # from the session is sent anywhere (#457 D2).
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "this session's project is opted out (ingest: off); "
+                                 "nothing from it is sent to a judge",
+                        "prerequisite": "project",
+                    },
                 )
             except JudgeTransportError as exc:
                 # A timeout is NOT the same failure as an unreachable

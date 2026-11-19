@@ -616,13 +616,17 @@ def analyze_patterns(
     tool: Optional[str] = None,
     error_type: Optional[str] = None,
     noise: Optional[NoiseConfig] = None,
+    outbound_filter: tuple[str, tuple] = ("1=1", ()),
 ) -> dict[str, Any]:
     """Aggregate pattern analysis across sessions. With ``noise`` given,
-    probe and temp-dir sessions are left out, as on every page."""
-    session_filter = ""
-    sparams: list[Any] = []
+    probe and temp-dir sessions are left out, as on every page.
+    ``outbound_filter`` is the #457 floor's project filter for callers whose
+    answer leaves the machine (Ask, MCP): a ``workspace`` filter must not
+    narrow the aggregate to an opted-out project."""
+    session_filter = f" AND {outbound_filter[0]}"
+    sparams: list[Any] = list(outbound_filter[1])
     if workspace:
-        session_filter = " AND s.project_path LIKE ?"
+        session_filter += " AND s.project_path LIKE ?"
         sparams.append(f"%{workspace}%")
     if noise is not None:
         keep_sql, keep_params = keep_clause(noise, "s")

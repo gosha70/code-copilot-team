@@ -25,7 +25,7 @@ from typing import Any, Optional
 from .. import constants as C
 from ..config import load_config, load_map
 from ..ingest.project_key import ProjectKeyResolver
-from ..ingest.redaction import redact_text, stricter_mode
+from ..ingest.redaction import OutboundPolicy, current_mode, outbound_mode, redact_text
 from ..mcp.tools import turn_latency
 from ..relational.db import Database, now_iso
 from .contracts import (
@@ -83,6 +83,12 @@ _CONFIG_LIST_CAP = 40
 #: evaluation alone on a laptop. Generous, because a timeout here throws
 #: away real work.
 ANALYSIS_TIMEOUT_SECONDS = 600
+
+
+class SessionOptedOut(LookupError):
+    """The session's project is configured ``ingest: "off"``: nothing from
+    it leaves the machine (#457 D2), so it is neither analysed nor shown to
+    Ask."""
 
 
 class UnknownAnalysisKindError(ValueError):
@@ -148,7 +154,15 @@ def build_transcript(
     short and they are the evidence coaching quotes); assistant turns are
     capped per turn, then the whole is capped by eliding the middle — the
     opening and the ending of a session carry the most signal.
+
+    The text leaves the machine (the analysis judge, Ask), so it passes the
+    outbound floor (#457): a session whose project is now opted out raises
+    ``SessionOptedOut``, and one whose project's mode was tightened after
+    ingest sends a metadata-only marker per turn.
     """
+    policy = OutboundPolicy.load(db, session_id=session_id)
+    if not policy.keeps(session_id):
+        raise SessionOptedOut(f"session {session_id}: its project is opted out (ingest: off)")
     rows = db.query(
         f"""
         SELECT t.sequence_num, t.role, t.content_preview, t.timestamp, t.id,
@@ -193,7 +207,7 @@ def build_transcript(
         # An archived row with EMPTY content is still archived (a
         # tool-result-only turn has no prose); only NULL means "no row".
         is_archived = content is not None
-        text = content if is_archived else (preview or "")
+        text = policy.text(session_id, content if is_archived else (preview or "")) or ""
         if is_archived:
             archived += 1
         if role != C.ROLE_USER and len(text) > per_turn_cap:
@@ -334,16 +348,13 @@ def project_context(db: Database, session_id: int) -> ProjectContext:
     # read under the STRICTER of two modes: the one recorded when this
     # session was ingested, and the project's CURRENT effective mode. A
     # project tightened after ingest must not leak under the stale mode.
+    # An opted-out project's files are not read at all (#457 D2).
     cfg = load_config()
     key = ProjectKeyResolver(cfg.project_id_rules).resolve(root)
-    override = cfg.project_override(key)
-    current = (
-        override.redaction_mode
-        if override is not None and override.redaction_mode is not None
-        else cfg.redaction_mode
-    )
-    recorded = str(row[1]) if row and row[1] else current
-    mode = stricter_mode(recorded, current)
+    current, ingest_off = current_mode(cfg, key)
+    mode = outbound_mode(str(row[1]) if row[1] else None, current, ingest_off)
+    if mode is None:
+        return ProjectContext(False, None, (), ())
     found: list[str] = []
     for name in _STEERING_FILES:
         if os.path.isfile(os.path.join(root, name)):
@@ -510,6 +521,8 @@ def analyze_session(
         raise UnknownAnalysisKindError(
             f"unknown analysis kind {kind!r}; known: {', '.join(sorted(spec.prompts))}"
         )
+    if not OutboundPolicy.load(db, session_id=session_id).keeps(session_id):
+        raise SessionOptedOut(f"session {session_id}: its project is opted out (ingest: off)")
     if not force:
         existing = get_analysis(db, session_id, kind)
         if existing is not None and existing["parse_status"] == PARSE_OK:

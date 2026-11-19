@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from ..config import EmbeddingConfig
+from ..ingest.redaction import OutboundPolicy
 from ..relational.db import Database
 from .composer import compose_input
 from .contracts import FIELD_MODEL, build_envelope, validate_envelope
@@ -108,8 +109,13 @@ def run_embed(
         tuple(params),
     )
 
+    # An opted-out project's sessions are not selected at all: nothing from
+    # them goes to the provider (#457 D2).
+    policy = OutboundPolicy.load(db, session_id=session_id)
     work: list[int] = []
     for sid, stored in rows:
+        if not policy.keeps(sid):
+            continue
         if stored is None:
             work.append(sid)
         elif overwrite:
@@ -149,7 +155,7 @@ def run_embed(
     for sid in work:
         try:
             composed = compose_input(
-                db, sid, cap_chars=embedding_cfg.input_cap_chars)
+                db, sid, cap_chars=embedding_cfg.input_cap_chars, policy=policy)
         except ValueError as exc:
             # e.g. duplicate sequence_num (T2): malformed durable state
             # fails closed for this session; the stored value is

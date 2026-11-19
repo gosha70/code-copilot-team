@@ -269,6 +269,18 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Changed
 
+- **Session Analytics: a project's privacy change applies to what leaves
+  the machine at once.** The per-turn judge, session analysis, Ask,
+  embeddings and the MCP server read stored text under the stricter of the
+  mode it was ingested with and the project's current mode. A project
+  tightened after ingest sends a `metadata-only` marker in place of each
+  stored text and a reduced error type. A project now set to
+  `ingest: "off"` sends nothing: no text, marker, row or id, and no list or
+  breakdown names it. Studio's own pages are unchanged. Canary secrets
+  planted in a fixture session and project now fail the build if any of
+  these paths sends what the mode removes, and a coverage check fails when
+  a module calls a judge, embedding or MCP transport without canary
+  coverage (#457).
 - **CONTRIBUTING.md states the spec-first process.** A "Spec-First for
   Features" section says to agree on scope in the issue, to create
   `specs/<feature-id>/` from the SDD templates with `status: draft` and
