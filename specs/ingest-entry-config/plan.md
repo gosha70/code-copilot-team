@@ -49,7 +49,10 @@ origin:
 ## Not done
 
 - Stores already ingested through Studio or quickstart keep their code-mode
-  previews until they are re-ingested (`ingest --full`). Session Analytics is
+  previews until they are re-ingested (`ingest --full` rewrites them).
+  Sessions an opted-out project already has in the store stay there: a full
+  re-ingest skips them without deleting them, so dropping them takes a new,
+  empty store. The CHANGELOG entry says both. Session Analytics is
   unreleased, so no migration is added.
 - The stale-mode gap on outbound paths (a project tightened after ingest
   still sends its old previews) is #457's scope, by the owner's ruling.

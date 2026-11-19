@@ -168,6 +168,19 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Fixed
 
+- **Studio and quickstart ingest apply the configuration.** Studio's
+  pipeline ingest step and the first-run ingest in `session_analytics start`
+  ignored the configured redaction mode, per-project overrides and
+  `ingest: "off"` opt-outs, project-id rules, pricing and developer id. A
+  store or project configured `metadata-only` got prose previews, and an
+  opted-out project was ingested. Every ingest entry point now resolves the
+  same configuration as `session_analytics ingest`. **If you ingested through
+  Studio or quickstart with a stricter mode configured, re-ingest with
+  `session_analytics ingest --full`**: it rewrites each stored session's
+  previews under your configuration. A full re-ingest skips an opted-out
+  project but does not delete what is already stored for it; to drop those
+  sessions, point Session Analytics at a new, empty store and run
+  `ingest --full` there (#473).
 - **`cct home migrate` output is safe to paste back into a shell.** It
   printed `moved: x -> /path/x`; pasted into zsh, the `>` opened
   `/path/x` for writing before the unknown command `moved:` failed, which
