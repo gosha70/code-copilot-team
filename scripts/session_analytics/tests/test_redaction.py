@@ -125,6 +125,16 @@ class OutboundFloor(unittest.TestCase):
 
         self.assertIsNone(outbound_mode(C.REDACT_METADATA_ONLY, C.REDACT_METADATA_ONLY, True))
 
+    def test_an_id_that_is_not_a_session_row_id_is_not_kept(self):
+        from session_analytics.ingest.redaction import OutboundPolicy
+
+        policy = OutboundPolicy(skip_ids=frozenset({7}))
+        self.assertTrue(policy.keeps(8))
+        self.assertFalse(policy.keeps(7))
+        for bad in (None, "seven", "", 1.5j):
+            with self.subTest(value=bad):
+                self.assertFalse(policy.keeps(bad))
+
     def test_text_tightened_after_ingest_leaves_as_a_marker_not_a_rerun(self):
         from session_analytics.ingest.redaction import outbound_text
 

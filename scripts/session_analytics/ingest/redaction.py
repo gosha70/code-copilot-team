@@ -218,7 +218,9 @@ class OutboundPolicy:
         try:
             return int(session_id) not in self.skip_ids
         except (TypeError, ValueError):
-            return True
+            # An id that is not a session row id cannot be checked against
+            # the opt-outs, so it is not sent: fail closed.
+            return False
 
     def keeps_key(self, session_key: Any) -> bool:
         """``keeps`` for a ``copilot:native_id`` session key."""

@@ -11,6 +11,7 @@ configuration changes:
 
 from __future__ import annotations
 
+import json
 import unittest
 
 from session_analytics import constants as C
@@ -36,7 +37,11 @@ class TheFloorAppliesWithoutReingest(RegistryResetTestCase):
     def test_a_project_tightened_after_ingest_sends_no_canary(self):
         for ingested, archive in self.CASES:
             with self.subTest(ingested=ingested, archive=archive):
-                K.assert_no_leak(self, self.ingest_then(ingested, archive=archive, project_mode=M), M)
+                captured = self.ingest_then(ingested, archive=archive, project_mode=M)
+                K.assert_no_leak(self, captured, M)
+                # A tightened session's search hits are skipped, not masked:
+                # a masked snippet would still say its text matched (#457).
+                self.assertEqual(json.loads(captured["ask search_text"])["hits"], [])
 
     def test_a_global_mode_tightened_after_ingest_sends_no_canary(self):
         for ingested, archive in self.CASES:
@@ -57,6 +62,29 @@ class TheFloorAppliesWithoutReingest(RegistryResetTestCase):
                 self.assertEqual(captured["per-turn judge"], "")
                 self.assertEqual(captured["session analysis"], "")
                 self.assertEqual(captured["embedding"], "")
+
+
+    @unittest.skipUnless(K.HAS_KUZU, "kuzu not installed; graph canaries skipped (covered in CI)")
+    def test_a_graph_question_naming_an_opted_out_project_or_session_is_refused(self):
+        """Their rows carry only tool names and counts, so filtering the
+        rows cannot help: the parameter itself is refused."""
+        queries = ("ask graph tools-in-session", "ask graph errors-by-tool-in-project")
+        dsn = self.sqlite_dsn()
+        with K.corpus() as (source, project):
+            with K.user_config(K.config_for(project, project_mode=C.REDACT_NONE)):
+                sid = K.ingest_corpus(dsn, source)
+                before = K.capture_ask(dsn, sid)
+            with K.user_config(K.config_for(project, project_mode=C.REDACT_NONE, ingest_off=True)):
+                after = K.capture_ask(dsn, sid)
+        for label in queries:
+            with self.subTest(query=label):
+                answered = json.loads(before[label])
+                self.assertNotIn("error", answered)
+                self.assertTrue(answered.get("rows"), answered)
+                self.assertEqual(
+                    json.loads(after[label]),
+                    {"error": "that project or session is not available: it is opted out"},
+                )
 
 
 if __name__ == "__main__":

@@ -70,6 +70,25 @@ Trigger: phase-complete gate for the implementation (tasks 1–14 done).
   now reads the session table first, so their mock answers that query with
   no rows. What they assert is unchanged.
 
+## Revision (owner's review of PR #476)
+
+- The `CLAUDE.md` fixture was never committed: the repository's
+  `.gitignore` ignores every `CLAUDE.md`. It is `CLAUDE.md.template` now,
+  copied in as `CLAUDE.md` like the transcript template; the suite was run
+  from a fresh checkout of the pushed commit.
+- `graph_question` refuses a parameter that names an opted-out project or
+  session (`tools-in-session` and `errors-by-tool-in-project` returned its
+  data in rows that name neither). The canary capture builds the corpus
+  graph with Kuzu and asks every catalogue query of it; a floor test covers
+  the two queries before and after the opt-out.
+- Ask's `search_text` skips a tightened session's hits instead of masking
+  the snippet: a masked hit still says its stored text matched.
+- `OutboundPolicy.keeps()` returns False for an id that is not a session
+  row id (fail closed).
+- The README recommends `project_ids` rules for opt-outs, because a
+  git-root key resolves only while the repository is on disk at that path.
+  Storing the resolved key at ingest is a possible follow-up.
+
 ## Verdict
 
 Verdict: aligned

@@ -303,12 +303,15 @@ def search_text(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
     for h in arch.search_traces(ctx.db, query, limit=limit, noise=ctx.noise):
         key = (h["session_ref"], h["sequence_num"])
         seen.add(key)
-        if not policy.keeps(h["session_ref"]):
+        # An opted-out session is skipped, and so is one whose project was
+        # tightened after ingest: a masked snippet would still say that its
+        # stored text matched the query (#457).
+        if not policy.keeps(h["session_ref"]) or policy.floors(h["session_ref"]):
             continue
         hits.append({
             "session_id": h["session_ref"], "turn": h["sequence_num"],
             "project_path": h["project_path"], "source": "archive",
-            "snippet": policy.text(h["session_ref"], h["snippet"][:SNIPPET_CHARS]),
+            "snippet": h["snippet"][:SNIPPET_CHARS],
         })
     if len(hits) < limit:
         # Previews exist for EVERY session; archived text only where a
@@ -329,12 +332,11 @@ def search_text(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
             if key in seen:
                 continue
             seen.add(key)
-            if not policy.keeps(sid):
+            if not policy.keeps(sid) or policy.floors(sid):
                 continue
             hits.append({
                 "session_id": int(sid), "turn": int(seq), "project_path": project,
-                "source": "preview",
-                "snippet": policy.text(sid, arch.make_snippet(preview or "", query)[:SNIPPET_CHARS]),
+                "source": "preview", "snippet": arch.make_snippet(preview or "", query)[:SNIPPET_CHARS],
             })
             if len(hits) >= limit:
                 break
@@ -397,6 +399,11 @@ def graph_question(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
             f"{query_id} does not take {', '.join(unknown)}; its parameters are: "
             + (", ".join(declared) or "none")
         )
+    # A parameter naming an opted-out project or session would return its
+    # data however the rows are filtered afterwards (#457 D2): refuse.
+    policy = _policy(ctx)
+    if any(_names_skipped(policy, v) for v in params.values()):
+        return {"error": "that project or session is not available: it is opted out"}
     # Readiness is settled from the catalog before the query runs, so a
     # failed query is never read for what state the store is in.
     state, g = _open_graph(ctx)
@@ -412,7 +419,6 @@ def graph_question(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
     # A graph-rendered answer carries its evidence as nodes and
     # relationships, not rows; the model gets them in a form it can read.
     elements = result.pop("elements", None)
-    policy = _policy(ctx)
     if result.get("rows"):
         result["rows"] = [
             r for r in result["rows"] if not any(_names_skipped(policy, v) for v in r.values())

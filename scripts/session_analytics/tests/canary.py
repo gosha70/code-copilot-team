@@ -8,6 +8,8 @@ finds one in a payload names the place that leaked.
 
 The steering files are read from the session's project root, which must
 exist on disk, so the transcript is a template rendered into a temp dir.
+``CLAUDE.md`` is stored as ``CLAUDE.md.template`` (the repository ignores
+every ``CLAUDE.md``) and copied in under its real name.
 
 Each ``capture_*`` function runs one path family over the store and
 returns the text it would have sent off the machine, labelled by path.
@@ -43,6 +45,8 @@ PROSE = frozenset({"user_prose", "assistant_prose", "agents_prose", "claude_pros
 
 PROJECT_ID = "canary-project"
 HAS_MCP = importlib.util.find_spec("mcp") is not None
+HAS_KUZU = importlib.util.find_spec("kuzu") is not None
+SESSION_KEY = f"{C.COPILOT_CLAUDE_CODE}:sess-canary-001"
 
 #: Every module that sends session-derived text off the machine, and the
 #: canary test that exercises it (spec FR-007). ``test_canary_coverage``
@@ -76,7 +80,9 @@ def corpus() -> Iterator[tuple[Path, Path]]:
         project = base / "canaryproj"
         project.mkdir()
         shutil.copy(FIXTURE / "AGENTS.md", project / "AGENTS.md")
-        shutil.copy(FIXTURE / "CLAUDE.md", project / "CLAUDE.md")
+        # Stored as a template: the repository's .gitignore ignores every
+        # CLAUDE.md, so the fixture could not be committed under that name.
+        shutil.copy(FIXTURE / "CLAUDE.md.template", project / "CLAUDE.md")
         source = base / "source" / "canary-hash"
         source.mkdir(parents=True)
         template = (FIXTURE / "session.jsonl.template").read_text(encoding="utf-8")
@@ -231,9 +237,38 @@ def capture_judge(dsn: str, session_id: int) -> dict[str, str]:
     return {"per-turn judge": "\n".join(per_turn.sent), "session analysis": "\n".join(analysis.sent)}
 
 
+def build_graph(dsn: str) -> str:
+    """The corpus graph (Kuzu), built the way Studio's graph step builds it
+    but with no noise rule: the corpus lives in a temp dir, which the noise
+    rule would leave out. Returns its path; empty when Kuzu is missing."""
+    if not HAS_KUZU:
+        return str(Path(tempfile.mkdtemp()) / "absent")
+    from session_analytics.graph.builder import build
+
+    path = str(Path(tempfile.mkdtemp(prefix="cct-sa-canary-graph-")) / "graph")
+    db = Database.connect(dsn)
+    try:
+        build(db, path, rebuild=True, noise=None)
+    finally:
+        db.close()
+    return path
+
+
+def graph_params(project: str) -> dict[str, dict[str, str]]:
+    """Each catalogue query's parameters, pointed at the corpus."""
+    from session_analytics.graph import query as gq
+
+    values = {"project": project, "session": SESSION_KEY}
+    return {
+        q["id"]: {p["name"]: values[p["type"]] for p in q.get("params", [])}
+        for q in gq.catalogue()
+    }
+
+
 def capture_ask(dsn: str, session_id: int) -> dict[str, str]:
     """Every Ask tool's result and the store facts, which together are
-    everything the Ask loop puts in front of its model."""
+    everything the Ask loop puts in front of its model. With Kuzu, the
+    corpus graph is built and every catalogue query asked of it."""
     from session_analytics.ask import tools as T
 
     args = {
@@ -249,10 +284,16 @@ def capture_ask(dsn: str, session_id: int) -> dict[str, str]:
     }
     missing = set(T.TOOLS) - set(args)
     assert not missing, f"Ask tools without a canary call: {sorted(missing)}"
+    graph = build_graph(dsn)
     db = Database.connect(dsn)
     try:
-        ctx = T.AskContext(db=db, kuzu_path=str(Path(tempfile.mkdtemp()) / "absent"), noise=None)
+        project = db.query_one("SELECT project_path FROM copilot_session WHERE id = ?", (session_id,))[0]
+        ctx = T.AskContext(db=db, kuzu_path=graph, noise=None)
         out = {"ask facts": json.dumps(T.store_facts(ctx), default=str)}
+        if HAS_KUZU:
+            for qid, params in graph_params(project).items():
+                result = T.graph_question(ctx, {"id": qid, "params": params})
+                out[f"ask graph {qid}"] = json.dumps(result, default=str)
         for name, a in args.items():
             try:
                 result: Any = T.TOOLS[name](ctx, a)
