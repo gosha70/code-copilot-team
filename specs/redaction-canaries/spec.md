@@ -80,7 +80,7 @@ The inventory behind this spec found a second gap, and the owner ruled it in sco
     - Ask tools and MCP tools and resources leave its rows out;
     - embeddings skip it.
 
-    Aggregates over the store (counts, totals) are not per-session data and may still include it. The stored sessions are not deleted.
+    Aggregates over the store (counts, totals) are not per-session data. Totals may include them, but no aggregate is broken down by, or names, an opted-out project or its sessions. The stored sessions are not deleted.
   - The floor is computed in one place, extracted from `project_context` in `judge/session_analysis.py`, and every outbound path calls it. The steering path keeps its behaviour, except that an opted-out project's steering files are not read.
 - **FR-006: Floor tests.** The canary corpus is ingested under `none` and under `code`, then the configuration is changed with no re-ingest:
   - **Tightened to `metadata-only`**, per project and globally: FR-004's `metadata-only` invariant must hold on every FR-003 path.
@@ -120,7 +120,7 @@ The inventory behind this spec found a second gap, and the owner ruled it in sco
 
 ## Success Criteria
 
-1. With the corpus ingested under `metadata-only`, no canary appears in any payload captured from the FR-003 paths. Under `code`, no fenced canary does.
+1. With the corpus ingested under `metadata-only`, no canary appears in any payload captured from the FR-003 paths. Under `code`, no canary except the prose ones does.
 2. With the corpus ingested under `none` or `code` and the configuration then tightened to `metadata-only`, criterion 1's `metadata-only` result holds with no re-ingest. With the project then set to `ingest: "off"`, nothing from the corpus session appears in any payload.
 3. Removing redaction from any one FR-003 path, or bypassing the floor on it, fails at least one canary test that names the path and the canary. The implementation PR demonstrates this for each path.
 4. Adding a call to an off-machine transport in a module missing from the coverage map fails FR-007's test.

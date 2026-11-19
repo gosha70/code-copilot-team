@@ -56,6 +56,18 @@ after the previous record (2026-11-19 03:30).
 - The guard cannot prove completeness for aliased, dynamic, newly named or
   direct-HTTP transports; FR-007 says so and leaves those to review.
 
+## Revision (owner's second review, same day)
+
+- Success criterion 1 now reads "Under `code`, no canary except the prose
+  ones does", matching FR-004.
+- FR-005 and the matching plan sentence now say: "Totals may include them,
+  but no aggregate is broken down by, or names, an opted-out project or its
+  sessions." This tightens D2 for aggregates: an Ask or MCP answer may count
+  an opted-out project's sessions in a total, but no per-project or
+  per-session breakdown, and no list of project paths, includes it.
+
+Both edits are the owner's wording; the bundle stays `approved`.
+
 ## Verdict
 
 Verdict: aligned

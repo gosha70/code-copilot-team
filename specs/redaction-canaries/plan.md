@@ -59,7 +59,7 @@ Extract the mode computation in `project_context` (`judge/session_analysis.py:33
 | embeddings | `embedding/composer.py` | preview input |
 | MCP | `mcp/tools.py` session details, thread, trace attach; `mcp/resources.py` recent errors | previews, archived content, input previews, error messages |
 
-A path that reads many sessions resolves the mode once per session, not once per turn. Session analysis of an opted-out session returns an error naming the opt-out instead of calling the judge. Aggregates over the store (counts, totals) are left as they are (spec FR-005).
+A path that reads many sessions resolves the mode once per session, not once per turn. Session analysis of an opted-out session returns an error naming the opt-out instead of calling the judge. Aggregates over the store (counts, totals): totals may include them, but no aggregate is broken down by, or names, an opted-out project or its sessions (spec FR-005).
 
 ### Corpus and capture
 
