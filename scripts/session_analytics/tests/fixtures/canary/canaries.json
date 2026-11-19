@@ -1,0 +1,15 @@
+{
+  "user_fence": "sk-canary-user-fence-4d1f",
+  "user_prose": "sk-canary-user-prose-8b2e",
+  "assistant_fence": "sk-canary-assistant-fence-1c9a",
+  "assistant_prose": "sk-canary-assistant-prose-6e3d",
+  "tool_input": "sk-canary-tool-input-2f7b",
+  "tool_output": "sk-canary-tool-output-9a4c",
+  "error_message": "sk-canary-error-message-5d8e",
+  "preview_straddle": "sk-canary-preview-straddle-3b6f",
+  "agents_fence": "sk-canary-agents-fence-7e1a",
+  "agents_prose": "sk-canary-agents-prose-0c5b",
+  "claude_fence": "sk-canary-claude-fence-4a9d",
+  "claude_prose": "sk-canary-claude-prose-2e8f",
+  "steering_straddle": "sk-canary-steering-straddle-6f3c"
+}

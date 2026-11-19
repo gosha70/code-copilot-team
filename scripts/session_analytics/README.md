@@ -147,6 +147,23 @@ project from ingestion, add a `projects` block to `config_data/defaults.json`
   an opted-out project. Skipped sessions are counted per project and
   reported in the `ingest` summary (`sessions_opted_out`,
   `per_project_opt_out`).
+- **Changing a project's privacy applies to what leaves the machine at once
+  (#457).** Everything sent off the machine — the per-turn judge, session
+  analysis, Ask, embeddings and MCP — reads the stored text under the
+  stricter of the mode it was ingested with and the project's *current*
+  mode. A project tightened after ingest sends a `metadata-only` marker in
+  place of each stored text (never a re-redaction of the stored, already
+  truncated preview), and a project now set to `ingest: "off"` sends
+  nothing at all: no text, marker, row or id, and no list or breakdown
+  names it; store-wide totals may still count it. The store itself is not
+  rewritten: re-ingest with `ingest --full` to rewrite previews, and use a
+  new, empty store to drop an opted-out project's stored sessions.
+- **Key opted-out projects with a `project_ids` rule.** The floor resolves
+  each session's project when text leaves the machine, not only at ingest.
+  A key found by git-root detection needs the repository to still be on
+  disk at that path; if it has moved or been deleted, the session falls back
+  to the global mode and its project's opt-out no longer applies. A
+  `project_ids` rule matches the recorded path itself, so it keeps working.
 - **No `projects` block configured** (the default): every session ingests
   with the global `redaction_mode`, exactly as before this feature existed —
   fully additive, no migration required.

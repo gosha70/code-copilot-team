@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Sequence
 
+from ..ingest.redaction import OutboundPolicy
 from ..relational.db import Database
 from .contracts import PARSE_OK, Rubric, TurnContext, TurnJudge, TurnLabels
 from .label_sources import label_source_join
@@ -169,16 +170,21 @@ def _select_turns(
         {limit_sql}
     """
     rows = db.query(sql, tuple(params))
+    # The turns go to the judge, off the machine: the outbound floor (#457)
+    # drops opted-out projects' turns and sends a marker for a project
+    # whose mode was tightened after ingest.
+    policy = OutboundPolicy.load(db, session_id=session_id)
     return [
         TurnContext(
             turn_id=r[0],
             role=r[3],
             sequence_num=r[2],
-            text=r[4] or "",
-            prev_text=r[6] or "",
+            text=policy.text(r[1], r[4]) or "",
+            prev_text=policy.text(r[1], r[6]) or "",
             has_tool_use=bool(r[5]),
         )
         for r in rows
+        if policy.keeps(r[1])
     ]
 
 

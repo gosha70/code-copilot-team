@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 from ..config import load_config
 from .. import constants as C
+from ..ingest.redaction import OutboundPolicy
 from ..relational.db import Database
 from . import resources, tools
 
@@ -31,6 +32,29 @@ def build_server(dsn: str, kuzu_path: str = ""):
     def _db() -> Database:
         return Database.connect(dsn)
 
+    # Every answer here goes to an MCP client, off the machine: the
+    # outbound floor (#457) leaves out opted-out projects' sessions and
+    # sends a marker for text whose project was tightened after ingest.
+    def _policy(db: Database) -> OutboundPolicy:
+        return OutboundPolicy.load(db)
+
+    def _refused(session_id: int) -> dict[str, Any]:
+        return {"error": f"session {int(session_id)} is not available: its project is opted out"}
+
+    def _session_refs(obj: Any) -> set[int]:
+        """Every session row id a thread view names, at any depth."""
+        found: set[int] = set()
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if k == "session_ref" and isinstance(v, int):
+                    found.add(v)
+                else:
+                    found |= _session_refs(v)
+        elif isinstance(obj, list):
+            for v in obj:
+                found |= _session_refs(v)
+        return found
+
     # ── tools ──────────────────────────────────────────────────────────
     @server.tool()
     def search_sessions(
@@ -48,13 +72,17 @@ def build_server(dsn: str, kuzu_path: str = ""):
         or `<dimension>:<value>`."""
         db = _db()
         try:
-            return tools.search_sessions(
-                db, query or None, copilot=copilot or None,
-                date_from=date_from or None, date_to=date_to or None, limit=limit,
-                tag=tag or None, developer=developer or None, model=model or None,
-                tool=tool or None, min_cost=min_cost, max_cost=max_cost, label=label or None,
-                harness=harness or None,
-            )
+            policy = _policy(db)
+            return [
+                s for s in tools.search_sessions(
+                    db, query or None, copilot=copilot or None,
+                    date_from=date_from or None, date_to=date_to or None, limit=limit,
+                    tag=tag or None, developer=developer or None, model=model or None,
+                    tool=tool or None, min_cost=min_cost, max_cost=max_cost, label=label or None,
+                    harness=harness or None,
+                )
+                if policy.keeps(s["id"])
+            ]
         finally:
             db.close()
 
@@ -107,7 +135,19 @@ def build_server(dsn: str, kuzu_path: str = ""):
 
         db = _db()
         try:
-            return th.thread_view(db, int(session_ref))
+            policy = _policy(db)
+            if not policy.keeps(session_ref):
+                return _refused(session_ref)
+            view = th.thread_view(db, int(session_ref))
+            # A thread names its members' sessions; one from an opted-out
+            # project makes the whole view unavailable rather than a tree
+            # with a hole that still identifies it.
+            if any(not policy.keeps(ref) for ref in _session_refs(view)):
+                return {
+                    "error": "this session's thread includes a session from an opted-out project",
+                    "session_ref": int(session_ref),
+                }
+            return view
         except th.SessionNotFound:
             # Distinct from a session that cannot be threaded.
             return {"error": "session not found", "session_ref": int(session_ref)}
@@ -138,7 +178,25 @@ def build_server(dsn: str, kuzu_path: str = ""):
         """Full turn/tool/error breakdown for one session."""
         db = _db()
         try:
-            return tools.get_session_details(db, session_id)
+            policy = _policy(db)
+            if not policy.keeps(session_id):
+                return _refused(session_id)
+            details = tools.get_session_details(db, session_id)
+            if "error" in details or not policy.floors(session_id):
+                return details
+            def text(value: Optional[str]) -> Optional[str]:
+                return policy.text(session_id, value)
+
+            for turn in details["turns"]:
+                turn["content_preview"] = text(turn["content_preview"])
+                turn["content"] = text(turn["content"])
+                for call in turn["tool_calls"]:
+                    call["input_preview"] = text(call["input_preview"])
+                    call["error_message"] = text(call["error_message"])
+            for err in details["errors"]:
+                err["message"] = text(err["message"])
+                err["error_type"] = policy.error_type(session_id, err["error_type"])
+            return details
         finally:
             db.close()
 
@@ -149,10 +207,14 @@ def build_server(dsn: str, kuzu_path: str = ""):
         """Aggregate tool-usage + error patterns across sessions."""
         db = _db()
         try:
-            return tools.analyze_patterns(
+            policy = _policy(db)
+            out = tools.analyze_patterns(
                 db, workspace=workspace or None, tool=tool or None,
                 error_type=error_type or None,
+                outbound_filter=policy.project_filter_sql("s.project_path"),
             )
+            out["errors"] = policy.error_types(out["errors"])
+            return out
         finally:
             db.close()
 
@@ -161,7 +223,11 @@ def build_server(dsn: str, kuzu_path: str = ""):
         """Find similar past sessions and report their KPI outcomes."""
         db = _db()
         try:
-            return tools.compare_approaches(db, task_description, limit=limit)
+            policy = _policy(db)
+            return [
+                s for s in tools.compare_approaches(db, task_description, limit=limit)
+                if policy.keeps(s["id"])
+            ]
         finally:
             db.close()
 
@@ -172,8 +238,16 @@ def build_server(dsn: str, kuzu_path: str = ""):
         completed `similar` pass)."""
         db = _db()
         try:
-            return tools.similar_sessions(
-                db, kuzu_path, session_id, limit=limit)
+            policy = _policy(db)
+            if not policy.keeps(session_id):
+                return _refused(session_id)
+            out = tools.similar_sessions(db, kuzu_path, session_id, limit=limit)
+            if "neighbors" in out:
+                out["neighbors"] = [
+                    n for n in out["neighbors"]
+                    if policy.keeps_key(n["session_key"]) and policy.keeps(n["id"])
+                ]
+            return out
         finally:
             db.close()
 
@@ -188,8 +262,27 @@ def build_server(dsn: str, kuzu_path: str = ""):
         membership does not assert all-pairs similarity."""
         db = _db()
         try:
-            return tools.session_clusters(
-                db, kuzu_path, session_id, limit=limit)
+            policy = _policy(db)
+            if session_id is not None and not policy.keeps(session_id):
+                return _refused(session_id)
+            out = tools.session_clusters(db, kuzu_path, session_id, limit=limit)
+
+            def kept(cluster: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+                # Members are session keys and the identity is the smallest
+                # one: an opted-out member is dropped from both. `size`
+                # stays the cluster's true size (a total, #457).
+                if cluster is None:
+                    return None
+                members = [m for m in cluster["members"] if policy.keeps_key(m)]
+                if not members:
+                    return None
+                return {**cluster, "members": members, "identity": min(members)}
+
+            if "clusters" in out:
+                out["clusters"] = [c for c in (kept(c) for c in out["clusters"]) if c]
+            if out.get("cluster") is not None:
+                out["cluster"] = kept(out["cluster"])
+            return out
         finally:
             db.close()
 
@@ -198,7 +291,7 @@ def build_server(dsn: str, kuzu_path: str = ""):
     def recent_errors() -> dict[str, Any]:
         db = _db()
         try:
-            return resources.recent_errors(db)
+            return resources.recent_errors(db, outbound=_policy(db))
         finally:
             db.close()
 
@@ -214,7 +307,10 @@ def build_server(dsn: str, kuzu_path: str = ""):
     def session_summary() -> dict[str, Any]:
         db = _db()
         try:
-            return resources.session_summary(db)
+            policy = _policy(db)
+            out = resources.session_summary(db)
+            out["sessions"] = [s for s in out["sessions"] if policy.keeps(s["id"])]
+            return out
         finally:
             db.close()
 

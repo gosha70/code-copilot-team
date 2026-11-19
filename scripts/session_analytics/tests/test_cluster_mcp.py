@@ -375,7 +375,9 @@ class TestRegisteredOnTheRealServer(unittest.TestCase):
 
         with mock.patch.object(server_mod.tools, "session_clusters", _spy), \
              mock.patch.object(server_mod, "Database") as db_cls:
-            db_cls.connect.return_value = mock.Mock()
+            # The #457 outbound floor reads the session table first; an
+            # empty store has nothing to filter.
+            db_cls.connect.return_value = mock.Mock(**{"query.return_value": []})
             server = build_server("sqlite:///unused.db",
                                   kuzu_path="/nondefault/graph")
             import asyncio
@@ -402,7 +404,9 @@ class TestRegisteredOnTheRealServer(unittest.TestCase):
 
         with mock.patch.object(server_mod, "Database") as db_cls, \
              mock.patch.object(GraphDatabase, "connect_read_only", _record):
-            db_cls.connect.return_value = mock.Mock()
+            # The #457 outbound floor reads the session table first; an
+            # empty store has nothing to filter.
+            db_cls.connect.return_value = mock.Mock(**{"query.return_value": []})
             server = build_server("sqlite:///unused.db", kuzu_path="/g")
             _content, payload = asyncio.run(
                 server.call_tool("session_clusters", {"limit": -1}))

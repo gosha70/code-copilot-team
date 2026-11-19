@@ -8,34 +8,43 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from ..config import NoiseConfig
+from ..ingest.redaction import OutboundPolicy
 from ..relational.db import Database
 from ..session_filter import keep_clause
 
 
 def recent_errors(
-    db: Database, limit: int = 50, noise: Optional[NoiseConfig] = None
+    db: Database, limit: int = 50, noise: Optional[NoiseConfig] = None,
+    outbound: Optional[OutboundPolicy] = None,
 ) -> dict[str, Any]:
     # With ``noise`` given, errors from probe sessions are not "recent
     # errors" — the dashboard shows the same sessions everywhere (#307).
+    # With ``outbound`` given (the MCP resource, #457), an opted-out
+    # project's errors are left out and a tightened project's messages
+    # leave as markers.
     keep_sql, keep_params = keep_clause(noise, "s") if noise else ("1=1", ())
+    out_sql, out_params = outbound.project_filter_sql("s.project_path") if outbound else ("1=1", ())
     rows = db.query(
         f"""
         SELECT e.error_type, e.tool_name, e.error_message,
-               s.copilot, s.project_path
+               s.copilot, s.project_path, s.id
         FROM copilot_error e
         JOIN copilot_session s ON s.id = e.session_id
-        WHERE {keep_sql}
+        WHERE {keep_sql} AND {out_sql}
         ORDER BY e.id DESC LIMIT ?
         """,
-        (*keep_params, int(limit)),
+        (*keep_params, *out_params, int(limit)),
     )
     return {
         "errors": [
             {
-                "error_type": r[0], "tool_name": r[1], "message": r[2],
+                "error_type": outbound.error_type(r[5], r[0]) if outbound else r[0],
+                "tool_name": r[1],
+                "message": outbound.text(r[5], r[2]) if outbound else r[2],
                 "copilot": r[3], "project_path": r[4],
             }
             for r in rows
+            if outbound is None or outbound.keeps(r[5])
         ]
     }
 
