@@ -2,7 +2,7 @@
 spec_mode: full
 feature_id: redaction-canaries
 risk_category: security
-status: draft
+status: approved
 date: 2026-11-19
 ---
 
@@ -34,6 +34,12 @@ The inventory behind this spec found a second gap, and the owner ruled it in sco
 **When** the project (or the global mode) is changed to `metadata-only`
 **Then** every off-machine path sends `metadata-only` markers for those sessions, before any re-ingest.
 
+### US4: Opting a project out stops it leaving the machine (Priority: HIGH)
+
+**Given** sessions of a project already in the store
+**When** that project is configured `ingest: "off"`
+**Then** no off-machine path sends anything from those sessions, before any re-ingest.
+
 ## Requirements
 
 - **FR-001: Canary corpus.** A fixture session and project root (`tests/fixtures/canary/`) carry a distinct canary string in each place session or project content can enter Session Analytics:
@@ -57,15 +63,37 @@ The inventory behind this spec found a second gap, and the owner ruled it in sco
   - every MCP tool and resource (`mcp/server.py`, `mcp/resources.py`).
 - **FR-004: Invariant per mode.**
   - **`metadata-only`:** no canary from FR-001 appears in any captured payload.
-  - **`code`:** no *fenced* canary appears in any captured payload. Prose canaries are not asserted, because `code` mode keeps prose by definition.
+  - **`code`:** none of the following appears in any captured payload:
+    - the fenced canaries, including both straddle cases;
+    - the steering files' fenced canaries;
+    - the tool-input value canary (`code` keeps only the key names and a hash);
+    - the tool-output and error-message canaries (`code` reduces both to a length-and-hash marker).
+
+    Only the prose canaries are exempt, in turns and in steering files, because `code` keeps prose by definition.
   - **`none`:** no assertion.
 - **FR-005: Current-mode floor on every outbound path.** Each path in FR-003 sends a session's text under `stricter_mode(recorded, current)`.
   - `recorded` is the session's stored `redaction_mode`. `current` is the project's override from the current configuration, else the global mode.
-  - A project currently configured `ingest: "off"` counts as `metadata-only`.
-  - When `current` is stricter than `recorded`, the path sends a `metadata-only` marker in place of the stored text. It does not re-redact under `code`, because stored previews are already truncated and a fence cut by that truncation would escape the fence pattern (the article's boundary bug).
-  - The floor is computed in one place, extracted from `project_context` in `judge/session_analysis.py`, and every outbound path calls it.
-- **FR-006: Floor tests.** The canary corpus is ingested under `none` and under `code`, then the configuration is tightened to `metadata-only`, per project and globally. FR-004's `metadata-only` invariant must then hold on every FR-003 path, with no re-ingest.
-- **FR-007: Coverage guard.** A test enumerates the modules that call an off-machine transport: judge `rate_turn`/`complete`, the embedding provider, MCP tool and resource registrations, and the Ask tool table. It fails when one of them has no entry in the canary suite's coverage map, naming the module.
+  - When `current` is stricter than `recorded`, the path sends a `metadata-only` marker in place of the stored text (D1). It does not re-redact under `code`, because stored previews are already truncated and a fence cut by that truncation would escape the fence pattern (the article's boundary bug).
+  - **A session whose project is currently configured `ingest: "off"` is skipped on every outbound path (D2).** The path sends no row, text, marker or identifier from that session:
+    - the per-turn judge selects none of its turns;
+    - session analysis refuses it, saying the project is opted out;
+    - Ask tools and MCP tools and resources leave its rows out;
+    - embeddings skip it.
+
+    Aggregates over the store (counts, totals) are not per-session data and may still include it. The stored sessions are not deleted.
+  - The floor is computed in one place, extracted from `project_context` in `judge/session_analysis.py`, and every outbound path calls it. The steering path keeps its behaviour, except that an opted-out project's steering files are not read.
+- **FR-006: Floor tests.** The canary corpus is ingested under `none` and under `code`, then the configuration is changed with no re-ingest:
+  - **Tightened to `metadata-only`**, per project and globally: FR-004's `metadata-only` invariant must hold on every FR-003 path.
+  - **Opted out**, with the project set to `ingest: "off"`: no FR-003 path sends any canary, row, marker or identifier from the corpus session.
+- **FR-007: Coverage guard.** A test enumerates the modules that call an off-machine transport: judge `rate_turn`/`complete`, the embedding provider, MCP tool and resource registrations, and the Ask tool table. It fails when one of them has no entry in the canary suite's coverage map, naming the module. Exemptions are listed by name with a reason (D3).
+
+  **Limits.** The check is a static scan of call names, so it misses:
+  - **aliases:** a transport method bound to another name (`send = judge.complete; send(p)`) or passed as a callback;
+  - **dynamic lookup:** `getattr(judge, "complete")(p)` and similar;
+  - **new transport methods:** a backend method with a name the scan does not list (it knows `rate_turn`, `complete` and `embed`);
+  - **direct HTTP:** a module that sends text with `urllib`, `httpx`, `requests` or a socket, bypassing the judge and embedding backends.
+
+  These are left to review: a change that adds any of them must add the path to the coverage map by hand. The canary assertions still catch a leak on any path the suite runs.
 - **FR-008: Existing guards stay.** The steering straddle tests in `test_session_analysis.py` and the archive canary test in `test_trace_archive.py` remain. The corpus repeats both boundary cases at the canary level.
 
 ## Constraints / What NOT to Build
@@ -81,13 +109,19 @@ The inventory behind this spec found a second gap, and the owner ruled it in sco
 
 - **Canary corpus:** the FR-001 fixture session and project root, with one named canary per placement.
 - **Capturing backends:** the fake judge and fake embedding provider that record payloads (FR-002).
-- **Outbound mode:** `stricter_mode(recorded, current)`, with `ingest: "off"` counted as `metadata-only` (FR-005).
+- **Outbound mode:** `stricter_mode(recorded, current)`, or *skip* when the project is currently `ingest: "off"` (FR-005).
 - **Coverage map:** the list of off-machine modules the canary suite exercises, checked by FR-007.
+
+## Decisions (ruled by the owner on 2026-11-19)
+
+- **D1: a marker on tightening.** When the current mode is stricter than the recorded one, the path sends a `metadata-only` marker rather than re-redacting the stored, already-truncated text. Agreed.
+- **D2: opted-out projects are skipped.** Sessions of a project currently configured `ingest: "off"` are skipped on every outgoing path, not sent as `metadata-only` markers. Their stored rows are not deleted.
+- **D3: named exemptions in the coverage guard.** A module that calls a transport for something other than session data, such as the backend connection test, which sends a fixed string, is exempted by name with a reason. Agreed.
 
 ## Success Criteria
 
 1. With the corpus ingested under `metadata-only`, no canary appears in any payload captured from the FR-003 paths. Under `code`, no fenced canary does.
-2. With the corpus ingested under `none` or `code` and the configuration then tightened to `metadata-only`, criterion 1's `metadata-only` result holds with no re-ingest.
+2. With the corpus ingested under `none` or `code` and the configuration then tightened to `metadata-only`, criterion 1's `metadata-only` result holds with no re-ingest. With the project then set to `ingest: "off"`, nothing from the corpus session appears in any payload.
 3. Removing redaction from any one FR-003 path, or bypassing the floor on it, fails at least one canary test that names the path and the canary. The implementation PR demonstrates this for each path.
 4. Adding a call to an off-machine transport in a module missing from the coverage map fails FR-007's test.
 5. `bash scripts/validate-spec.sh --feature-id redaction-canaries` and `bash scripts/check-origin-alignment.sh redaction-canaries` exit 0.

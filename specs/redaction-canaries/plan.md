@@ -9,7 +9,7 @@ justification: |
   fails the build until it is covered, and a current-mode redaction floor on
   every one of those paths. Security-relevant code across six modules:
   spec_mode full.
-status: draft
+status: approved
 date: 2026-11-19
 issue: "#457"
 origin:
@@ -45,11 +45,11 @@ Three pieces, in this order.
 
 Extract the mode computation in `project_context` (`judge/session_analysis.py:337-346`) into `ingest/redaction.py`:
 
-- `outbound_mode(recorded, current, ingest_off) -> str` is the pure rule: stricter of the two, and `ingest: "off"` gives `metadata-only`.
+- `outbound_mode(recorded, current, ingest_off) -> Optional[str]` is the pure rule. It returns `None` (skip) when the project is currently `ingest: "off"` (D2), and otherwise the stricter of the two modes.
 - `session_outbound_mode(db, session_id, cfg) -> (recorded, outbound)` reads the stored mode and the project path, and resolves the current override through `ProjectKeyResolver` and `cfg.project_override`.
-- `outbound_text(text, recorded, outbound) -> str` returns `text` when the modes match, and `redact_text(text, metadata-only)` when `outbound` is stricter.
+- `outbound_text(text, recorded, outbound) -> str` returns `text` when the modes match, and `redact_text(text, metadata-only)` when `outbound` is stricter (D1). It is never called for a skipped session.
 
-`project_context` uses the extracted function, so the steering path keeps its behaviour. Each outbound path applies `outbound_text` to every session-derived text field it sends:
+`project_context` uses the extracted function. The steering path keeps its behaviour, except that it reads nothing for an opted-out project. Each outbound path drops skipped sessions where it selects rows (in SQL where the path already filters by session, otherwise in the loop), and applies `outbound_text` to every session-derived text field it sends:
 
 | Path | Where the text is read | Fields |
 |---|---|---|
@@ -59,7 +59,7 @@ Extract the mode computation in `project_context` (`judge/session_analysis.py:33
 | embeddings | `embedding/composer.py` | preview input |
 | MCP | `mcp/tools.py` session details, thread, trace attach; `mcp/resources.py` recent errors | previews, archived content, input previews, error messages |
 
-A path that reads many sessions resolves the mode once per session, not once per turn.
+A path that reads many sessions resolves the mode once per session, not once per turn. Session analysis of an opted-out session returns an error naming the opt-out instead of calling the judge. Aggregates over the store (counts, totals) are left as they are (spec FR-005).
 
 ### Corpus and capture
 
@@ -74,13 +74,15 @@ A path that reads many sessions resolves the mode once per session, not once per
   - `test_canary_ask.py`
   - `test_canary_embedding.py`
   - `test_canary_mcp.py`
-  - `test_canary_floor.py`: FR-006, running all four families after the configuration is tightened.
+  - `test_canary_floor.py`: FR-006, running all four families after the configuration is tightened, and again after the corpus project is set to `ingest: "off"`.
 
 ### Coverage guard
 
 `test_canary_coverage.py` parses the package with `ast`. It collects every module that calls `.rate_turn(`, `.complete(` or the embedding provider's `embed(`, or registers MCP tools or resources (`@server.tool`, `@server.resource`), or defines the Ask tool table. It compares that set with `COVERED_MODULES` in `tests/canary.py`. A module missing from the map fails with its name and the line of the call.
 
-The backend implementations (`judge/ollama_judge.py`, `judge/openai_judge.py`, `judge/session_judge.py`, `embedding/ollama_embed.py`) are the transport itself, and they call `self.complete`/`self.embed` internally. The scan excludes them by name.
+The backend implementations (`judge/ollama_judge.py`, `judge/openai_judge.py`, `judge/session_judge.py`, `embedding/ollama_embed.py`) are the transport itself, and they call `self.complete`/`self.embed` internally. The scan excludes them by name. Other exemptions, such as the backend connection test in `api/server.py`, are listed by name with a reason (D3).
+
+The scan's limits are stated in spec FR-007: aliases, dynamic lookup, new transport method names and direct HTTP. The test module's docstring repeats them, so a reader of the guard sees what it does not catch.
 
 ## Files
 
@@ -98,8 +100,8 @@ The backend implementations (`judge/ollama_judge.py`, `judge/openai_judge.py`, `
 
 ## Test strategy
 
-- Each path family has a canary module running under `code` and under `metadata-only` (FR-004).
-- `test_canary_floor.py` covers ingest-then-tighten (FR-006).
+- Each path family has a canary module running under `code` and under `metadata-only` (FR-004). Under `code`, every canary except the prose ones is asserted absent: fenced, straddle, tool-input value, tool output and error message.
+- `test_canary_floor.py` covers ingest-then-tighten and ingest-then-opt-out (FR-006).
 - Success criterion 3 is shown in the implementation PR: for each path, a temporary patch that removes its redaction or floor, with the failing test output quoted. The patches are not committed.
 - The full Session Analytics suite runs green. The existing steering and archive canary tests are unchanged.
 
