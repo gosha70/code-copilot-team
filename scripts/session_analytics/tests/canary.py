@@ -302,6 +302,8 @@ def capture_ask(dsn: str, session_id: int) -> dict[str, str]:
             out[f"ask {name}"] = json.dumps(result, default=str)
     finally:
         db.close()
+        # Each graph is ~10 MB and a suite run builds about fifteen.
+        shutil.rmtree(Path(graph).parent, ignore_errors=True)
     return out
 
 
