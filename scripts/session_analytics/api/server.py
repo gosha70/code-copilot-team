@@ -696,10 +696,13 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
 
         def _ingest() -> str:
             from .._register import register_all
-            from ..ingest.pipeline import ingest
+            from ..ingest.pipeline import configured_options, ingest
 
             register_all()
-            st = ingest(dsn=store, copilots=copilots, full=False, selection=selection)
+            st = ingest(
+                dsn=store, copilots=copilots, full=False, selection=selection,
+                **configured_options(load_config()),
+            )
             msg = f"ingested {st.sessions_ingested} sessions"
             if st.sessions_skipped:
                 msg += f", {st.sessions_skipped} already up to date"

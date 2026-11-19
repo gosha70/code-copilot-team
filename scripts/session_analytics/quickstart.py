@@ -183,9 +183,10 @@ def ensure_store(dsn: str) -> dict:
     if summary["sessions"] > 0:
         return summary
     _say("store is empty — ingesting your sessions (first run only)…")
-    from .ingest.pipeline import ingest
+    from .config import load_config
+    from .ingest.pipeline import configured_options, ingest
 
-    ingest(dsn=dsn, full=True)
+    ingest(dsn=dsn, full=True, **configured_options(load_config(dsn=dsn)))
     summary = store_summary(dsn)
     _say(
         f"✓ ingested {summary['sessions']} sessions "
