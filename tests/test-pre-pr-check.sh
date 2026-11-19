@@ -66,7 +66,7 @@ run_check 5 "feat(x): the thing" "Closes #5."
 assert_eq "a title without its marker still fails when the PR closes an issue" 1 "$RC"
 run_check 5 "feat(x): the thing (Closes #5)" "The body names no close keyword."
 assert_eq "#471: a close keyword only in the title fails" 1 "$RC"
-assert_contains "...naming the unlinked issue" "$OUTPUT" "#5 has no close keyword in the body or a commit message"
+assert_contains "...naming the unlinked issue" "$OUTPUT" "#5 has no close keyword in the body"
 run_check "5,6" "feat(x): the thing (Closes #5)" "Closes #5."
 assert_eq "#471: every --closes number must be linked, not just the first" 1 "$RC"
 assert_contains "...naming the one that is missing" "$OUTPUT" "#6 has no close keyword"
@@ -92,7 +92,8 @@ assert_eq "a past-tense keyword in a commit message fails under --closes none" 1
 assert_contains "...naming the commit" "$OUTPUT" "[FAIL] commit"
 
 run_check 7 "fix(x): the earlier slice (Closes #7)" "The commit message carries the keyword."
-assert_eq "#471: a close keyword in a commit message links the issue" 0 "$RC"
+assert_eq "#471: a close keyword only in a commit message fails (a squash merge drops it)" 1 "$RC"
+assert_contains "...with a warning that only a commit message closes it" "$OUTPUT" "#7 is closed only by a commit message"
 
 echo "========================================="
 echo "  Results: $PASS passed, $FAIL failed"

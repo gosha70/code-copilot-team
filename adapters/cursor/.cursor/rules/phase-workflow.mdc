@@ -97,8 +97,9 @@ keyword. For every PR opened from a session:
    and run the exact `gh pr create` command it prints. It audits the body
    and every commit message on the branch for close keywords that would
    close an issue other than the ones named in `--closes`, and fails when
-   a `--closes` issue has no close keyword in the body or a commit message
-   (GitHub ignores the title). A PR that
+   a `--closes` issue has no close keyword in the body: GitHub ignores the
+   title, and a squash merge using the PR title and description drops
+   commit messages. A PR that
    closes nothing (docs, chores, one slice of a larger issue) runs it with
    `--closes none`: every keyword match then fails, and the title carries
    no `(Closes #N)` marker.

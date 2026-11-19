@@ -57,7 +57,9 @@ only, and nothing read back what GitHub linked.
    lag completes; a non-default base warns; the plan's origin issue as the
    target.
 4. **pre-pr-check.sh** fails when a `--closes` issue has no close keyword in
-   the body or a commit message (the title does not count), so hand-opened
-   PRs get the same guarantee; five assertions in `tests/test-pre-pr-check.sh`.
+   the body, so hand-opened PRs get the same guarantee. The title does not
+   count, and a commit-message keyword only adds a warning to the failure: a
+   squash merge using the PR title and description drops commit messages.
+   Six assertions in `tests/test-pre-pr-check.sh`.
 5. **Docs.** The skill's "Close target" bullet describes the body lines and
    the check; adapters regenerated.
