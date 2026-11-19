@@ -514,7 +514,7 @@ def _derived_developer_id(args: argparse.Namespace, cfg: AnalyticsConfig) -> str
 
 
 def _cmd_ingest(args: argparse.Namespace) -> int:
-    from .ingest.pipeline import ingest
+    from .ingest.pipeline import configured_options, ingest
     from .ingest.selection import IngestSelection, parse_since
     from .setup_cmd import ensure_initialized
 
@@ -553,14 +553,10 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
             dsn=cfg.dsn,
             copilots=args.copilot,
             root=args.root,
-            developer_id=_derived_developer_id(args, cfg),
-            redaction_mode=cfg.redaction_mode,
             full=args.full,
-            pricing=cfg.pricing,
             cli_redaction_override=args.redact,
-            projects=cfg.projects,
-            project_id_rules=cfg.project_id_rules,
             selection=selection,
+            **configured_options(cfg, developer_id=_derived_developer_id(args, cfg)),
         )
     except UnknownAdapterError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -908,7 +904,7 @@ def _cmd_correlate(args: argparse.Namespace) -> int:
 def _cmd_watch(args: argparse.Namespace) -> int:
     import threading
 
-    from .ingest.pipeline import ingest
+    from .ingest.pipeline import configured_options, ingest
     from .setup_cmd import ensure_initialized
     from .watch import run_watch
 
@@ -943,13 +939,9 @@ def _cmd_watch(args: argparse.Namespace) -> int:
         stats = ingest(
             dsn=cfg.dsn,
             copilots=args.copilots,
-            developer_id=watch_developer_id,
-            redaction_mode=cfg.redaction_mode,
-            pricing=cfg.pricing,
             cli_redaction_override=None,
-            projects=cfg.projects,
-            project_id_rules=cfg.project_id_rules,
             full=False,
+            **configured_options(cfg, developer_id=watch_developer_id),
         )
         _log.info(
             "watch cycle: %d ingested, %d skipped, %d opted out",

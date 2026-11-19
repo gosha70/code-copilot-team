@@ -19,9 +19,10 @@ from pathlib import Path
 from typing import Mapping, Optional, Sequence
 
 from .. import constants as C
+from .. import identity as IDENT
 from .. import threads
 from ..activity import ensure_activity
-from ..config import PricingConfig, ProjectIdRule, ProjectOverride
+from ..config import AnalyticsConfig, PricingConfig, ProjectIdRule, ProjectOverride
 from ..cost import UnpricedStats
 from ..registry import get_adapter, list_adapter_ids
 from ..relational import store
@@ -62,6 +63,32 @@ class IngestStats:
             "heartbeats_ingested": self.heartbeats_ingested,
             "sessions_not_selected": self.sessions_not_selected,
         }
+
+
+def configured_options(cfg: AnalyticsConfig, *, developer_id: Optional[str] = None) -> dict:
+    """The configuration every ingest entry point passes to ``ingest()``.
+
+    The redaction mode, per-project overrides and opt-outs, project-id rules,
+    pricing and developer id, resolved from ``cfg``. The CLI, ``watch``,
+    Studio's pipeline step and quickstart all build their call from this, so
+    no entry point falls back to the defaults below (#473: Studio and
+    quickstart did, and stored code-mode previews for projects configured
+    metadata-only or ``ingest: "off"``). ``developer_id`` is the CLI's
+    flag-derived id; without one it is derived from env and config.
+    """
+    if developer_id is None:
+        developer_id = IDENT.derive_developer_id(
+            cli_value=None,
+            env_value=cfg.developer_id_env,
+            config_value=cfg.developer_id_cfg,
+        ).id
+    return {
+        "developer_id": developer_id,
+        "redaction_mode": cfg.redaction_mode,
+        "pricing": cfg.pricing,
+        "projects": cfg.projects,
+        "project_id_rules": cfg.project_id_rules,
+    }
 
 
 def ingest(
