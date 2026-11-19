@@ -5,14 +5,17 @@
 # (RawSession.project_path — never a repo root; see adapters/claude_code.py)
 # in two steps, tried in order:
 #
-#   1. git toplevel detection — ``git -C <cwd> rev-parse --show-toplevel``.
-#   2. configured ``project_ids`` substring-match rules (config.ProjectIdRule)
-#      — for cwds that aren't a locally-detectable git repo (e.g. a fixture
-#      path, or a machine without the repo checked out).
+#   1. configured ``project_ids`` substring-match rules (config.ProjectIdRule).
+#      An explicit rule is configuration and wins (#477): before it, a rule
+#      was consulted only when step 2 failed, so a ``projects`` entry keyed
+#      by an id was silently ignored for any repo checked out on disk —
+#      ``ingest: "off"`` included.
+#   2. git toplevel detection — ``git -C <cwd> rev-parse --show-toplevel`` —
+#      for a cwd no rule matches; the key is then the repo's absolute path.
 #
 # Neither matching → ``None`` ("no override, the global redaction_mode
 # applies" — the regression-safe default, FR-6). The resolver never falls
-# back to returning the raw ``project_path`` itself unless step 1 genuinely
+# back to returning the raw ``project_path`` itself unless step 2 genuinely
 # detected it as the git toplevel.
 
 from __future__ import annotations
@@ -82,9 +85,11 @@ class ProjectKeyResolver:
         if project_path in self._cache:
             return self._cache[project_path]
 
-        key = self._git_toplevel_fn(project_path)
+        # An explicit rule wins over detection (#477); git runs only for a
+        # path no rule matches.
+        key = match_project_id(project_path, self._rules)
         if not key:
-            key = match_project_id(project_path, self._rules)
+            key = self._git_toplevel_fn(project_path)
 
         self._cache[project_path] = key
         return key

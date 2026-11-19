@@ -23,6 +23,7 @@ import asyncio
 import importlib.util
 import json
 import shutil
+import subprocess
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
@@ -72,13 +73,16 @@ EXEMPT_MODULES: dict[str, str] = {
 
 
 @contextmanager
-def corpus() -> Iterator[tuple[Path, Path]]:
+def corpus(*, git_repo: bool = False) -> Iterator[tuple[Path, Path]]:
     """(source root for the claude-code adapter, project root), rendered
-    into a fresh temp dir and removed afterwards."""
+    into a fresh temp dir and removed afterwards. With ``git_repo`` the
+    project root is a git checkout, as a real project usually is (#477)."""
     base = Path(tempfile.mkdtemp(prefix="cct-sa-canary-"))
     try:
         project = base / "canaryproj"
         project.mkdir()
+        if git_repo:
+            subprocess.run(["git", "init", "-q"], cwd=project, check=True)
         shutil.copy(FIXTURE / "AGENTS.md", project / "AGENTS.md")
         # Stored as a template: the repository's .gitignore ignores every
         # CLAUDE.md, so the fixture could not be committed under that name.

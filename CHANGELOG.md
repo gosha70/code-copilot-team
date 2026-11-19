@@ -168,6 +168,15 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Fixed
 
+- **Session Analytics: a `project_ids` rule wins over git-root detection.**
+  A session's project key came from its git repo root whenever the
+  directory was a checkout, and a `project_ids` rule was consulted only when
+  that failed. So a `projects` entry keyed by an id, as the documented
+  example does, was silently ignored for a checked-out repo: a
+  `metadata-only` override or an `ingest: "off"` opt-out did not apply at
+  ingest or on the outbound paths. A matching rule now decides the key; the
+  repo root keys only directories no rule matches. If you keyed `projects`
+  by a repo's absolute path without a rule, nothing changes (#477).
 - **Studio and quickstart ingest apply the configuration.** Studio's
   pipeline ingest step and the first-run ingest in `session_analytics start`
   ignored the configured redaction mode, per-project overrides and

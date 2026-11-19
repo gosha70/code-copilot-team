@@ -125,18 +125,18 @@ project from ingestion, add a `projects` block to `config_data/defaults.json`
 ```
 
 - **Project key**: for each session, the key is resolved from its captured
-  `cwd` in this order: (1) the **git repo root** when that `cwd` is a local
-  git worktree at ingest time (`git -C <cwd> rev-parse --show-toplevel`); (2)
-  else the first matching `project_ids` rule (`match` is a substring of the
-  `cwd`, e.g. `/Users/dev/work/client-a` matches any subdirectory of that
-  repo); (3) else there is no per-project override and the global default
-  applies. The key is **never the raw cwd itself** — only a detected repo
-  root or a configured id — so subdirectories/worktrees of one repo share a
-  single setting instead of fragmenting. The `project_ids` map is the primary
-  keying mechanism for transcripts ingested on a machine where the repo isn't
-  checked out (git-toplevel detection needs local filesystem access to that
-  `cwd`); git-toplevel auto-detection is a convenience on the machine where
-  the sessions were recorded.
+  `cwd` in this order: (1) the first matching `project_ids` rule (`match` is
+  a substring of the `cwd`, e.g. `/Users/dev/work/client-a` matches any
+  subdirectory of that repo), whose `id` is the key; (2) else the **git repo
+  root** when that `cwd` is a local git worktree
+  (`git -C <cwd> rev-parse --show-toplevel`), whose absolute path is the
+  key; (3) else there is no per-project override and the global default
+  applies. An explicit rule always wins over detection (#477), so a
+  `projects` entry keyed by an id applies whether or not the repo is checked
+  out. The key is **never the raw cwd itself** — only a configured id or a
+  detected repo root — so subdirectories/worktrees of one repo share a
+  single setting instead of fragmenting. Without a rule, key the `projects`
+  entry by the repo's absolute path.
 - **Redaction precedence** (per session): explicit CLI `--redact` (if passed)
   > the resolved project's `redaction_mode` > the global default. The
   resolved mode is what's actually applied before any DB write or judge
@@ -163,7 +163,8 @@ project from ingestion, add a `projects` block to `config_data/defaults.json`
   A key found by git-root detection needs the repository to still be on
   disk at that path; if it has moved or been deleted, the session falls back
   to the global mode and its project's opt-out no longer applies. A
-  `project_ids` rule matches the recorded path itself, so it keeps working.
+  `project_ids` rule matches the recorded path itself and wins over
+  detection (#477), so it keeps working either way.
 - **No `projects` block configured** (the default): every session ingests
   with the global `redaction_mode`, exactly as before this feature existed —
   fully additive, no migration required.

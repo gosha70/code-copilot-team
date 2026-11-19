@@ -79,16 +79,34 @@ class TestProjectKeyResolver(unittest.TestCase):
         self.assertIsNone(resolved)
 
     def test_cached_per_distinct_project_path(self) -> None:
-        fake = _CountingFake(return_value=None)
+        # A path no rule matches reaches git detection; the second lookup is
+        # served from the cache.
+        fake = _CountingFake(return_value="/repo/other")
         rules = (ProjectIdRule(match="demo", id="demo-project"),)
         resolver = ProjectKeyResolver(rules, git_toplevel_fn=fake)
 
-        first = resolver.resolve("/repo/demo")
-        second = resolver.resolve("/repo/demo")
+        first = resolver.resolve("/repo/other/sub")
+        second = resolver.resolve("/repo/other/sub")
 
-        self.assertEqual(first, "demo-project")
-        self.assertEqual(second, "demo-project")
+        self.assertEqual(first, "/repo/other")
+        self.assertEqual(second, "/repo/other")
         self.assertEqual(fake.calls, 1)  # NOT re-invoked on the cached lookup
+
+    def test_a_matching_rule_wins_over_the_git_root(self) -> None:
+        # #477: a real git checkout that a project_ids rule matches is keyed
+        # by the rule's id, so a projects entry keyed by that id applies.
+        tmp = tempfile.mkdtemp(prefix="cct-sa-test-repo-")
+        subprocess.run(["git", "init"], cwd=tmp, capture_output=True, check=True)
+        resolver = ProjectKeyResolver((ProjectIdRule(match=tmp, id="client-a"),))
+
+        self.assertEqual(resolver.resolve(tmp), "client-a")
+
+    def test_a_rule_match_does_not_run_git(self) -> None:
+        fake = _CountingFake(return_value="/repo/demo")
+        resolver = ProjectKeyResolver((ProjectIdRule(match="demo", id="demo-project"),), git_toplevel_fn=fake)
+
+        self.assertEqual(resolver.resolve("/repo/demo"), "demo-project")
+        self.assertEqual(fake.calls, 0)
 
     def test_falsy_path_never_cached_or_resolved(self) -> None:
         fake = _CountingFake(return_value="/some/repo")

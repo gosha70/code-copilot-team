@@ -111,15 +111,19 @@ strict JSON — no comments — and this example can be copied as is:
     "scratch": { "ingest": "off" }
   },
   "project_ids": [
-    { "match": "/repo/my-project", "id": "my-project" }
+    { "match": "/repo/my-project", "id": "my-project" },
+    { "match": "/repo/scratch", "id": "scratch" }
   ]
 }
 ```
 
 `trace_archive: true` keeps the full (redacted) text for Ask and the
-whole-session analyses; `ingest: "off"` never ingests that project. A
-project's key is its git repository name; `project_ids` maps a path
-fragment to a key when a session's directory is not a git checkout.
+whole-session analyses; `ingest: "off"` never ingests that project, and
+nothing already stored from it is sent to a judge, Ask, embeddings or MCP.
+A project's key is the `id` of the first `project_ids` rule whose `match`
+is part of the session's directory. With no matching rule, it is the
+absolute path of the session's git repository root, so a `projects` entry
+for that repo must be keyed by its full path.
 
 ### 3.3 From the Studio instead
 

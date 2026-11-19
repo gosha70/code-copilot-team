@@ -87,5 +87,43 @@ class TheFloorAppliesWithoutReingest(RegistryResetTestCase):
                 )
 
 
+    def test_a_setting_keyed_by_a_project_id_applies_inside_a_git_checkout(self):
+        """#477: the corpus project is a git repository and the config keys
+        it by a project_ids id. The explicit rule wins over the repo root,
+        so the tightening and the opt-out both reach every path."""
+        for label, changed in (
+            ("tightened", dict(project_mode=M)),
+            ("opted out", dict(project_mode=C.REDACT_NONE, ingest_off=True)),
+        ):
+            with self.subTest(change=label):
+                dsn = self.sqlite_dsn()
+                with K.corpus(git_repo=True) as (source, project):
+                    with K.user_config(K.config_for(project, project_mode=C.REDACT_NONE)):
+                        sid = K.ingest_corpus(dsn, source)
+                    with K.user_config(K.config_for(project, **changed)):
+                        captured = K.capture_all(dsn, sid)
+                if label == "tightened":
+                    K.assert_no_leak(self, captured, M)
+                else:
+                    named = {
+                        path: [w for w in ("sess-canary-001", "canaryproj", *K.CANARIES.values()) if w in text]
+                        for path, text in captured.items()
+                    }
+                    self.assertEqual({p: w for p, w in named.items() if w}, {})
+
+    def test_an_opt_out_keyed_by_a_project_id_stops_ingest_inside_a_git_checkout(self):
+        from session_analytics._register import register_all
+        from session_analytics.config import load_config
+        from session_analytics.ingest.pipeline import configured_options, ingest
+
+        register_all()
+        dsn = self.sqlite_dsn()
+        with K.corpus(git_repo=True) as (source, project):
+            with K.user_config(K.config_for(project, ingest_off=True)):
+                stats = ingest(dsn=dsn, copilots=[C.COPILOT_CLAUDE_CODE], root=source, full=True,
+                               **configured_options(load_config()))
+        self.assertEqual((stats.sessions_ingested, stats.sessions_opted_out), (0, 1))
+
+
 if __name__ == "__main__":
     unittest.main()
