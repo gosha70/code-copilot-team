@@ -19,14 +19,16 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   DeepSeek, a local Ollama model, or anything behind a gateway. The
   endpoint, credential and model are set in the process that becomes
   `claude` and nowhere else, and competing variables (another credential,
-  custom headers, provider switches, a subagent model, another model's
+  Claude Code's own login token on a third-party endpoint, custom headers,
+  provider and gateway switches, a subagent model, another model's
   tuning) are removed from it, so nothing is exported in a shell and
   nothing a shell exports redirects the session. A credential is named by
   its environment variable, never written in the catalog, and a command
   typed into cmux or tmux carries the target id only. A launch is refused
   before Claude Code starts, with the reason, when the target is unknown,
   its endpoint speaks another protocol, its credential is not set, or a
-  `settings.json` `env` block would override it. `cct llm list` shows the
+  `settings.json` `env` block would override its endpoint, credential or
+  model (tuning in a settings file is noted, not refused). `cct llm list` shows the
   targets and `cct llm validate` checks the file by line and name. Without
   `--llm` a launch is unchanged. Remove `ANTHROPIC_BASE_URL`,
   `ANTHROPIC_AUTH_TOKEN` and the model variables from your shell profile,

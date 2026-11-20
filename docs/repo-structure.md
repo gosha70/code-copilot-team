@@ -75,7 +75,7 @@ code-copilot-team/
 │   ├── test-github-hardening.sh       14 hardening audit tests (classic + ruleset sources)
 │   ├── test-cct-home.sh               146 home resolver + `cct home` tests (#411)
 │   ├── test-llm-catalog.sh            116 LLM catalog + `cct llm` tests (#479)
-│   ├── test-llm-launch.sh             114 `claude-code --llm` launch tests (#479)
+│   ├── test-llm-launch.sh             149 `claude-code --llm` launch tests (#479)
 │   ├── test-wiki-setup.sh             54 managed wiki-studio install tests (#384)
 │   ├── test-wiki-launcher.sh          24 provenance-bound wiki launcher + alias tests (#384)
 │   ├── test-wiki-schema.sh            20 schema reconciliation + fingerprint tests (needs the managed .venv; #384)

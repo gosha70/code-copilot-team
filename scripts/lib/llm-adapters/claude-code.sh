@@ -13,10 +13,13 @@
 #     every gateway variable removed, so the session is Anthropic's even
 #     when the shell that started it was configured for a gateway.
 # Removed in both cases: the credential the plan does not use, custom
-# headers, the provider switches with their base URLs, the subagent
-# model override, and the tuning variables the binding does not set, so
-# nothing the user did not select can redirect the session, reach the
-# endpoint, or tune a session on one model with another model's values.
+# headers, the provider and gateway switches with their base URLs, the
+# unix-socket transport, the subagent model override, and the tuning
+# variables the binding does not set, so nothing the user did not select
+# can redirect the session, reach the endpoint, or tune a session on one
+# model with another model's values. An api endpoint also loses Claude
+# Code's own login token: that is Anthropic's, and is never sent to an
+# endpoint that is not.
 #
 # The plan (llm_cc_plan) holds NAMES and non-secret literals only. A
 # credential's value is read by llm_cc_apply alone, in the process that
@@ -39,14 +42,20 @@ LLM_CC_VAR_BASE_URL="ANTHROPIC_BASE_URL"
 LLM_CC_VAR_BEARER="ANTHROPIC_AUTH_TOKEN"
 LLM_CC_VAR_API_KEY="ANTHROPIC_API_KEY"
 LLM_CC_VAR_MODEL="ANTHROPIC_MODEL"
+# Claude Code's own login as a token. Removed for an api endpoint; a
+# managed provider is that login, so there it passes through.
+LLM_CC_VAR_OWN_LOGIN="CLAUDE_CODE_OAUTH_TOKEN"
 # Aliases that mean "the main model" and "the small, fast model".
 LLM_CC_VARS_MAIN_ALIASES="ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_FABLE_MODEL"
 LLM_CC_VARS_SMALL_ALIASES="ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_SMALL_FAST_MODEL"
 LLM_CC_VAR_MAX_OUTPUT="CLAUDE_CODE_MAX_OUTPUT_TOKENS"
 LLM_CC_VAR_AUTO_COMPACT="CLAUDE_CODE_AUTO_COMPACT_WINDOW"
 LLM_CC_VAR_EFFORT="CLAUDE_CODE_EFFORT_LEVEL"
+# Tuning, as opposed to routing: these change how a session behaves on
+# its target, never which target it reaches.
+LLM_CC_VARS_TUNING="$LLM_CC_VAR_MAX_OUTPUT $LLM_CC_VAR_AUTO_COMPACT $LLM_CC_VAR_EFFORT"
 # Removed from every selected launch.
-LLM_CC_VARS_ALWAYS_CLEARED="ANTHROPIC_CUSTOM_HEADERS ANTHROPIC_DEFAULT_MODEL CLAUDE_CODE_SUBAGENT_MODEL CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY CLAUDE_CODE_USE_ANTHROPIC_AWS CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD CLAUDE_CODE_USE_MANTLE ANTHROPIC_BEDROCK_BASE_URL ANTHROPIC_BEDROCK_MANTLE_BASE_URL ANTHROPIC_VERTEX_BASE_URL ANTHROPIC_FOUNDRY_BASE_URL ANTHROPIC_AWS_BASE_URL ANTHROPIC_GOOGLE_CLOUD_BASE_URL"
+LLM_CC_VARS_ALWAYS_CLEARED="ANTHROPIC_CUSTOM_HEADERS ANTHROPIC_DEFAULT_MODEL CLAUDE_CODE_SUBAGENT_MODEL CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY CLAUDE_CODE_USE_ANTHROPIC_AWS CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD CLAUDE_CODE_USE_MANTLE ANTHROPIC_BEDROCK_BASE_URL ANTHROPIC_BEDROCK_MANTLE_BASE_URL ANTHROPIC_VERTEX_BASE_URL ANTHROPIC_FOUNDRY_BASE_URL ANTHROPIC_AWS_BASE_URL ANTHROPIC_GOOGLE_CLOUD_BASE_URL CLAUDE_CODE_USE_GATEWAY ANTHROPIC_UNIX_SOCKET"
 
 _llm_cc_set() {  # <NAME> lit|env <value, or the NAME of the variable to copy>
     LLM_CC_ASSIGN="${LLM_CC_ASSIGN}$1${CT_US}$2${CT_US}$3"$'\n'
@@ -87,6 +96,7 @@ llm_cc_plan() {
         LLM_CC_LABEL="$pname · $model · Claude Code's own login"
     else
         e=$(lc_get "$b" endpoint) || e=""
+        clear="$clear $LLM_CC_VAR_OWN_LOGIN"
         proto=$(lc_get "endpoints.$e" protocol) || proto=""
         header=$(lc_get "endpoints.$e" auth_header) || header=""
         ep=$(lc_get "endpoints.$e" provider) || ep=""
@@ -160,11 +170,21 @@ llm_cc_plan() {
 # llm_cc_settings_conflicts <project-dir>
 # Claude Code applies a settings file's env block over the environment
 # it was started with, so a variable the plan sets or removes that a
-# settings file also sets would silently undo the selection. Prints
-# "<file>: <NAME>" for each one. Returns 0 none, 1 some, 2 not checked
-# (jq is missing).
+# settings file also sets is decided by the settings file. Two kinds:
+#   LLM_CC_SETTINGS_REFUSED  a routing, credential, model or quirk
+#       variable: the session would reach another endpoint, carry
+#       another credential or ask for another model. The launch is
+#       refused.
+#   LLM_CC_SETTINGS_NOTED    one of the three tuning variables: the
+#       session still runs on the selected target, with the settings
+#       file's value. The launch goes ahead with a notice.
+# Each is a newline list of "<file>: <NAME>", never a value. Returns 0
+# nothing to refuse, 1 something to refuse, 2 not checked (jq is
+# missing). Sets globals, so call it in the current shell.
 llm_cc_settings_conflicts() {
-    local project="$1" f name found=0
+    local project="$1" f name
+    LLM_CC_SETTINGS_REFUSED=""
+    LLM_CC_SETTINGS_NOTED=""
     command -v jq >/dev/null 2>&1 || return 2
     for f in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" \
              "$project/.claude/settings.json" \
@@ -172,12 +192,14 @@ llm_cc_settings_conflicts() {
         [[ -f "$f" ]] || continue
         while IFS= read -r name; do
             [[ -z "$name" ]] && continue
-            case " $LLM_CC_SET $LLM_CC_CLEAR " in
-                *" $name "*) printf '%s: %s\n' "$f" "$name"; found=1 ;;
+            case " $LLM_CC_SET $LLM_CC_CLEAR " in *" $name "*) ;; *) continue ;; esac
+            case " $LLM_CC_VARS_TUNING " in
+                *" $name "*) LLM_CC_SETTINGS_NOTED="${LLM_CC_SETTINGS_NOTED}${f}: ${name}"$'\n' ;;
+                *)           LLM_CC_SETTINGS_REFUSED="${LLM_CC_SETTINGS_REFUSED}${f}: ${name}"$'\n' ;;
             esac
         done <<< "$(jq -r '(.env // {}) | keys[]' "$f" 2>/dev/null || true)"
     done
-    [[ $found -eq 0 ]]
+    [[ -z "$LLM_CC_SETTINGS_REFUSED" ]]
 }
 
 # llm_cc_apply

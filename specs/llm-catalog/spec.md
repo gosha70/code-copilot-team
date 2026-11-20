@@ -125,7 +125,7 @@ governs the slices that follow.
 | FR-6 commands | `cct llm list` and `cct llm validate [file]` only. |
 | FR-7 redaction | An endpoint is printed as its origin only. The sanitizer is `scripts/lib/cct-endpoint.sh`, moved from the supervisor as FR-7 specifies; digests are not built. |
 | FR-8 resolution | As written: `<llm>` or `<llm>@<binding>`, explicit bindings only. |
-| FR-10 child-side resolution | As written. A typed command carries the launcher, `--llm <target>` and Claude Code's own flags; the launcher re-run in the pane (`CCT_LLM_CHILD=1`) resolves and reads the credential there. A project path that `%q` renders as `$'…'` is refused before typing. |
+| FR-10 child-side resolution | As written. A typed command carries the launcher, `--llm <target>` and Claude Code's own flags; the launcher re-run in the pane (`CCT_LLM_CHILD=1`) resolves and reads the credential there. A project path that `%q` renders as `$'…'` is refused before typing, and so are the launcher's own path and a forwarded flag (owner, 2026-11-20). A launch from inside a pane types nothing and is not checked. |
 | FR-11 native behaviour preserved | As written. Verified against master's launcher: output, typed command, and the argv and environment a stub `claude` receives are identical in seven launches without `--llm`. |
 | FR-12 refusal before launch | The static refusals: unknown target, `unsupported`, `unavailable`, an invalid or missing catalog. Exit 3. |
 | FR-20 Claude Code adapter | With the departures below. |
@@ -186,9 +186,18 @@ target, and the rest are put to the owner with the PR.
    session on one model at another's: `CLAUDE_CODE_SUBAGENT_MODEL`, and
    whichever of `CLAUDE_CODE_MAX_OUTPUT_TOKENS`,
    `CLAUDE_CODE_AUTO_COMPACT_WINDOW` and `CLAUDE_CODE_EFFORT_LEVEL` the
-   binding does not set. Seen in the binary and not cleared, their
-   semantics not established: `CLAUDE_CODE_USE_GATEWAY`,
-   `ANTHROPIC_UNIX_SOCKET`.
+   binding does not set. Added by the owner's ruling of 2026-11-20:
+   `CLAUDE_CODE_USE_GATEWAY` and `ANTHROPIC_UNIX_SOCKET` on every
+   selected launch, and `CLAUDE_CODE_OAUTH_TOKEN` on a launch to an api
+   endpoint. The capture shows why: Claude Code sends that login token
+   as the bearer to whatever base URL it is given when no other
+   credential is set, and a socket variable takes the request away from
+   the base URL altogether. On a managed provider the login token
+   passes through, like `ANTHROPIC_API_KEY`. Seen in the binary and
+   left alone: the file-descriptor forms of the credentials
+   (`CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR`,
+   `CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR`),
+   `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` and `CLAUDE_CODE_GATEWAY_TOKEN`.
 8. **Two more binding keys (FR-20).** `auto_compact_window` and
    `reasoning_effort`, beside `small_fast_model` and
    `max_output_tokens`. Without them a target cannot reproduce the
@@ -202,9 +211,15 @@ target, and the rest are put to the owner with the PR.
     capture answers the question FR-20 left open: Claude Code 2.1.329
     applies a `settings.json` `env` block over the environment it is
     started with, for the API client as well as for tools. The adapter
-    refuses a launch when the user or project settings name a variable
-    the plan sets or removes, by file and name, never value. Without
-    `jq` the check is skipped with a notice.
+    refuses a launch when the user or project settings name a routing,
+    credential, model or quirk variable the plan sets or removes, by
+    file and name, never value. By the owner's ruling of 2026-11-20 the
+    three tuning variables are said, not refused: a settings file that
+    sets `CLAUDE_CODE_MAX_OUTPUT_TOKENS`,
+    `CLAUDE_CODE_AUTO_COMPACT_WINDOW` or `CLAUDE_CODE_EFFORT_LEVEL`
+    gets a notice that its value is the one the session uses, also when
+    the binding sets its own, and the launch goes ahead. Without `jq`
+    the check is skipped with a notice.
 11. **No ambient #399 notice on a selected launch (B3).** B3 retires
     the notice for an endpoint that declares `rejects-dynamic-tools`.
     It is skipped for every selected launch: it describes the shell's

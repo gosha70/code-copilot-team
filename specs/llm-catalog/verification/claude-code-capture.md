@@ -97,14 +97,19 @@ removes: `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`,
 `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`,
 `CLAUDE_CODE_USE_FOUNDRY`, `CLAUDE_CODE_USE_ANTHROPIC_AWS`,
 `CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD`, `CLAUDE_CODE_USE_MANTLE`,
+`CLAUDE_CODE_USE_GATEWAY`, `ANTHROPIC_UNIX_SOCKET`,
+`CLAUDE_CODE_OAUTH_TOKEN` (an api endpoint only),
 `ANTHROPIC_BEDROCK_BASE_URL`, `ANTHROPIC_BEDROCK_MANTLE_BASE_URL`,
 `ANTHROPIC_VERTEX_BASE_URL`, `ANTHROPIC_FOUNDRY_BASE_URL`,
 `ANTHROPIC_AWS_BASE_URL`, `ANTHROPIC_GOOGLE_CLOUD_BASE_URL`,
 `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`, `ENABLE_TOOL_SEARCH`,
 `DISABLE_FEEDBACK_COMMAND`.
 
-Present in the binary and left alone, because what they do was not
-established: `CLAUDE_CODE_USE_GATEWAY`, `ANTHROPIC_UNIX_SOCKET`.
+Present in the binary and left alone: the file-descriptor forms of the
+credentials (`CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR`,
+`CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR`), `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`
+and `CLAUDE_CODE_GATEWAY_TOKEN`. What they do was not established, and
+nothing was ruled about them.
 
 A name in a binary says the variable exists, not what it does. The
 meaning of the base URL, the two credentials and the model is shown by
@@ -113,7 +118,9 @@ section 1. The Opus, Sonnet, Haiku and small-fast alias variables and
 already export (`docs/dgx-spark/setup-cookbook.md`); the subagent,
 effort and auto-compact variables are the ones the owner's own
 per-provider file exported. The Fable alias and the provider switches
-are taken by name. None of these was observed on the wire here.
+are taken by name. None of these was observed on the wire here. The
+login token, the gateway switch and the socket variable are observed
+in section 4.
 
 ## 3. A launch without `--llm` is unchanged
 
@@ -161,3 +168,73 @@ This comparison is not in the suite: CI checks out shallowly, so
 master's launcher is not available there. The suite asserts the same
 property against the planted variables and proves the assertions with
 a mutated launcher.
+
+## 4. A login token, the gateway switch and the socket variable
+
+Recorded 2026-11-20, after the owner ruled that a selected launch
+removes `CLAUDE_CODE_USE_GATEWAY` and `ANTHROPIC_UNIX_SOCKET`, and
+`CLAUDE_CODE_OAUTH_TOKEN` for an api endpoint. Same method as section
+1: one local stub endpoint, a throwaway `HOME`, `env -i`, headless, a
+90 s limit per run.
+
+```
+=== 6. plain claude: a base URL naming the stub and a login token, no other credential
+exit: 0
+claude's result: stub-ok | is_error: False
+  request -> the stub: POST /v1/messages | authorization='Bearer capture-planted-login-token' x-api-key=None model='claude-sonnet-5-5'
+
+=== 7. --llm bearer, from a shell that carries a login token
+exit: 0
+claude's result: stub-ok | is_error: False
+  request -> the stub: POST /v1/messages | authorization='Bearer capture-planted-credential' x-api-key=None model='capture-main'
+
+=== 8. --llm open (no credential), from a shell that carries a login token
+exit: 0
+claude's result: stub-ok | is_error: False
+  request -> the stub: POST /v1/messages | authorization='Bearer none' x-api-key=None model='capture-main'
+
+=== 9. plain claude: the stub as base URL, a bearer token, and ANTHROPIC_UNIX_SOCKET naming a socket that does not exist
+exit: timeout after 90s
+  (no request reached the stub)
+
+=== 10. plain claude: the stub as base URL, a bearer token, and CLAUDE_CODE_USE_GATEWAY=1
+exit: 0
+claude's result: stub-ok | is_error: False
+  request -> the stub: POST /v1/messages | authorization='Bearer capture-token' x-api-key=None model='claude-opus-4-7'
+
+(run 10 repeated as a controlled pair, in one fresh home)
+=== 10a. plain claude: the stub as base URL and a bearer token, no switch
+  request -> the stub: POST /v1/messages | authorization='Bearer capture-token' x-api-key=None model='claude-opus-5-5'
+=== 10b. the same, with CLAUDE_CODE_USE_GATEWAY=1
+  request -> the stub: POST /v1/messages | authorization='Bearer capture-token' x-api-key=None model='claude-opus-4-7'
+=== 10c. the first again, no switch
+  request -> the stub: POST /v1/messages | authorization='Bearer capture-token' x-api-key=None model='claude-opus-5-5'
+
+=== 11. --llm bearer, from a shell that carries both of those
+exit: 0
+claude's result: stub-ok | is_error: False
+  request -> the stub: POST /v1/messages | authorization='Bearer capture-planted-credential' x-api-key=None model='capture-main'
+```
+
+**What it establishes.**
+
+- **Claude Code sends its login token to a custom base URL.** With
+  `ANTHROPIC_BASE_URL` set and no other credential, the value of
+  `CLAUDE_CODE_OAUTH_TOKEN` arrived at the stub as the bearer (run 6).
+  A selected launch to an api endpoint removes the variable: the stub
+  received the selected credential (run 7), or the placeholder for an
+  endpoint that takes none (run 8), and never the login token.
+- **`ANTHROPIC_UNIX_SOCKET` takes the request away from the base URL.**
+  With it naming a socket that does not exist, nothing reached the stub
+  and the run did not finish in 90 s (run 9). From a shell that carries
+  it, a selected launch reached the selected endpoint (run 11), which
+  it could not have done with the variable in place.
+- **`CLAUDE_CODE_USE_GATEWAY` changes what is requested.** The request
+  still reached the base URL, but for another default model: in one
+  home, `claude-opus-5-5` without the switch, `claude-opus-4-7` with
+  it, and `claude-opus-5-5` again without (runs 10a to 10c). What else
+  the switch does was not established.
+
+**What it does not establish.** What the gateway switch is for. That a
+login token is sent when another credential is also set: runs 7 and 8
+show only that it is absent after the launcher removed it.

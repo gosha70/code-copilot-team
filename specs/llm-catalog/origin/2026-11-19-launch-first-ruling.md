@@ -75,3 +75,23 @@ Not ruled individually: the implementation choices this slice had to
 make where the approved text was silent or, read literally, would not
 produce a working launch. Each is listed in spec.md, "Launch-first
 slice", for the owner's review with the PR.
+
+## Review rulings, 2026-11-20
+
+After reading the summary of PR #480 the owner ruled, in these words:
+
+> Two changes on #480, then I'll label it: (1) in
+> llm_cc_settings_conflicts, treat CLAUDE_CODE_EFFORT_LEVEL,
+> CLAUDE_CODE_AUTO_COMPACT_WINDOW and CLAUDE_CODE_MAX_OUTPUT_TOKENS in a
+> settings env block as a notice, not a refusal; keep refusing for
+> routing, credential and model variables; add a test. (2) Clear
+> CLAUDE_CODE_OAUTH_TOKEN for endpoint targets, and clear
+> CLAUDE_CODE_USE_GATEWAY and ANTHROPIC_UNIX_SOCKET on every selected
+> launch. Optional: run llm_refuse_unquotable on the launcher path and
+> forwarded args too. Separately, file issues for the setup.sh
+> CCT_PEER_REVIEW_ENABLED=false override and for
+> test-routing-recovery.sh writing to the real ledger, and reopen #400
+> as the umbrella.
+
+These settle departures 7 and 10 of spec.md, "Launch-first slice", and
+extend FR-10's quoting refusal; #400 is the umbrella again.

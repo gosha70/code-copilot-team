@@ -219,6 +219,9 @@ DIRTY=(
     CLAUDE_CODE_EFFORT_LEVEL="low"
     CLAUDE_CODE_AUTO_COMPACT_WINDOW="111"
     CLAUDE_CODE_MAX_OUTPUT_TOKENS="222"
+    CLAUDE_CODE_OAUTH_TOKEN="ambient-login-token"
+    CLAUDE_CODE_USE_GATEWAY="1"
+    ANTHROPIC_UNIX_SOCKET="/tmp/ambient.sock"
 )
 
 echo "=== --llm launch tests (#479) ==="
@@ -233,6 +236,8 @@ assert_eq "native: the ambient key is untouched" "$AMBIENT_KEY" "$(claude_env AN
 assert_eq "native: the ambient provider switch is untouched" "1" "$(claude_env CLAUDE_CODE_USE_BEDROCK)"
 assert_eq "native: the ambient model is untouched" "ambient-model" "$(claude_env ANTHROPIC_MODEL)"
 assert_eq "native: the ambient tuning is untouched" "111" "$(claude_env CLAUDE_CODE_AUTO_COMPACT_WINDOW)"
+assert_eq "native: the ambient login token is untouched" "ambient-login-token" "$(claude_env CLAUDE_CODE_OAUTH_TOKEN)"
+assert_eq "native: the ambient gateway switch and socket are untouched" "1 /tmp/ambient.sock" "$(claude_env CLAUDE_CODE_USE_GATEWAY) $(claude_env ANTHROPIC_UNIX_SOCKET)"
 assert_not_contains "native: no selection notice" "$OUTPUT" "--llm"
 # The assertions above have teeth: a launcher whose default target is
 # set (the guard removed) fails them.
@@ -266,6 +271,9 @@ assert_eq "selected: ambient custom headers are removed" "<unset>" "$(claude_env
 assert_eq "selected: an ambient provider switch is removed" "<unset>" "$(claude_env CLAUDE_CODE_USE_BEDROCK)"
 assert_eq "selected: ...with its base URL" "<unset>" "$(claude_env ANTHROPIC_BEDROCK_BASE_URL)"
 assert_eq "selected: an ambient subagent model is removed" "<unset>" "$(claude_env CLAUDE_CODE_SUBAGENT_MODEL)"
+assert_eq "selected: Claude Code's own login token never reaches an endpoint" "<unset>" "$(claude_env CLAUDE_CODE_OAUTH_TOKEN)"
+assert_eq "selected: an ambient gateway switch is removed" "<unset>" "$(claude_env CLAUDE_CODE_USE_GATEWAY)"
+assert_eq "selected: an ambient unix-socket transport is removed" "<unset>" "$(claude_env ANTHROPIC_UNIX_SOCKET)"
 assert_contains "selected: the notice names provider, model and origin" "$OUTPUT" "--llm deepseek: DeepSeek · deepseek-main[1m] · https://api.deepseek.example"
 assert_not_contains "selected: the notice never carries the URL's path" "$OUTPUT" "deepseek.example/anthropic"
 assert_not_contains "selected: the credential is in nothing the launcher prints" "$OUTPUT" "$SECRET"
@@ -290,6 +298,7 @@ run_launcher "${DIRTY[@]}" -- --llm qwen -p x
 assert_eq "no credential: a placeholder token, so Claude Code never sends its own login" "none" "$(claude_env ANTHROPIC_AUTH_TOKEN)"
 assert_eq "no credential: an ambient key never reaches the endpoint" "<unset>" "$(claude_env ANTHROPIC_API_KEY)"
 assert_eq "no credential: the local base URL" "http://localhost:11434" "$(claude_env ANTHROPIC_BASE_URL)"
+assert_eq "no credential: the login token is removed there too" "<unset>" "$(claude_env CLAUDE_CODE_OAUTH_TOKEN)"
 
 # ── A managed provider: Claude Code's own login, from a dirty shell ──
 new_logs
@@ -303,6 +312,9 @@ assert_eq "managed: ...the Fable one included" "<unset>" "$(claude_env ANTHROPIC
 assert_eq "managed: the small-fast remap is removed" "<unset>" "$(claude_env ANTHROPIC_SMALL_FAST_MODEL)"
 assert_eq "managed: the provider switch is removed" "<unset>" "$(claude_env CLAUDE_CODE_USE_BEDROCK)"
 assert_eq "managed: the harness's own API key passes through untouched" "$AMBIENT_KEY" "$(claude_env ANTHROPIC_API_KEY)"
+assert_eq "managed: Claude Code's own login token passes through too" "ambient-login-token" "$(claude_env CLAUDE_CODE_OAUTH_TOKEN)"
+assert_eq "managed: the gateway switch is removed" "<unset>" "$(claude_env CLAUDE_CODE_USE_GATEWAY)"
+assert_eq "managed: the unix-socket transport is removed" "<unset>" "$(claude_env ANTHROPIC_UNIX_SOCKET)"
 assert_contains "managed: the notice says how it signs in" "$OUTPUT" "Anthropic · opus · Claude Code's own login"
 
 # ── Refusals: before claude runs, exit 3, with the reason ──
@@ -349,6 +361,42 @@ rm -f "$PROJ/.claude/settings.local.json"
 new_logs
 run_launcher -- --llm deepseek -p x
 assert_exit "settings: an env block with unrelated keys does not refuse" 0 "$RC"
+
+# Tuning in a settings file is said, not refused: it changes how the
+# session behaves on its target, never which target it reaches.
+SETTINGS="$FAKE_HOME/.claude/settings.json"
+printf '{"env": {"CLAUDE_CODE_EFFORT_LEVEL": "high", "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1", "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "2", "HOOK_X": "1"}}\n' > "$SETTINGS"
+new_logs
+run_launcher -- --llm opus -p x
+assert_exit "settings: tuning variables in an env block do not refuse" 0 "$RC"
+assert_eq "settings: ...claude runs" "1" "$(claude_ran)"
+assert_contains "settings: ...the effort level is noted, by file and name" "$OUTPUT" "note: $SETTINGS sets CLAUDE_CODE_EFFORT_LEVEL in its env block"
+assert_contains "settings: ...the auto-compact window too" "$OUTPUT" "note: $SETTINGS sets CLAUDE_CODE_AUTO_COMPACT_WINDOW in its env block"
+assert_contains "settings: ...and the output limit" "$OUTPUT" "note: $SETTINGS sets CLAUDE_CODE_MAX_OUTPUT_TOKENS in its env block"
+assert_contains "settings: ...the notice says whose value the session uses" "$OUTPUT" "so that value is the one the session uses"
+assert_not_contains "settings: ...an unrelated key is not noted" "$OUTPUT" "HOOK_X"
+assert_not_contains "settings: ...and nothing is refused" "$OUTPUT" "refused"
+# The same when the binding itself sets the variable.
+new_logs
+run_launcher -- --llm deepseek -p x
+assert_exit "settings: a tuning variable the binding sets is noted too, not refused" 0 "$RC"
+assert_contains "settings: ...by file and name" "$OUTPUT" "note: $SETTINGS sets CLAUDE_CODE_EFFORT_LEVEL in its env block"
+# Beside a model variable the launch is still refused, for the model variable.
+printf '{"env": {"CLAUDE_CODE_EFFORT_LEVEL": "high", "ANTHROPIC_MODEL": "another-model"}}\n' > "$SETTINGS"
+refused "settings: tuning beside a model variable is still refused" "$SETTINGS: ANTHROPIC_MODEL" -- --llm opus -p x
+assert_not_contains "settings: ...and the tuning variable is not among the refused" "$(echo "$OUTPUT" | grep '^    ')" "CLAUDE_CODE_EFFORT_LEVEL"
+# Credential and transport variables are refused like routing ones.
+printf '{"env": {"CLAUDE_CODE_OAUTH_TOKEN": "settings-login-token"}}\n' > "$SETTINGS"
+refused "settings: a login token in an env block is refused for an endpoint target" "$SETTINGS: CLAUDE_CODE_OAUTH_TOKEN" -- --llm deepseek -p x
+assert_not_contains "settings: ...its value is not printed" "$OUTPUT" "settings-login-token"
+new_logs
+run_launcher -- --llm opus -p x
+assert_exit "settings: ...and is the harness's own business on a managed target" 0 "$RC"
+printf '{"env": {"CLAUDE_CODE_USE_GATEWAY": "1"}}\n' > "$SETTINGS"
+refused "settings: a gateway switch in an env block is refused" "$SETTINGS: CLAUDE_CODE_USE_GATEWAY" -- --llm opus -p x
+printf '{"env": {"ANTHROPIC_UNIX_SOCKET": "/tmp/settings.sock"}}\n' > "$SETTINGS"
+refused "settings: a unix-socket transport in an env block is refused" "$SETTINGS: ANTHROPIC_UNIX_SOCKET" -- --llm opus -p x
+printf '{"env": {"HOOK_X": "1"}}\n' > "$SETTINGS"
 
 # ── Usage errors ──
 new_logs; run_launcher -- --llm
@@ -422,8 +470,29 @@ assert_eq "hostile path: claude starts in exactly that directory" "$HOSTILE" "$(
 assert_eq "hostile path: no second command ran" "no" "$([[ -e "$TMP/CANARY" || -e "$TMP/CANARY2" ]] && echo yes || echo no)"
 NEWLINE_DIR="$TMP/line"$'\n'"break"
 mkdir -p "$NEWLINE_DIR"
-refused "hostile path: one that needs \$'…' quoting is refused before typing" "needs \$'…' quoting" -- --shell cmux --llm opus "$NEWLINE_DIR"
+refused "hostile path: one that needs \$'…' quoting is refused before typing" "the project path needs \$'…' quoting" -- --shell cmux --llm opus "$NEWLINE_DIR"
 assert_eq "hostile path: ...nothing was typed" "" "$(cat "$MUX_LOG")"
+assert_contains "hostile path: ...and the remedy is a launch that types nothing" "$OUTPUT" "from inside a cmux or tmux pane"
+
+# The flags forwarded to claude and the launcher's own path are typed too.
+NEWLINE_ARG="--append-system-prompt=two"$'\n'"lines"
+refused "hostile argument: a forwarded flag that needs \$'…' quoting is refused before typing" \
+    "the argument forwarded to claude needs \$'…' quoting" -- --shell cmux --llm opus "$NEWLINE_ARG" "$PROJ"
+assert_eq "hostile argument: ...nothing was typed" "" "$(cat "$MUX_LOG")"
+refused "hostile argument: ...and before a tmux session is created" \
+    "the argument forwarded to claude needs \$'…' quoting" -- --shell tmux --llm opus "$NEWLINE_ARG" "$PROJ"
+assert_not_contains "hostile argument: ...no session was created" "$(cat "$MUX_LOG.calls" 2>/dev/null)" "new-session"
+# Inside a pane nothing is typed, so the same flag is an argument like any other.
+new_logs
+run_launcher CMUX_WORKSPACE_ID=1 -- --llm opus "$NEWLINE_ARG" "$PROJ"
+assert_exit "hostile argument: inside a pane it is not typed, so it is not refused" 0 "$RC"
+assert_contains "hostile argument: ...and claude receives it" "$(grep '^ARGV:' "$CLAUDE_LOG")" "append-system-prompt=two"
+ODD_DIR="$TMP/odd"$'\n'"launcher"
+mkdir -p "$ODD_DIR"
+cp "$LAUNCHER" "$ODD_DIR/claude-code"
+LAUNCHER_UNDER_TEST="$ODD_DIR/claude-code" refused "hostile launcher path: refused before typing" \
+    "the launcher's own path needs \$'…' quoting" -- --shell cmux --llm opus "$PROJ"
+assert_eq "hostile launcher path: ...nothing was typed" "" "$(cat "$MUX_LOG")"
 
 # ── Interactive, a new tmux session ──
 new_logs
