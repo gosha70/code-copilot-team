@@ -173,9 +173,19 @@ claude-code --peer-review-off ~/dev/repo/my-app        # off for this session
 
 The launcher exports `CCT_PEER_REVIEW_ENABLED=true` and the peer into
 the session; the build agent runs `/review-submit` after the work and
-the stop hook enforces it at phase completion. In a session started
-without the flag, the same round can be run by hand with the runner
-(this is what `/review-submit` does):
+the stop hook enforces it at phase completion. `--peer-review-off`
+exports `false`.
+
+Nothing in `~/.claude/settings.json` should set `CCT_PEER_REVIEW_ENABLED`
+or `CCT_PEER_PROVIDER`: Claude Code applies a settings `env` block over
+the environment it is started with, so a key there replaces what the
+flag passes. An earlier `setup.sh` wrote both, with the review switched
+off; `./scripts/setup.sh --sync --claude-code` removes them. To see what
+a session got, run `printenv CCT_PEER_REVIEW_ENABLED CCT_PEER_PROVIDER`
+in it.
+
+In a session started without the flag, the same round can be run by hand
+with the runner (this is what `/review-submit` does):
 
 ```bash
 mkdir -p .cct/review

@@ -205,6 +205,17 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   project but does not delete what is already stored for it; to drop those
   sessions, point Session Analytics at a new, empty store and run
   `ingest --full` there (#473).
+- **`claude-code --peer-review` turns peer review on.** `setup.sh` wrote
+  `CCT_PEER_REVIEW_ENABLED=false`, `CCT_PEER_PROVIDER` and
+  `CCT_PEER_TRIGGER` into the `env` block of `~/.claude/settings.json`, and
+  Claude Code applies that block over the environment it is started with.
+  The values the launcher's flag passed were replaced before any hook saw
+  them, so the stop hook never ran a review, and nothing said the flag had
+  been ignored. Setup no longer writes those keys, and
+  `./scripts/setup.sh --sync --claude-code` removes the defaults an earlier
+  version wrote; a value you changed yourself stays, and setup names it.
+  `--peer-review-off` now passes `false` to the session rather than relying
+  on that default (#481).
 - **`cct home migrate` output is safe to paste back into a shell.** It
   printed `moved: x -> /path/x`; pasted into zsh, the `>` opened
   `/path/x` for writing before the unknown command `moved:` failed, which
