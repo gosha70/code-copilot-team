@@ -298,6 +298,10 @@ build_run_cmd_string() {
             "$extra_env" \
             "$session_start" \
             "$quoted_cmd"
+    elif [[ "$PEER_REVIEW_ENABLED" == "false" ]]; then
+        # --peer-review-off says so to the session: without it, a shell
+        # that carries CCT_PEER_REVIEW_ENABLED=true would leave it on.
+        run_cmd="env CCT_PEER_REVIEW_ENABLED=false ${llm_env}${quoted_cmd}"
     elif [[ -n "$llm_env" ]]; then
         run_cmd="env ${llm_env}${quoted_cmd}"
     else
@@ -396,6 +400,9 @@ exec_claude_in_current_shell() {
         )
         [[ -n "${REVIEW_MAX_ROUNDS:-}" ]] && env_args+=(CCT_REVIEW_MAX_ROUNDS="$REVIEW_MAX_ROUNDS")
         exec env "${env_args[@]}" "${CLAUDE_CMD[@]}"
+    fi
+    if [[ "$PEER_REVIEW_ENABLED" == "false" ]]; then
+        exec env CCT_PEER_REVIEW_ENABLED=false "${CLAUDE_CMD[@]}"
     fi
 
     exec "${CLAUDE_CMD[@]}"

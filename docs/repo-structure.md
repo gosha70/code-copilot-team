@@ -56,11 +56,11 @@ code-copilot-team/
 │   ├── test-hooks.sh                    196 hook tests
 │   ├── test-generate.sh                 341 generation + adapter tests
 │   ├── test-shared-structure.sh         940 structure + content tests
-│   ├── test-sync.sh                     129 sync + init metadata tests
+│   ├── test-sync.sh                     138 sync + init metadata tests
 │   ├── test-litellm-proxy-deps.sh       13 benchmark proxy pin tests (+11 with --online)
 │   ├── test-coverage-parse.sh           46 coverage parser + safety tests
 │   ├── test-verification-preset.sh      43 preset resolution tests
-│   ├── test-peer-review.sh             95 peer-review runner tests
+│   ├── test-peer-review.sh             99 peer-review runner tests
 │   ├── test-review-loop.sh           237 review loop integration tests
 │   ├── test-setup-reviewer.sh           43 copilot reviewer installer tests
 │   ├── test-auto-build-loop.sh        1403 auto-build driver tests
@@ -80,7 +80,7 @@ code-copilot-team/
 │   ├── test-wiki-launcher.sh          24 provenance-bound wiki launcher + alias tests (#384)
 │   ├── test-wiki-schema.sh            20 schema reconciliation + fingerprint tests (needs the managed .venv; #384)
 │   ├── test-wiki-ingest.sh            42 five-verb wiki contract tests (needs the managed .venv; #384)
-│   └── test-claude-code-launcher.sh   39 branded-launcher + cct shim + gateway notice tests (#195, #410, #399)
+│   └── test-claude-code-launcher.sh   43 branded-launcher + cct shim + gateway notice tests (#195, #410, #399)
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification
 ├── .github/workflows/codeql.yml         CI: CodeQL advanced setup — runs on fork PRs, one `CodeQL` check

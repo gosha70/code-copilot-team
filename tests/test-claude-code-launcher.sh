@@ -38,6 +38,7 @@ cat > "$MOCK_BIN/claude" << 'MOCK'
     printf 'ARGV:'; printf ' %q' "$@"; printf '\n'
     printf 'BUN_OPTIONS:%s\n' "${BUN_OPTIONS:-}"
     printf 'PWD:%s\n' "$PWD"
+    printf 'PEER:%s %s\n' "${CCT_PEER_REVIEW_ENABLED-<unset>}" "${CCT_PEER_PROVIDER-<unset>}"
 } >> "${MOCK_CLAUDE_LOG:?}"
 echo '{"subtype":"success","result":"mock headless output"}'
 exit "${MOCK_CLAUDE_RC:-0}"
@@ -220,7 +221,27 @@ GONE_RC=0; GONE_OUT=$(CCT_REPO_DIR="/nonexistent-cct-checkout" "$SHIM_HOME/.loca
 assert_exit "the shim exits 2 when its checkout is gone" 2 "$GONE_RC"
 assert_contains "the shim names the remedy when its checkout is gone" "$GONE_OUT" "CCT_REPO_DIR"
 
-rm -rf "$FAKE_REPO" "$PROJ" "$DRIVER_LOG" "$SHIM_HOME" "$FAKE_CCT"
+# ── Peer-review flags reach the session (#481) ──
+# Interactive launches: inside a multiplexer the launcher becomes claude,
+# from outside it types a command into a new workspace. Nothing in a
+# settings file decides any more, so the flags have to.
+unset CCT_PEER_REVIEW_ENABLED CCT_PEER_PROVIDER
+PEER_PROJ=$(mktemp -d)
+peer_seen() { grep -m1 '^PEER:' "$CLAUDE_LOG" | sed 's/^PEER://'; }
+new_logs
+CMUX_WORKSPACE_ID=1 run_launcher --peer-review deepseek "$PEER_PROJ"
+assert_eq "--peer-review <provider> reaches the session" "true deepseek" "$(peer_seen)"
+new_logs
+CMUX_WORKSPACE_ID=1 CCT_PEER_REVIEW_ENABLED=true run_launcher --peer-review-off "$PEER_PROJ"
+assert_eq "--peer-review-off says off, even from a shell that says on" "false" "$(peer_seen | cut -d' ' -f1)"
+new_logs
+CMUX_WORKSPACE_ID=1 run_launcher "$PEER_PROJ"
+assert_eq "without a flag the launcher passes nothing" "<unset> <unset>" "$(peer_seen)"
+new_logs
+run_launcher --shell cmux --peer-review-off "$PEER_PROJ"
+assert_contains "--peer-review-off is typed into a new workspace too" "$(cat "$MUX_LOG")" "env CCT_PEER_REVIEW_ENABLED=false "
+
+rm -rf "$FAKE_REPO" "$PROJ" "$DRIVER_LOG" "$SHIM_HOME" "$FAKE_CCT" "$PEER_PROJ"
 
 echo ""
 echo "========================================="

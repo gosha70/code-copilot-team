@@ -252,6 +252,37 @@ ensure_hook_command() {
     return 0
 }
 
+# Peer review is switched on per session by the launcher's --peer-review
+# flags. Claude Code applies a settings env block over the environment it
+# is started with, so a key there replaces what a flag passes (#481).
+# Setup writes none of these keys, and removes the defaults its earlier
+# versions wrote. A value someone changed is theirs: it stays, and is
+# named. Returns 0 if the file changed.
+remove_peer_review_defaults() {
+    local settings_file="$1"
+    local key default current content changed=1
+
+    for key in CCT_PEER_REVIEW_ENABLED CCT_PEER_PROVIDER CCT_PEER_TRIGGER; do
+        case "$key" in
+            CCT_PEER_REVIEW_ENABLED) default="false" ;;
+            CCT_PEER_PROVIDER) default="" ;;
+            CCT_PEER_TRIGGER) default="phase-complete" ;;
+        esac
+        current=$(jq -r --arg key "$key" \
+            'if ((.env // {}) | has($key)) then "set:\(.env[$key])" else "absent" end' \
+            "$settings_file" 2>/dev/null || echo "absent")
+        [[ "$current" == "absent" ]] && continue
+        if [[ "$current" == "set:$default" ]]; then
+            content=$(jq --arg key "$key" 'del(.env[$key])' "$settings_file") || continue
+            echo "$content" > "$settings_file"
+            changed=0
+        else
+            echo "[note] $settings_file sets $key in its env block; Claude Code applies it over the launcher's --peer-review flags. Remove the key to let the flags decide."
+        fi
+    done
+    return $changed
+}
+
 # Deterministic helper scripts that globally installed commands invoke
 # from arbitrary target projects (#233). ONE implementation, called from
 # BOTH the full setup and --sync — /review-decide's own remediation advice
@@ -420,18 +451,8 @@ if [[ "$SYNC_MODE" == "1" ]]; then
             echo "[done] Added statusLine to $SETTINGS_FILE"
         fi
 
-        for VAR_KEY in CCT_PEER_REVIEW_ENABLED CCT_PEER_PROVIDER CCT_PEER_TRIGGER; do
-            HAS_VAR=$(jq --arg key "$VAR_KEY" '.env | has($key)' "$SETTINGS_FILE" 2>/dev/null || echo "false")
-            if [[ "$HAS_VAR" != "true" ]]; then
-                case "$VAR_KEY" in
-                    CCT_PEER_REVIEW_ENABLED) DEFAULT_VAL="false" ;;
-                    CCT_PEER_PROVIDER) DEFAULT_VAL="" ;;
-                    CCT_PEER_TRIGGER) DEFAULT_VAL="phase-complete" ;;
-                esac
-                CONTENT=$(jq --arg key "$VAR_KEY" --arg value "$DEFAULT_VAL" '.env[$key] = $value' "$SETTINGS_FILE")
-                echo "$CONTENT" > "$SETTINGS_FILE"
-            fi
-        done
+        remove_peer_review_defaults "$SETTINGS_FILE" && \
+            echo "[done] Removed the peer-review defaults from the env block of $SETTINGS_FILE" || true
 
         ensure_hook_command "$SETTINGS_FILE" "PreToolUse" "Bash" "~/.claude/hooks/protect-git.sh" 5000 && \
             echo "[done] Added protect-git hook to $SETTINGS_FILE" || true
@@ -1150,10 +1171,7 @@ HOOKS_CONFIG='{
   },
   "env": {
     "HOOK_EDIT_BLOCK": "true",
-    "HOOK_STOP_BLOCK": "false",
-    "CCT_PEER_REVIEW_ENABLED": "false",
-    "CCT_PEER_PROVIDER": "",
-    "CCT_PEER_TRIGGER": "phase-complete"
+    "HOOK_STOP_BLOCK": "false"
   },
   "hooks": {
     "PreToolUse": [
@@ -1277,23 +1295,14 @@ if [[ ! -f "$SETTINGS_FILE" ]]; then
     echo "$HOOKS_CONFIG" > "$SETTINGS_FILE"
     echo "[done] Created $SETTINGS_FILE with hooks"
 elif command -v jq &>/dev/null; then
+    CHANGED=0
+    remove_peer_review_defaults "$SETTINGS_FILE" && CHANGED=1 || true
+
     # Check if hooks key already exists
     HAS_HOOKS=$(jq 'has("hooks")' "$SETTINGS_FILE" 2>/dev/null)
     if [[ "$HAS_HOOKS" == "true" ]]; then
-        # Merge missing env defaults and hook entries into existing settings
+        # Merge missing hook entries into existing settings
         UPDATED="$SETTINGS_FILE"
-        CHANGED=0
-
-        # Add missing CCT_* env vars
-        for VAR_KEY in CCT_PEER_REVIEW_ENABLED CCT_PEER_PROVIDER CCT_PEER_TRIGGER; do
-            HAS_VAR=$(jq --arg k "$VAR_KEY" '.env | has($k)' "$UPDATED" 2>/dev/null || echo "false")
-            if [[ "$HAS_VAR" != "true" ]]; then
-                DEFAULT_VAL=$(echo "$HOOKS_CONFIG" | jq -r --arg k "$VAR_KEY" '.env[$k]')
-                CONTENT=$(jq --arg k "$VAR_KEY" --arg v "$DEFAULT_VAL" '.env[$k] = $v' "$UPDATED")
-                echo "$CONTENT" > "$UPDATED"
-                CHANGED=1
-            fi
-        done
 
         # Add peer-review-on-stop.sh to Stop hooks if missing
         HAS_PEER_HOOK=$(jq '[.hooks.Stop[]?.hooks[]? | select(.command == "~/.claude/hooks/peer-review-on-stop.sh")] | length > 0' "$UPDATED" 2>/dev/null || echo "false")

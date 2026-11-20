@@ -1006,6 +1006,61 @@ EOF_OUT=$(bash -c '
 assert_eq "end-of-input at an interactive prompt answers no" "REPLY=n" "$EOF_OUT"
 
 # ══════════════════════════════════════════════════════════════
+# #481: peer review is the launcher's to switch on. Claude Code applies a
+# settings env block over the environment it is started with, so a
+# CCT_PEER_* key there replaced whatever --peer-review passed.
+# ══════════════════════════════════════════════════════════════
+echo ""
+echo "=== setup.sh --sync and the peer-review settings keys (#481) ==="
+
+peer_env_keys() {   # <settings.json> -> the CCT_PEER_* keys of its env block
+  jq -r '[(.env // {}) | keys[] | select(startswith("CCT_PEER_"))] | sort | join(" ")' "$1" 2>/dev/null
+}
+
+assert_eq "--sync writes no peer-review key into a settings file" "" \
+  "$(peer_env_keys "$FAKE_CLAUDE/settings.json")"
+
+# A file an earlier setup wrote: its three defaults, beside other content.
+PEER_OLD_HOME="$TEST_TMPDIR/peer-old-home"
+mkdir -p "$PEER_OLD_HOME/.claude"
+cat > "$PEER_OLD_HOME/.claude/settings.json" << 'JSON'
+{
+  "env": {
+    "HOOK_EDIT_BLOCK": "true",
+    "HOOK_STOP_BLOCK": "false",
+    "CCT_PEER_REVIEW_ENABLED": "false",
+    "CCT_PEER_PROVIDER": "",
+    "CCT_PEER_TRIGGER": "phase-complete"
+  },
+  "permissions": {"allow": ["Bash(mycustom:*)"]}
+}
+JSON
+PEER_OLD_OUT=$(HOME="$PEER_OLD_HOME" bash "$REPO_DIR/adapters/claude-code/setup.sh" --sync 2>&1)
+assert_eq "--sync removes the peer-review defaults an earlier setup wrote" "" \
+  "$(peer_env_keys "$PEER_OLD_HOME/.claude/settings.json")"
+assert_contains "and says so" "$PEER_OLD_OUT" "Removed the peer-review defaults"
+assert_eq "the other env keys stay" "true false" \
+  "$(jq -r '"\(.env.HOOK_EDIT_BLOCK) \(.env.HOOK_STOP_BLOCK)"' "$PEER_OLD_HOME/.claude/settings.json" 2>/dev/null)"
+assert_eq "and so does the rest of the file" '["Bash(mycustom:*)"]' \
+  "$(jq -c '.permissions.allow' "$PEER_OLD_HOME/.claude/settings.json" 2>/dev/null)"
+HOME="$PEER_OLD_HOME" bash "$REPO_DIR/adapters/claude-code/setup.sh" --sync > /dev/null 2>&1
+assert_eq "a second --sync does not put them back" "" \
+  "$(peer_env_keys "$PEER_OLD_HOME/.claude/settings.json")"
+
+# A value someone changed is theirs: it stays, and setup names it.
+PEER_EDIT_HOME="$TEST_TMPDIR/peer-edited-home"
+mkdir -p "$PEER_EDIT_HOME/.claude"
+echo '{"env": {"CCT_PEER_REVIEW_ENABLED": "true", "CCT_PEER_PROVIDER": "deepseek", "CCT_PEER_TRIGGER": "phase-complete"}}' \
+  > "$PEER_EDIT_HOME/.claude/settings.json"
+PEER_EDIT_OUT=$(HOME="$PEER_EDIT_HOME" bash "$REPO_DIR/adapters/claude-code/setup.sh" --sync 2>&1)
+assert_eq "--sync leaves a value someone changed" "true deepseek" \
+  "$(jq -r '"\(.env.CCT_PEER_REVIEW_ENABLED) \(.env.CCT_PEER_PROVIDER)"' "$PEER_EDIT_HOME/.claude/settings.json" 2>/dev/null)"
+assert_eq "and still removes the default beside it" "CCT_PEER_PROVIDER CCT_PEER_REVIEW_ENABLED" \
+  "$(peer_env_keys "$PEER_EDIT_HOME/.claude/settings.json")"
+assert_contains "and names the key, with what it overrides" "$PEER_EDIT_OUT" \
+  "sets CCT_PEER_REVIEW_ENABLED in its env block; Claude Code applies it over the launcher's --peer-review flags"
+
+# ══════════════════════════════════════════════════════════════
 echo ""
 echo "──────────────────────────────"
 echo "Results: $PASS passed, $FAIL failed"

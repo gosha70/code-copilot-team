@@ -823,6 +823,25 @@ assert_exit "setup.sh installs lib/review-verdict.sh BESIDE it" 0 \
 _inst_out=$(bash "$INST_HOME/.local/bin/peer-review-runner.sh" 2>&1 || true)
 assert_not_contains "the INSTALLED runner does not fail on its verdict parser" \
     "$_inst_out" "verdict parser"
+
+# #481: the installer writes no peer-review key into settings.json. Claude
+# Code applies a settings env block over the environment it is started
+# with, so a key there replaced whatever --peer-review passed.
+_peer_env_keys() { jq -r '[(.env // {}) | keys[] | select(startswith("CCT_PEER_"))] | sort | join(" ")' "$1" 2>/dev/null; }
+_inst_settings="$INST_HOME/.claude/settings.json"
+assert_exit "a fresh install writes no peer-review key into settings.json" 0 \
+    "$([[ -f "$_inst_settings" && -z "$(_peer_env_keys "$_inst_settings")" ]] && echo 0 || echo 1)"
+# ...and an install over a file an earlier version wrote removes its
+# defaults, leaving, and naming, a value someone changed.
+_seeded=$(jq '.env += {"CCT_PEER_REVIEW_ENABLED": "false", "CCT_PEER_PROVIDER": "deepseek", "CCT_PEER_TRIGGER": "phase-complete"}' "$_inst_settings")
+echo "$_seeded" > "$_inst_settings"
+_setup_rc=0
+_setup_out=$(printf '2\n' | HOME="$INST_HOME" bash "$SCRIPT_DIR/../adapters/claude-code/setup.sh" 2>&1) || _setup_rc=$?
+assert_exit "setup.sh completes over an existing install" 0 "$_setup_rc"
+assert_exit "…removing the peer-review defaults an earlier setup wrote" 0 \
+    "$([[ "$(_peer_env_keys "$_inst_settings")" == "CCT_PEER_PROVIDER" ]] && echo 0 || echo 1)"
+assert_contains "…and naming the value someone changed" \
+    "$_setup_out" "sets CCT_PEER_PROVIDER in its env block"
 rm -rf "$INST_HOME"
 rm -rf "$INST"
 
