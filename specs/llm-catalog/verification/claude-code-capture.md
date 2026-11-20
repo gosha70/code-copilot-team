@@ -98,18 +98,23 @@ removes: `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`,
 `CLAUDE_CODE_USE_FOUNDRY`, `CLAUDE_CODE_USE_ANTHROPIC_AWS`,
 `CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD`, `CLAUDE_CODE_USE_MANTLE`,
 `CLAUDE_CODE_USE_GATEWAY`, `ANTHROPIC_UNIX_SOCKET`,
-`CLAUDE_CODE_OAUTH_TOKEN` (an api endpoint only),
+`CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`,
+`CLAUDE_CODE_GATEWAY_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR`,
+`CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR`,
+`CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR` (these six for an api
+endpoint only),
 `ANTHROPIC_BEDROCK_BASE_URL`, `ANTHROPIC_BEDROCK_MANTLE_BASE_URL`,
 `ANTHROPIC_VERTEX_BASE_URL`, `ANTHROPIC_FOUNDRY_BASE_URL`,
 `ANTHROPIC_AWS_BASE_URL`, `ANTHROPIC_GOOGLE_CLOUD_BASE_URL`,
 `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`, `ENABLE_TOOL_SEARCH`,
 `DISABLE_FEEDBACK_COMMAND`.
 
-Present in the binary and left alone: the file-descriptor forms of the
-credentials (`CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR`,
-`CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR`), `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`
-and `CLAUDE_CODE_GATEWAY_TOKEN`. What they do was not established, and
-nothing was ruled about them.
+Present in the binary and left alone:
+`CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR` and
+`CCR_AGENT_PROXY_TOKEN_FILE_DESCRIPTOR` (the other two names ending in
+`_FILE_DESCRIPTOR`), `ANTHROPIC_IDENTITY_TOKEN` and
+`ANTHROPIC_IDENTITY_TOKEN_FILE`, and the AWS and Foundry keys. What
+they do was not established, and nothing was ruled about them.
 
 A name in a binary says the variable exists, not what it does. The
 meaning of the base URL, the two credentials and the model is shown by
@@ -238,3 +243,95 @@ claude's result: stub-ok | is_error: False
 **What it does not establish.** What the gateway switch is for. That a
 login token is sent when another credential is also set: runs 7 and 8
 show only that it is absent after the launcher removed it.
+
+## 5. The file-descriptor forms and the gateway token
+
+Recorded 2026-11-20, after the owner's second ruling that an api
+endpoint also loses `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`,
+`CLAUDE_CODE_GATEWAY_TOKEN` and the file-descriptor forms of the
+credentials. Same method; each file-descriptor variable named a
+descriptor the run really inherited, open on a file holding a planted
+value. The refresh token was not run on its own: using one means
+asking Anthropic's token service for an access token.
+
+```
+=== 12. plain claude: the stub as base URL, and an API key by file descriptor only
+exit: 0
+claude's result: stub-ok | is_error: False
+  request -> the stub: POST /v1/messages | authorization=None x-api-key='capture-fd-api-key' model='claude-opus-5-5'
+
+=== 13. plain claude: the stub as base URL, and a login token by file descriptor only
+exit: 0
+claude's result: stub-ok | is_error: False
+  request -> the stub: POST /v1/messages | authorization='Bearer capture-fd-login-token' x-api-key=None model='claude-sonnet-5-5'
+
+=== 14a. plain claude: the stub as base URL, and CLAUDE_CODE_GATEWAY_TOKEN only
+exit: 1
+claude's result: Not logged in · Please run /login | is_error: True
+  (no request reached the stub)
+
+=== 14b. the same, with CLAUDE_CODE_USE_GATEWAY=1
+exit: 1
+claude's result: Not logged in · Please run /login | is_error: True
+  (no request reached the stub)
+
+=== 15. --llm bearer, from a shell that carries every one of them
+exit: 0
+claude's result: stub-ok | is_error: False
+  request -> the stub: POST /v1/messages | authorization='Bearer capture-planted-credential' x-api-key=None model='capture-main'
+
+=== 16. --llm open (no credential), from the same shell
+exit: 0
+claude's result: stub-ok | is_error: False
+  request -> the stub: POST /v1/messages | authorization='Bearer none' x-api-key=None model='capture-main'
+```
+
+Runs 15 and 16 carried a login token, a refresh token, a gateway token
+with the gateway switch, and all three file-descriptor variables with
+their descriptors open.
+
+**What it establishes.**
+
+- **A key or a login token handed over by file descriptor reaches a
+  custom base URL.** The binary read each from its descriptor and sent
+  it to the stub, as `x-api-key` (run 12) and as the bearer (run 13).
+- **A selected launch to an api endpoint sends none of them.** From a
+  shell carrying every form, the stub received the selected credential
+  only (run 15), or the placeholder for an endpoint that takes none
+  (run 16).
+
+**What it does not establish.** What `CLAUDE_CODE_GATEWAY_TOKEN` is
+used for: alone, with or without the gateway switch, Claude Code
+reported "Not logged in" and sent nothing (runs 14a and 14b). What the
+refresh token and the gateway token's file-descriptor form do: they
+are removed on the owner's ruling and by their names, not on an
+observation.
+
+## 6. A typed command with printable non-ASCII
+
+Recorded 2026-11-20 with bash 3.2.57 and zsh, for the ruling that the
+typed-command check refuses control characters only. A project
+directory named `café 日本語 dir` and the flag
+`--append-system-prompt=naïve 日本` were given to the launcher with
+`--shell cmux --llm opus` and a stub cmux; what it typed was then run
+by each shell, as a pane would run it.
+
+```
+outer launcher, LC_ALL=C: exit 0; typed command is pure ASCII: yes
+   pane shell /bin/bash exit 0 | claude started in that directory: yes | flag byte for byte: yes
+   pane shell /bin/zsh  exit 0 | claude started in that directory: yes | flag byte for byte: yes
+outer launcher, LC_ALL=en_US.UTF-8: exit 0; typed command is pure ASCII: no
+   pane shell /bin/bash exit 0 | claude started in that directory: yes | flag byte for byte: yes
+   pane shell /bin/zsh  exit 0 | claude started in that directory: yes | flag byte for byte: yes
+```
+
+Under the C locale the typed text was, with the temporary and checkout
+paths shortened:
+
+```
+cd $'<tmp>/caf\303\251 \346\227\245\346\234\254\350\252\236 dir' && exec env CCT_LLM_CHILD=1 <repo>/adapters/claude-code/claude-code --llm opus $'--append-system-prompt=na\303\257ve \346\227\245\346\234\254'
+```
+
+The suite covers the C-locale case with bash; the zsh and UTF-8 rows
+are this record only, since CI's runner is not guaranteed to have
+either.

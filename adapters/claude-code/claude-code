@@ -1488,9 +1488,8 @@ start_cmux_session() {
         exec_claude_in_current_shell "$project_dir" "$log_file"
     fi
 
-    # The command below is TYPED into a new pane. Anything in it that %q
-    # can only render as $'…' is refused first: the pane's shell may not
-    # parse it.
+    # The command below is TYPED into a new pane. Anything in it that
+    # holds a control character is refused first.
     if [[ -n "$LLM_TARGET" ]]; then llm_refuse_untypable "$project_dir"; fi
 
     session_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -1688,27 +1687,40 @@ llm_refuse() {  # <reason> [<remedy line>...]
     exit "$LLM_EXIT_REFUSED"
 }
 
-llm_refuse_unquotable() {  # <value> <what it is> <remedy>
-    local q
-    printf -v q '%q' "$1"
-    if [[ "$q" == \$\'* ]]; then
-        llm_refuse "the $2 needs \$'…' quoting, which the shell in a new pane may not parse" "$3"
+# A control character must never be typed into a pane: a newline ends
+# the command and an escape starts a terminal sequence. Matched byte by
+# byte, whatever the locale: the C0 controls and DEL, and the C1
+# controls in their UTF-8 form. Printable text is not refused, in
+# whatever form %q writes it: bash 3.2 writes printable non-ASCII as
+# $'…', which bash and zsh, the shells a pane runs, both read.
+llm_has_control_char() {  # <value>
+    ( LC_ALL=C
+      case "$1" in
+          *[[:cntrl:]]*) exit 0 ;;
+          *$'\302'[$'\200'-$'\237']*) exit 0 ;;
+      esac
+      exit 1 )
+}
+
+llm_refuse_control_chars() {  # <value> <what it is> <remedy>
+    if llm_has_control_char "$1"; then
+        llm_refuse "the $2 holds a control character, which must never be typed into a new pane" "$3"
     fi
 }
 
-# Everything a selected launch TYPES into a new pane must survive that
-# pane's shell: the project path (cmux types a `cd`; tmux is handed the
-# directory as an argument and types none), this launcher's own path,
-# and each flag forwarded to claude. The target is an id and cannot need
-# quoting. A launch from inside a pane types nothing and is not checked.
+# Everything a selected launch TYPES into a new pane is checked: the
+# project path (cmux types a `cd`; tmux is handed the directory as an
+# argument and types none), this launcher's own path, and each flag
+# forwarded to claude. The target is an id and cannot hold one. A launch
+# from inside a pane types nothing and is not checked.
 llm_refuse_untypable() {  # [<project-dir>]
     local arg in_pane="Run the launcher from inside a cmux or tmux pane, where nothing is typed"
     if [[ -n "${1:-}" ]]; then
-        llm_refuse_unquotable "$1" "project path" "$in_pane, or rename the directory."
+        llm_refuse_control_chars "$1" "project path" "$in_pane, or rename the directory."
     fi
-    llm_refuse_unquotable "$LAUNCHER_SELF" "launcher's own path" "$in_pane, or install the launcher under a plain path."
+    llm_refuse_control_chars "$LAUNCHER_SELF" "launcher's own path" "$in_pane, or install the launcher under a plain path."
     for arg in ${CLAUDE_ARGS[@]+"${CLAUDE_ARGS[@]}"}; do
-        llm_refuse_unquotable "$arg" "argument forwarded to claude" "$in_pane."
+        llm_refuse_control_chars "$arg" "argument forwarded to claude" "$in_pane."
     done
 }
 

@@ -19,7 +19,7 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   DeepSeek, a local Ollama model, or anything behind a gateway. The
   endpoint, credential and model are set in the process that becomes
   `claude` and nowhere else, and competing variables (another credential,
-  Claude Code's own login token on a third-party endpoint, custom headers,
+  Claude Code's own credentials on a third-party endpoint, custom headers,
   provider and gateway switches, a subagent model, another model's
   tuning) are removed from it, so nothing is exported in a shell and
   nothing a shell exports redirects the session. A credential is named by

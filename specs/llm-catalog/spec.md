@@ -125,7 +125,7 @@ governs the slices that follow.
 | FR-6 commands | `cct llm list` and `cct llm validate [file]` only. |
 | FR-7 redaction | An endpoint is printed as its origin only. The sanitizer is `scripts/lib/cct-endpoint.sh`, moved from the supervisor as FR-7 specifies; digests are not built. |
 | FR-8 resolution | As written: `<llm>` or `<llm>@<binding>`, explicit bindings only. |
-| FR-10 child-side resolution | As written. A typed command carries the launcher, `--llm <target>` and Claude Code's own flags; the launcher re-run in the pane (`CCT_LLM_CHILD=1`) resolves and reads the credential there. A project path that `%q` renders as `$'…'` is refused before typing, and so are the launcher's own path and a forwarded flag (owner, 2026-11-20). A launch from inside a pane types nothing and is not checked. |
+| FR-10 child-side resolution | As written. A typed command carries the launcher, `--llm <target>` and Claude Code's own flags; the launcher re-run in the pane (`CCT_LLM_CHILD=1`) resolves and reads the credential there. A control character in the project path, the launcher's own path or a forwarded flag is refused before typing; printable non-ASCII is typed in whatever form `%q` writes it (departure 14; owner, 2026-11-20). A launch from inside a pane types nothing and is not checked. |
 | FR-11 native behaviour preserved | As written. Verified against master's launcher: output, typed command, and the argv and environment a stub `claude` receives are identical in seven launches without `--llm`. |
 | FR-12 refusal before launch | The static refusals: unknown target, `unsupported`, `unavailable`, an invalid or missing catalog. Exit 3. |
 | FR-20 Claude Code adapter | With the departures below. |
@@ -193,11 +193,19 @@ target, and the rest are put to the owner with the PR.
    as the bearer to whatever base URL it is given when no other
    credential is set, and a socket variable takes the request away from
    the base URL altogether. On a managed provider the login token
-   passes through, like `ANTHROPIC_API_KEY`. Seen in the binary and
-   left alone: the file-descriptor forms of the credentials
-   (`CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR`,
-   `CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR`),
-   `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` and `CLAUDE_CODE_GATEWAY_TOKEN`.
+   passes through, like `ANTHROPIC_API_KEY`. Added by a second ruling
+   the same day, for an api endpoint only and passed through on a
+   managed provider: `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`,
+   `CLAUDE_CODE_GATEWAY_TOKEN`, and the file-descriptor forms
+   `CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR`,
+   `CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR` and
+   `CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR`. The capture shows a key
+   and a login token read from a file descriptor reaching a custom base
+   URL. Seen in the binary and left alone, nothing established or ruled
+   about them: `CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR`,
+   `CCR_AGENT_PROXY_TOKEN_FILE_DESCRIPTOR`, `ANTHROPIC_IDENTITY_TOKEN`
+   and `ANTHROPIC_IDENTITY_TOKEN_FILE`, and the AWS and Foundry keys,
+   which need a provider switch that is removed.
 8. **Two more binding keys (FR-20).** `auto_compact_window` and
    `reasoning_effort`, beside `small_fast_model` and
    `max_output_tokens`. Without them a target cannot reproduce the
@@ -232,6 +240,17 @@ target, and the rest are put to the owner with the PR.
     arguments verbatim. `--llm <target>` and `--llm=<target>` are taken
     out wherever they appear, so an argument that is exactly `--llm`
     cannot be passed to `claude` through the launcher.
+14. **The typed-command refusal is for control characters (FR-10).**
+    FR-10 refuses a project path that `%q` can only render as `$'…'`,
+    taking that to mean control characters and newlines. bash 3.2
+    writes printable non-ASCII that way too: a path with CJK characters
+    even in a UTF-8 locale, any non-ASCII path in a C locale. bash and
+    zsh, the shells a pane runs, both read that form. By the owner's
+    ruling of 2026-11-20 the launcher refuses a control character (the
+    C0 controls, DEL, and the C1 controls in their UTF-8 form) in the
+    project path, its own path or a forwarded flag, and types printable
+    non-ASCII. A typed command with such a path and flag was read back
+    byte for byte by bash and by zsh, in a C and in a UTF-8 locale.
 
 **Evidence.** `specs/llm-catalog/verification/claude-code-capture.md`
 (the real binary against local stub endpoints); `tests/test-llm-

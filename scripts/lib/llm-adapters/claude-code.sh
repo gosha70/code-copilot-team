@@ -18,8 +18,9 @@
 # variables the binding does not set, so nothing the user did not select
 # can redirect the session, reach the endpoint, or tune a session on one
 # model with another model's values. An api endpoint also loses Claude
-# Code's own login token: that is Anthropic's, and is never sent to an
-# endpoint that is not.
+# Code's own credentials (the login token, its refresh token, the
+# gateway token, and their file-descriptor forms): those are for
+# Anthropic, and are never sent to an endpoint that is not.
 #
 # The plan (llm_cc_plan) holds NAMES and non-secret literals only. A
 # credential's value is read by llm_cc_apply alone, in the process that
@@ -42,9 +43,12 @@ LLM_CC_VAR_BASE_URL="ANTHROPIC_BASE_URL"
 LLM_CC_VAR_BEARER="ANTHROPIC_AUTH_TOKEN"
 LLM_CC_VAR_API_KEY="ANTHROPIC_API_KEY"
 LLM_CC_VAR_MODEL="ANTHROPIC_MODEL"
-# Claude Code's own login as a token. Removed for an api endpoint; a
-# managed provider is that login, so there it passes through.
-LLM_CC_VAR_OWN_LOGIN="CLAUDE_CODE_OAUTH_TOKEN"
+# Claude Code's own credentials, in every form the installed binary
+# reads: the login token and its refresh token, the gateway token, and
+# the file-descriptor forms of the login token, the API key and the
+# gateway token. Removed for an api endpoint; a managed provider is that
+# login, so there they pass through.
+LLM_CC_VARS_OWN_CREDENTIALS="CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_OAUTH_REFRESH_TOKEN CLAUDE_CODE_GATEWAY_TOKEN CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR"
 # Aliases that mean "the main model" and "the small, fast model".
 LLM_CC_VARS_MAIN_ALIASES="ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_FABLE_MODEL"
 LLM_CC_VARS_SMALL_ALIASES="ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_SMALL_FAST_MODEL"
@@ -96,7 +100,7 @@ llm_cc_plan() {
         LLM_CC_LABEL="$pname · $model · Claude Code's own login"
     else
         e=$(lc_get "$b" endpoint) || e=""
-        clear="$clear $LLM_CC_VAR_OWN_LOGIN"
+        clear="$clear $LLM_CC_VARS_OWN_CREDENTIALS"
         proto=$(lc_get "endpoints.$e" protocol) || proto=""
         header=$(lc_get "endpoints.$e" auth_header) || header=""
         ep=$(lc_get "endpoints.$e" provider) || ep=""

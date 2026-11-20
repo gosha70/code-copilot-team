@@ -95,3 +95,15 @@ After reading the summary of PR #480 the owner ruled, in these words:
 
 These settle departures 7 and 10 of spec.md, "Launch-first slice", and
 extend FR-10's quoting refusal; #400 is the umbrella again.
+
+A second ruling the same day, after those changes:
+
+> One more small commit on #480, then I'll label it: (1) make the
+> typed-command check refuse only control characters, and allow
+> printable non-ASCII that %q renders as $'…'; (2) for endpoint
+> targets, also clear CLAUDE_CODE_OAUTH_REFRESH_TOKEN,
+> CLAUDE_CODE_GATEWAY_TOKEN and any file-descriptor forms of the
+> Anthropic credentials the binary reads, keeping them for managed
+> targets, with tests.
+
+It adds departure 14 and extends departure 7.

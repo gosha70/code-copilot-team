@@ -222,7 +222,23 @@ DIRTY=(
     CLAUDE_CODE_OAUTH_TOKEN="ambient-login-token"
     CLAUDE_CODE_USE_GATEWAY="1"
     ANTHROPIC_UNIX_SOCKET="/tmp/ambient.sock"
+    CLAUDE_CODE_OAUTH_REFRESH_TOKEN="ambient-refresh-token"
+    CLAUDE_CODE_GATEWAY_TOKEN="ambient-gateway-token"
+    CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR="7"
+    CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR="8"
+    CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR="9"
 )
+# The other forms of Claude Code's own credentials, and what DIRTY gives each.
+OWN_CREDENTIAL_FORMS="CLAUDE_CODE_OAUTH_REFRESH_TOKEN CLAUDE_CODE_GATEWAY_TOKEN CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR"
+ambient_value() {
+    case "$1" in
+        CLAUDE_CODE_OAUTH_REFRESH_TOKEN) echo "ambient-refresh-token" ;;
+        CLAUDE_CODE_GATEWAY_TOKEN) echo "ambient-gateway-token" ;;
+        CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR) echo "7" ;;
+        CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR) echo "8" ;;
+        CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR) echo "9" ;;
+    esac
+}
 
 echo "=== --llm launch tests (#479) ==="
 
@@ -238,6 +254,9 @@ assert_eq "native: the ambient model is untouched" "ambient-model" "$(claude_env
 assert_eq "native: the ambient tuning is untouched" "111" "$(claude_env CLAUDE_CODE_AUTO_COMPACT_WINDOW)"
 assert_eq "native: the ambient login token is untouched" "ambient-login-token" "$(claude_env CLAUDE_CODE_OAUTH_TOKEN)"
 assert_eq "native: the ambient gateway switch and socket are untouched" "1 /tmp/ambient.sock" "$(claude_env CLAUDE_CODE_USE_GATEWAY) $(claude_env ANTHROPIC_UNIX_SOCKET)"
+for _v in $OWN_CREDENTIAL_FORMS; do
+    assert_eq "native: ambient $_v is untouched" "$(ambient_value "$_v")" "$(claude_env "$_v")"
+done
 assert_not_contains "native: no selection notice" "$OUTPUT" "--llm"
 # The assertions above have teeth: a launcher whose default target is
 # set (the guard removed) fails them.
@@ -274,6 +293,9 @@ assert_eq "selected: an ambient subagent model is removed" "<unset>" "$(claude_e
 assert_eq "selected: Claude Code's own login token never reaches an endpoint" "<unset>" "$(claude_env CLAUDE_CODE_OAUTH_TOKEN)"
 assert_eq "selected: an ambient gateway switch is removed" "<unset>" "$(claude_env CLAUDE_CODE_USE_GATEWAY)"
 assert_eq "selected: an ambient unix-socket transport is removed" "<unset>" "$(claude_env ANTHROPIC_UNIX_SOCKET)"
+for _v in $OWN_CREDENTIAL_FORMS; do
+    assert_eq "selected: $_v never reaches an endpoint" "<unset>" "$(claude_env "$_v")"
+done
 assert_contains "selected: the notice names provider, model and origin" "$OUTPUT" "--llm deepseek: DeepSeek · deepseek-main[1m] · https://api.deepseek.example"
 assert_not_contains "selected: the notice never carries the URL's path" "$OUTPUT" "deepseek.example/anthropic"
 assert_not_contains "selected: the credential is in nothing the launcher prints" "$OUTPUT" "$SECRET"
@@ -289,6 +311,7 @@ new_logs
 run_launcher "${DIRTY[@]}" -- --llm keyed -p x
 assert_eq "x-api-key: the credential is the API key" "$SECRET" "$(claude_env ANTHROPIC_API_KEY)"
 assert_eq "x-api-key: an ambient bearer token is removed" "<unset>" "$(claude_env ANTHROPIC_AUTH_TOKEN)"
+assert_eq "x-api-key: the file-descriptor form of the key is removed, so only the selected key is read" "<unset>" "$(claude_env CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR)"
 assert_eq "no tuning in the binding: ambient tuning is removed, not inherited" "<unset>" "$(claude_env CLAUDE_CODE_AUTO_COMPACT_WINDOW)"
 assert_eq "no small model in the binding: every alias is the main model" "keyed-model" "$(claude_env ANTHROPIC_DEFAULT_HAIKU_MODEL)"
 assert_eq "no quirk declared: tool search is left alone" "<unset>" "$(claude_env ENABLE_TOOL_SEARCH)"
@@ -315,6 +338,9 @@ assert_eq "managed: the harness's own API key passes through untouched" "$AMBIEN
 assert_eq "managed: Claude Code's own login token passes through too" "ambient-login-token" "$(claude_env CLAUDE_CODE_OAUTH_TOKEN)"
 assert_eq "managed: the gateway switch is removed" "<unset>" "$(claude_env CLAUDE_CODE_USE_GATEWAY)"
 assert_eq "managed: the unix-socket transport is removed" "<unset>" "$(claude_env ANTHROPIC_UNIX_SOCKET)"
+for _v in $OWN_CREDENTIAL_FORMS; do
+    assert_eq "managed: $_v passes through, it is the harness's own" "$(ambient_value "$_v")" "$(claude_env "$_v")"
+done
 assert_contains "managed: the notice says how it signs in" "$OUTPUT" "Anthropic · opus · Claude Code's own login"
 
 # ── Refusals: before claude runs, exit 3, with the reason ──
@@ -396,6 +422,11 @@ printf '{"env": {"CLAUDE_CODE_USE_GATEWAY": "1"}}\n' > "$SETTINGS"
 refused "settings: a gateway switch in an env block is refused" "$SETTINGS: CLAUDE_CODE_USE_GATEWAY" -- --llm opus -p x
 printf '{"env": {"ANTHROPIC_UNIX_SOCKET": "/tmp/settings.sock"}}\n' > "$SETTINGS"
 refused "settings: a unix-socket transport in an env block is refused" "$SETTINGS: ANTHROPIC_UNIX_SOCKET" -- --llm opus -p x
+printf '{"env": {"CLAUDE_CODE_GATEWAY_TOKEN": "settings-gateway-token"}}\n' > "$SETTINGS"
+refused "settings: a gateway token in an env block is refused for an endpoint target" "$SETTINGS: CLAUDE_CODE_GATEWAY_TOKEN" -- --llm deepseek -p x
+new_logs
+run_launcher -- --llm opus -p x
+assert_exit "settings: ...and is the harness's own business on a managed target" 0 "$RC"
 printf '{"env": {"HOOK_X": "1"}}\n' > "$SETTINGS"
 
 # ── Usage errors ──
@@ -470,17 +501,17 @@ assert_eq "hostile path: claude starts in exactly that directory" "$HOSTILE" "$(
 assert_eq "hostile path: no second command ran" "no" "$([[ -e "$TMP/CANARY" || -e "$TMP/CANARY2" ]] && echo yes || echo no)"
 NEWLINE_DIR="$TMP/line"$'\n'"break"
 mkdir -p "$NEWLINE_DIR"
-refused "hostile path: one that needs \$'…' quoting is refused before typing" "the project path needs \$'…' quoting" -- --shell cmux --llm opus "$NEWLINE_DIR"
+refused "hostile path: a newline in it is refused before typing" "the project path holds a control character" -- --shell cmux --llm opus "$NEWLINE_DIR"
 assert_eq "hostile path: ...nothing was typed" "" "$(cat "$MUX_LOG")"
 assert_contains "hostile path: ...and the remedy is a launch that types nothing" "$OUTPUT" "from inside a cmux or tmux pane"
 
 # The flags forwarded to claude and the launcher's own path are typed too.
 NEWLINE_ARG="--append-system-prompt=two"$'\n'"lines"
-refused "hostile argument: a forwarded flag that needs \$'…' quoting is refused before typing" \
-    "the argument forwarded to claude needs \$'…' quoting" -- --shell cmux --llm opus "$NEWLINE_ARG" "$PROJ"
+refused "hostile argument: a forwarded flag with a newline is refused before typing" \
+    "the argument forwarded to claude holds a control character" -- --shell cmux --llm opus "$NEWLINE_ARG" "$PROJ"
 assert_eq "hostile argument: ...nothing was typed" "" "$(cat "$MUX_LOG")"
 refused "hostile argument: ...and before a tmux session is created" \
-    "the argument forwarded to claude needs \$'…' quoting" -- --shell tmux --llm opus "$NEWLINE_ARG" "$PROJ"
+    "the argument forwarded to claude holds a control character" -- --shell tmux --llm opus "$NEWLINE_ARG" "$PROJ"
 assert_not_contains "hostile argument: ...no session was created" "$(cat "$MUX_LOG.calls" 2>/dev/null)" "new-session"
 # Inside a pane nothing is typed, so the same flag is an argument like any other.
 new_logs
@@ -491,8 +522,41 @@ ODD_DIR="$TMP/odd"$'\n'"launcher"
 mkdir -p "$ODD_DIR"
 cp "$LAUNCHER" "$ODD_DIR/claude-code"
 LAUNCHER_UNDER_TEST="$ODD_DIR/claude-code" refused "hostile launcher path: refused before typing" \
-    "the launcher's own path needs \$'…' quoting" -- --shell cmux --llm opus "$PROJ"
+    "the launcher's own path holds a control character" -- --shell cmux --llm opus "$PROJ"
 assert_eq "hostile launcher path: ...nothing was typed" "" "$(cat "$MUX_LOG")"
+
+# Every kind of control character is refused, not only a newline: the
+# C0 controls, DEL, and the C1 controls in their UTF-8 form.
+control_refused() {  # <label> <the character>
+    local dir="$TMP/ctl-$1-a$2b"
+    mkdir -p "$dir"
+    refused "control character: $1 in the project path is refused before typing" \
+        "the project path holds a control character" -- --shell cmux --llm opus "$dir"
+}
+control_refused "a tab" $'\t'
+control_refused "a carriage return" $'\r'
+control_refused "an escape" $'\033'
+control_refused "DEL" $'\177'
+control_refused "a C1 control (U+009B)" $'\302\233'
+ESC_ARG="--append-system-prompt=red"$'\033'"[31m"
+refused "control character: an escape in a forwarded flag is refused before typing" \
+    "the argument forwarded to claude holds a control character" -- --shell cmux --llm opus "$ESC_ARG" "$PROJ"
+
+# Printable non-ASCII is NOT a control character. bash writes it as
+# $'…' when it types the command; the pane's shell reads that back.
+INTL_DIR="$TMP/café 日本語 dir"
+INTL_ARG="--append-system-prompt=naïve 日本"
+mkdir -p "$INTL_DIR"
+new_logs
+run_launcher -- --shell cmux --llm opus "$INTL_ARG" "$INTL_DIR"
+assert_exit "non-ASCII: a printable non-ASCII path and flag are typed, not refused" 0 "$RC"
+TYPED=$(cat "$MUX_LOG")
+assert_contains "non-ASCII: ...in the form the shell reads back" "$TYPED" "\$'"
+pane
+assert_exit "non-ASCII: the pane runs what was typed" 0 "$RC"
+assert_eq "non-ASCII: claude starts in exactly that directory" "$INTL_DIR" "$(grep -m1 '^PWD:' "$CLAUDE_LOG" | sed 's/^PWD://')"
+assert_contains "non-ASCII: ...and receives the flag byte for byte" "$(grep '^ARGV:' "$CLAUDE_LOG")" \
+    "$(LC_ALL=C bash -c 'printf "%q" "$1"' _ "$INTL_ARG")"
 
 # ── Interactive, a new tmux session ──
 new_logs

@@ -123,11 +123,11 @@ For an `api` endpoint:
 
 Every alias is set so that a subagent or a background request asking for `sonnet` or `haiku` stays on the endpoint you chose.
 
-For a `managed` provider only `ANTHROPIC_MODEL` and the tuning are set, and the gateway variables above are removed instead, so the session is Anthropic's even from a shell configured for a gateway. `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` are left alone there: they are ways Claude Code itself signs in.
+For a `managed` provider only `ANTHROPIC_MODEL` and the tuning are set, and the gateway variables above are removed instead, so the session is Anthropic's even from a shell configured for a gateway. `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` and the other forms of Claude Code's own credentials are left alone there: they are how Claude Code itself signs in.
 
 Removed from every selected launch: the credential variable the binding does not use, `ANTHROPIC_CUSTOM_HEADERS`, `ANTHROPIC_DEFAULT_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`, the Bedrock, Vertex, Foundry and other provider switches with their base URLs, `CLAUDE_CODE_USE_GATEWAY`, `ANTHROPIC_UNIX_SOCKET`, and any of the three tuning variables the binding does not set.
 
-Removed from a launch on an `api` endpoint as well: `CLAUDE_CODE_OAUTH_TOKEN`. That token is Claude Code's own login, and Claude Code sends it to whatever base URL it is given when no other credential is set.
+Removed from a launch on an `api` endpoint as well, Claude Code's own credentials in every form it reads: `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`, `CLAUDE_CODE_GATEWAY_TOKEN`, and the file-descriptor forms `CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR`, `CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR` and `CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR`. They are for Anthropic: Claude Code sends its login token, and a key or token handed over by file descriptor, to whatever base URL it is given when no other credential is set.
 
 A command the launcher types into a new cmux workspace or tmux session carries only the launcher, the target and Claude Code's own flags. The launcher runs again inside that pane, and the credential is read there.
 
@@ -143,7 +143,7 @@ Each happens before Claude Code starts, with exit code 3 and the reason.
 | the catalog is missing or not valid | the violations are listed |
 | a settings file sets an endpoint, credential, model, switch or quirk variable of the launch | Claude Code applies a `settings.json` `env` block over the environment it is started with, so the selection would be undone. Remove the key from the `env` block. |
 | a tmux session for the project already exists | attaching would not apply the selection |
-| a project path, a forwarded flag or the launcher's own path that needs `$'…'` quoting, when the launch has to type a command into a new pane | the shell in that pane may not parse it. Start from inside a cmux or tmux pane, where nothing is typed. |
+| a project path, a forwarded flag or the launcher's own path that holds a control character (a newline, a tab, an escape), when the launch has to type a command into a new pane | a control character must never be typed into a pane. Start from inside a cmux or tmux pane, where nothing is typed. Printable non-ASCII is not refused. |
 
 One thing in a settings file is said and not refused: `CLAUDE_CODE_MAX_OUTPUT_TOKENS`, `CLAUDE_CODE_AUTO_COMPACT_WINDOW` or `CLAUDE_CODE_EFFORT_LEVEL` in an `env` block. Tuning does not change which target a session reaches, so the launch goes ahead with a notice, and the settings file's value is the one the session uses, also when the binding sets its own.
 
