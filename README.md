@@ -74,7 +74,7 @@ so this table cannot drift from what the adapters actually deliver.
 <!-- generated:begin choose-adapter -->
 | Tool | What it gives you | Install |
 |---|---|---|
-| `claude-code` | **15 features enforced** — a gate that can block — and 0 more as rules it reads | `./scripts/setup.sh --claude-code` |
+| `claude-code` | **16 features enforced** — a gate that can block — and 0 more as rules it reads | `./scripts/setup.sh --claude-code` |
 | `pi` | **8 features enforced** — a gate that can block — and 7 more as rules it reads | `./scripts/setup.sh --pi` |
 | `codex` | **6 features enforced** — a gate that can block — and 9 more as rules it reads | `./scripts/setup.sh --codex` |
 | `aider` | 5 features as rules the tool reads; no runtime gate | `./scripts/setup.sh --aider` |
@@ -222,6 +222,7 @@ per feature is [docs/features.md](docs/features.md), or ask the CLI:
 - **[LLM routing profiles](docs/llm-routing.md)** _(experimental)_ — Auto-build tasks are routed to a backend by route class and role under an execution profile, with validate, status and explain commands and a scheduled tick.
 - **[MemKernel persistent memory](shared/skills/memkernel-memory/SKILL.md)** _(experimental)_ — Session context is recalled at start, checkpointed before compaction and recovered after it by hooks that activate only when MemKernel is installed.
 - **[cct command-line front door](docs/features.md)** _(experimental)_ — One provider-neutral command lists every slash command, skill and capability, drives routing, reports environment health with doctor, and explains or validates configuration with config.
+- **[LLM catalog and per-launch --llm](docs/llm-catalog.md)** _(experimental)_ — Named LLM targets are configured once and one is picked when a session starts, so a provider, credential or model is never exported in a shell and cannot leak into another session.
 <!-- generated:end feature-summary -->
 
 ## Why this exists

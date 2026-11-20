@@ -12,11 +12,19 @@ origin:
     - https://developers.openai.com/codex/config-reference
     - https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md
     - https://kiro.dev/docs/cli/headless/
+    - https://github.com/gosha70/code-copilot-team/issues/479
   transcripts:
     - specs/llm-catalog/origin/2026-11-10-issue-400-origin.md
+    - specs/llm-catalog/origin/2026-11-19-launch-first-ruling.md
 ---
 
 # Spec: harness-agnostic LLM catalog and per-launch `--llm` selection
+
+Revision 7 (2026-11-19, the owner's launch-first ruling, #479): the
+Claude Code launch is built before the rest of slice A. The new section
+"Launch-first slice" says what that slice implements, what it defers,
+and where it departs from the text below; everything else stands as
+approved and governs the later slices.
 
 Revision 6 (2026-11-10, after the fifth review): a selected launch
 clears competing credential, base-URL, header and provider-switch
@@ -90,6 +98,129 @@ increment, Kiro and Studio included, has landed; the PR for G closes
 feature so later slices build on settled contracts; `tasks.md`
 details slices A and B and outlines C–G, each of which gets its own
 task rows when its issue opens.
+
+## Launch-first slice (#479, ruled 2026-11-19)
+
+**Ruling.** On 2026-11-19 a shell startup file that exported one
+provider's variables routed every Claude Code session on the owner's
+machine to that provider (origin record
+`origin/2026-11-19-launch-first-ruling.md`). The owner ruled that the
+launch is built first: `--llm` for Claude Code, `cct llm list` and
+`validate`, and the catalog file, ahead of slice A's remaining
+infrastructure. This re-cuts slices A and B; it does not change what
+the finished feature is. The slice ships against #479, "Part of #400".
+This section is the one normative statement of the slice; where it and
+the text below disagree, this section governs #479 and the text below
+governs the slices that follow.
+
+**Implemented by #479.**
+
+| Requirement | In this slice |
+|---|---|
+| FR-1 file and location | As written: `${CCT_HOME:-~/.cct}/llms.toml`, four tables, `schema_version = 1`. |
+| FR-2 entities | Providers, endpoints, llms and bindings with the keys listed, except: `data_policy` is refused by name until routing consumes it (G), and a binding's `harness` must be `claude-code` until the other launchers exist (C–E). |
+| FR-3 grammar, D4 | As written. The lexer is `scripts/lib/cct-toml.sh`, extracted from `routing-config.sh` in its own commit with the routing suite unchanged at 365. |
+| FR-4 credentials are references | As written. `credential_env` is a name; a credential's value is read only by the process about to exec `claude`. |
+| FR-5 validation | As written for the entities above. A refused value is quoted back unless it is credential-shaped. |
+| FR-6 commands | `cct llm list` and `cct llm validate [file]` only. |
+| FR-7 redaction | An endpoint is printed as its origin only. The sanitizer is `scripts/lib/cct-endpoint.sh`, moved from the supervisor as FR-7 specifies; digests are not built. |
+| FR-8 resolution | As written: `<llm>` or `<llm>@<binding>`, explicit bindings only. |
+| FR-10 child-side resolution | As written. A typed command carries the launcher, `--llm <target>` and Claude Code's own flags; the launcher re-run in the pane (`CCT_LLM_CHILD=1`) resolves and reads the credential there. A project path that `%q` renders as `$'…'` is refused before typing. |
+| FR-11 native behaviour preserved | As written. Verified against master's launcher: output, typed command, and the argv and environment a stub `claude` receives are identical in seven launches without `--llm`. |
+| FR-12 refusal before launch | The static refusals: unknown target, `unsupported`, `unavailable`, an invalid or missing catalog. Exit 3. |
+| FR-20 Claude Code adapter | With the departures below. |
+| FR-30 competing variables cleared | With the departures below. |
+
+**Deferred, unchanged.** FR-9's digests; FR-12's probe-based states and
+`--allow-unverified`; FR-13 to FR-16 (compatibility records, rule table
+as data, `cct llm test`, `compatibility`); FR-17 to FR-19 (session
+stamps, resume rules, `cct llm sessions`); `cct harness explain`;
+`--json` and its schema; FR-21 to FR-23 (Codex, Pi, Kiro); FR-24
+(project policy); FR-25 (routing); FR-26 (Studio, `cct harness`);
+FR-28's doctor section; FR-29 (state files, none are written yet).
+
+**Departures from the text below.** Each is a choice #479 had to make;
+the owner's ruling covers building launch first and a native Anthropic
+target, and the rest are put to the owner with the PR.
+
+1. **Unverified targets launch, with a notice (D7).** D7 refuses an
+   `unverified` launch and makes `cct llm test` the way to the first
+   record. With the probe deferred, that would refuse every launch. A
+   selected launch prints one line naming the provider, model and
+   origin and saying nothing has probed it. `--allow-unverified` is not
+   introduced. D7 applies again when the probe lands.
+2. **Resume is not enforced (FR-17 to FR-19, D9).** No stamp exists,
+   so the launcher can neither restore a session's target nor refuse a
+   different one. `--llm` is accepted with `--continue` and `--resume`;
+   the help and the guide say to resume with the target a session was
+   started with. The refusals arrive with the stamps.
+3. **A Claude Code binding to a `managed` provider.** FR-14 gives
+   Claude Code one protocol and reserves `managed` for Kiro. This slice
+   accepts `harness = "claude-code"` on a managed provider's llm, with
+   no endpoint, meaning Claude Code's own login: `ANTHROPIC_MODEL` is
+   set, and `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` and every
+   alias remap are removed, so the session is Anthropic's from a shell
+   configured for a gateway. `ANTHROPIC_API_KEY` passes through, as
+   FR-2 says of a variable the harness itself requires.
+   `small_fast_model` is refused on such a binding.
+4. **Alias mapping (FR-20).** FR-20 sets all four alias variables to
+   `small_fast_model` when given. That would run every subagent that
+   asks for `opus` or `sonnet` on the small model. Implemented: Opus,
+   Sonnet and Fable are the main model; Haiku and
+   `ANTHROPIC_SMALL_FAST_MODEL` are `small_fast_model`, else the main
+   model. The owner's own working configuration maps them this way.
+5. **`ANTHROPIC_DEFAULT_FABLE_MODEL` (FR-20).** The installed Claude
+   Code (2.1.329) carries this alias variable; FR-20 predates it. It is
+   set with the others, or the `Fable` alias would name an Anthropic
+   model on a third-party endpoint.
+6. **`auth_header = "none"` sets a placeholder (FR-20).** FR-20 sets
+   nothing. With no credential variable Claude Code falls back to its
+   own login, which FR-2 says must never reach a custom endpoint. The
+   adapter sets `ANTHROPIC_AUTH_TOKEN` to the literal `none`, as every
+   local-endpoint recipe in this repository already does (`dummy`,
+   `ollama`). The capture shows `authorization: Bearer none` arriving.
+7. **The clear-list is wider (FR-20, FR-30).** Added, from the names in
+   the installed binary: the `CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD`
+   and `CLAUDE_CODE_USE_MANTLE` switches and the Bedrock-Mantle, AWS
+   and Google Cloud base URLs. Added, because each would point a
+   session on one model at another's: `CLAUDE_CODE_SUBAGENT_MODEL`, and
+   whichever of `CLAUDE_CODE_MAX_OUTPUT_TOKENS`,
+   `CLAUDE_CODE_AUTO_COMPACT_WINDOW` and `CLAUDE_CODE_EFFORT_LEVEL` the
+   binding does not set. Seen in the binary and not cleared, their
+   semantics not established: `CLAUDE_CODE_USE_GATEWAY`,
+   `ANTHROPIC_UNIX_SOCKET`.
+8. **Two more binding keys (FR-20).** `auto_compact_window` and
+   `reasoning_effort`, beside `small_fast_model` and
+   `max_output_tokens`. Without them a target cannot reproduce the
+   owner's existing per-provider configuration, and the values would
+   stay exported in a shell.
+9. **Removal by `unset`, not `env -u` (FR-30).** The launcher removes
+   and exports in its own process immediately before `exec`. The child
+   environment is the same, and the credential is never an argument of
+   any process, which `env NAME=value` would make it for an instant.
+10. **A settings `env` block is refused (FR-20, B1's question).** The
+    capture answers the question FR-20 left open: Claude Code 2.1.329
+    applies a `settings.json` `env` block over the environment it is
+    started with, for the API client as well as for tools. The adapter
+    refuses a launch when the user or project settings name a variable
+    the plan sets or removes, by file and name, never value. Without
+    `jq` the check is skipped with a notice.
+11. **No ambient #399 notice on a selected launch (B3).** B3 retires
+    the notice for an endpoint that declares `rejects-dynamic-tools`.
+    It is skipped for every selected launch: it describes the shell's
+    own gateway variables, which the plan replaces.
+12. **An existing tmux session is refused.** Not in the text: the
+    launcher attaches to an existing session for the project. With
+    `--llm` it refuses instead, since that session runs whatever it was
+    started with.
+13. **`--llm` in a headless argument list.** The `-p` path forwards its
+    arguments verbatim. `--llm <target>` and `--llm=<target>` are taken
+    out wherever they appear, so an argument that is exactly `--llm`
+    cannot be passed to `claude` through the launcher.
+
+**Evidence.** `specs/llm-catalog/verification/claude-code-capture.md`
+(the real binary against local stub endpoints); `tests/test-llm-
+catalog.sh` and `tests/test-llm-launch.sh`.
 
 ## User Scenarios
 

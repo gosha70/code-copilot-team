@@ -10,6 +10,7 @@
 #   cct doctor [...]       is this machine ready? tools, providers, adapters
 #   cct config <...>       validate the configuration, or explain one key
 #   cct home [migrate]     where CCT keeps this user's files; move a legacy home
+#   cct llm <...>          the LLM catalog: the targets `cct start --llm` accepts
 #   cct help               show this help
 set -euo pipefail
 
@@ -29,6 +30,7 @@ COMMANDS
                     cct start                        this directory
                     cct start ~/projects/my-app      that project
                     cct start --peer-review <name> ~/projects/my-app
+                    cct start --llm <target> ~/projects/my-app   on that LLM, this session only
   features        What the harness offers, from shared/features/catalog.yaml:
                   maturity, release, which adapters enforce it, and its guide.
                     cct features                     one line per feature
@@ -67,10 +69,16 @@ COMMANDS
                     cct home                     show the home and any legacy entries
                     cct home migrate             move legacy entries in; never overwrites
                     cct home migrate --dry-run   preview the move
+  llm             The LLM catalog (${CCT_HOME:-~/.cct}/llms.toml): named targets you
+                  configure once and pick per session with --llm, so no provider
+                  or model variable is ever exported in a shell.
+                    cct llm list                 the targets, and whether each can launch
+                    cct llm validate [file]      check the catalog, by line and name
   help            Show this help.
 
 EXAMPLES
   cct start ~/projects/my-app  # open a harness session there
+  cct start --llm deepseek .   # …on a catalog LLM, for this session only
   cct features                 # what can this thing do?
   cct features --adapter pi    # …and what does my tool actually enforce?
   cct list                     # every command, skill and capability
@@ -131,6 +139,9 @@ case "$cmd" in
   home)
     exec bash "$SCRIPT_DIR/cct-home.sh" "$@"
     ;;
+  llm)
+    exec bash "$SCRIPT_DIR/llm-cli.sh" "$@"
+    ;;
   help|-h|--help) usage ;;
-  *) echo "cct: unknown command '$cmd'" >&2; echo "Did you mean: features, list, routing, doctor, config, home, start, help?" >&2; usage >&2; exit 2 ;;
+  *) echo "cct: unknown command '$cmd'" >&2; echo "Did you mean: features, list, routing, doctor, config, home, llm, start, help?" >&2; usage >&2; exit 2 ;;
 esac

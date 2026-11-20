@@ -7,7 +7,7 @@
 > `shared/capabilities/catalog.yaml`. To change an entry, edit the source —
 > a drift guard (`--check`) fails the build if this file is stale.
 
-_19 features · 14 slash commands · 24 skills · 20 capabilities_
+_20 features · 14 slash commands · 24 skills · 20 capabilities_
 
 New here? Start with the [Quick Start](../README.md#quick-start), then browse the
 tables below. In a session, run `scripts/cct list` to print this on demand.
@@ -39,6 +39,7 @@ the primary guide. Maturity and release state are defined in
 | [LLM routing profiles](../docs/llm-routing.md) | Auto-build tasks are routed to a backend by route class and role under an execution profile, with validate, status and explain commands and a scheduled tick. | experimental | v2.0.0 |
 | [MemKernel persistent memory](../shared/skills/memkernel-memory/SKILL.md) | Session context is recalled at start, checkpointed before compaction and recovered after it by hooks that activate only when MemKernel is installed. | experimental | v1.1.0 |
 | [cct command-line front door](../docs/features.md) | One provider-neutral command lists every slash command, skill and capability, drives routing, reports environment health with doctor, and explains or validates configuration with config. | experimental | v2.0.0 |
+| [LLM catalog and per-launch --llm](../docs/llm-catalog.md) | Named LLM targets are configured once and one is picked when a session starts, so a provider, credential or model is never exported in a shell and cannot leak into another session. | experimental | unreleased |
 
 ### Adapter support
 
@@ -68,6 +69,7 @@ that the feature runs outside any adapter.
 | LLM routing profiles | — | enforced | enforced | — | — | enforced | — |
 | MemKernel persistent memory | — | enforced | advisory | advisory | advisory | advisory | — |
 | cct command-line front door | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| LLM catalog and per-launch --llm | — | enforced | — | — | — | — | — |
 
 ## Slash commands
 

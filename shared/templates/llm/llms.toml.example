@@ -1,0 +1,128 @@
+# llms.toml — the LLM catalog: the targets `--llm` accepts.
+#
+# Copy this file to ${CCT_HOME:-~/.cct}/llms.toml, keep the targets you
+# use, and check it with `cct llm validate`. Then:
+#
+#   cct llm list                    what you can launch
+#   cct start --llm deepseek .      this session only, on DeepSeek
+#   cct start --llm opus .          this session only, on Anthropic
+#   cct start .                     unchanged: Claude Code as you configured it
+#
+# Four kinds of table:
+#   [providers.<id>]  who serves a model, and how you sign in
+#   [endpoints.<id>]  where an api provider is reached, and how it is called
+#   [llms.<id>]       a model; its id is what you pass to --llm
+#   [bindings.<id>]   "run this llm on this harness, through this endpoint"
+#
+# A credential is NAMED, never written here: credential_env is the name
+# of the environment variable that holds it. The file is strict: an
+# unknown table, key or value is refused by name. docs/llm-catalog.md
+# has every key.
+
+schema_version = 1
+
+# ── Anthropic, by Claude Code's own login ─────────────────────────────
+# A managed provider has no endpoint and no credential here: the harness
+# signs in itself. Selecting one also removes any gateway variables the
+# shell carries, so the session is Anthropic's whatever started it.
+
+[providers.anthropic]
+display_name = "Anthropic"
+kind = "managed"
+credential_mode = "native"
+
+[llms.opus]
+provider = "anthropic"
+model = "opus"
+
+[llms.sonnet]
+provider = "anthropic"
+model = "sonnet"
+
+[bindings.opus-claude]
+harness = "claude-code"
+llm = "opus"
+
+[bindings.sonnet-claude]
+harness = "claude-code"
+llm = "sonnet"
+
+# ── DeepSeek, through its Anthropic-compatible endpoint ───────────────
+# export DEEPSEEK_API_KEY=... in your shell profile; only the name is
+# written here. The quirk turns off the dynamic tool blocks this
+# endpoint rejects (422 "unknown variant tool_definition").
+
+[providers.deepseek]
+display_name = "DeepSeek"
+kind = "api"
+credential_mode = "env"
+credential_env = "DEEPSEEK_API_KEY"
+
+[endpoints.deepseek]
+provider = "deepseek"
+protocol = "anthropic-messages"
+base_url = "https://api.deepseek.com/anthropic"
+auth_header = "bearer"
+quirks = ["rejects-dynamic-tools"]
+
+[llms.deepseek]
+provider = "deepseek"
+model = "deepseek-chat"
+
+[bindings.deepseek-claude]
+harness = "claude-code"
+llm = "deepseek"
+endpoint = "deepseek"
+
+# ── A local model served by Ollama ────────────────────────────────────
+# Ollama serves the Anthropic Messages API itself and takes no
+# credential. Use the tag of a model you have pulled.
+
+[providers.ollama]
+display_name = "Ollama (local)"
+kind = "api"
+credential_mode = "none"
+
+[endpoints.ollama]
+provider = "ollama"
+protocol = "anthropic-messages"
+base_url = "http://localhost:11434"
+auth_header = "none"
+
+[llms.qwen]
+provider = "ollama"
+model = "qwen3.6:27b"
+
+[bindings.qwen-claude]
+harness = "claude-code"
+llm = "qwen"
+endpoint = "ollama"
+
+# ── A model behind a local gateway (vLLM, OpenAI, anything else) ──────
+# Claude Code speaks only the Anthropic Messages protocol. A server that
+# speaks another one (vLLM and OpenAI speak OpenAI's) needs a gateway in
+# front that translates, such as the LiteLLM proxy in
+# docs/dgx-spark/setup-cookbook.md; the endpoint below is that gateway.
+# The model id is the name the gateway serves. max_output_tokens keeps a
+# request inside a small context window.
+
+[providers.local-gateway]
+display_name = "Local gateway"
+kind = "api"
+credential_mode = "none"
+
+[endpoints.local-gateway]
+provider = "local-gateway"
+protocol = "anthropic-messages"
+base_url = "http://127.0.0.1:8787"
+auth_header = "none"
+
+[llms.spark-qwen]
+provider = "local-gateway"
+model = "qwen38-27b"
+
+[bindings.spark-qwen-claude]
+harness = "claude-code"
+llm = "spark-qwen"
+endpoint = "local-gateway"
+max_output_tokens = 32000

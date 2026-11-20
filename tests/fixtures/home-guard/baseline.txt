@@ -7,11 +7,13 @@
 # Never list a path the code itself reads, writes, creates or passes on: such
 # a path must go through scripts/lib/cct-home.sh, session_analytics/home.py or
 # adapters/pi/runtime/config/home.ts instead.
+adapters/claude-code/claude-code	(${CCT_HOME:-~/.cct}/llms.toml): <llm>, or <llm>@<binding>.
 adapters/pi/runtime/config/loader.ts	globalDir: string; // the CCT home: ${CCT_HOME:-~/.cct} (#411), resolved by the caller
 benchmarks/presets/hybrid-routing.json	"registry": "~/.cct/routing.toml"
 scripts/benchmark_runner/routing_eval/scenario_config.py	A path under the CCT home as written in docs (``~/.cct/<rest>``, or
 scripts/benchmark_runner/routing_eval/scenario_config.py	the legacy ``~/.code-copilot-team/<rest>``) names the operator's CCT
 scripts/cct	home            Where CCT keeps this user's files (${CCT_HOME:-~/.cct}) and
+scripts/cct	llm             The LLM catalog (${CCT_HOME:-~/.cct}/llms.toml): named targets you
 scripts/cct	what is still read from the legacy ~/.code-copilot-team:
 scripts/lib/analytics_layers.py	defaults.json  <  ~/.cct/session-analytics.json  <  .env  <  environment
 scripts/lib/cct_config.py	"source": "~/.cct/providers.toml",
@@ -21,6 +23,7 @@ scripts/lib/cct_doctor.py	still read from the legacy ~/.code-copilot-team throug
 scripts/lib/config_reference.py	Layered: `config_data/defaults.json`, then `~/.cct/session-analytics.json`,
 scripts/lib/config_reference.py	return (f"""## Session analytics — `~/.cct/session-analytics.json` and the environment
 scripts/lib/config_reference.py	return (f"""## `~/.cct/providers.toml`
+scripts/llm-cli.sh	The catalog is ${CCT_HOME:-~/.cct}/llms.toml; docs/llm-catalog.md describes it.
 scripts/providers-health.sh	echo "Default profile: ~/.cct/providers.toml"
 scripts/routing-cli.sh	options: --registry <path> (default ~/.cct/routing.toml)
 scripts/session_analytics/api/server.py	continue          # hidden clutter, but keep ~/.cct

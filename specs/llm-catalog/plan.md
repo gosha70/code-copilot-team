@@ -22,8 +22,10 @@ origin:
     - https://developers.openai.com/codex/config-reference
     - https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md
     - https://kiro.dev/docs/cli/headless/
+    - https://github.com/gosha70/code-copilot-team/issues/479
   transcripts:
     - specs/llm-catalog/origin/2026-11-10-issue-400-origin.md
+    - specs/llm-catalog/origin/2026-11-19-launch-first-ruling.md
   origin_claim: |
     Configure multiple named LLM targets once in a user-level catalog
     (providers, endpoints, llms, bindings; credentials as references),
@@ -105,6 +107,50 @@ Layers, each with one owner:
 
 Each slice gets its own `tasks.md` section when its issue opens;
 `tasks.md` here details A and B and outlines the rest.
+
+## Launch-first slice (#479, ruled 2026-11-19)
+
+The owner ruled on 2026-11-19 that the Claude Code launch is built
+before the rest of slice A (spec.md, "Launch-first slice", which lists
+what is implemented, deferred and departed from). The slice takes the
+launch-bearing parts of A and B and leaves their evidence machinery to
+the slices that follow:
+
+| From | Taken by #479 | Left for its slice |
+|---|---|---|
+| A1 | the lexer extraction, own commit | nothing |
+| A2 | nothing (no state file is written) | all of it |
+| A3 | the sanitizer move, the catalog library, the example file | the digests, the `data_policy` vocabulary |
+| A4, A5 | nothing | all of it |
+| A6 | resolution, the plan's set and clear lists, typed-command quoting | the LaunchPlan JSON schema, the three digests |
+| A7 | `cct llm list`, `validate`, `scripts/cct` dispatch | `show`, `compatibility`, `test`, `sessions`, `harness explain`, `--json` |
+| A8 | nothing | all of it |
+| A9 | `docs/llm-catalog.md`, the catalogue entry, generated docs, test pins, CI steps | the doctor section |
+| B1 | the capture, run against local stub endpoints | `--session-id`, the JSON model field, the #399 minimum version |
+| B2, B3 | the adapter, `--llm` parsing, start and in-pane exec, headless, the native guard and its mutation test | `--allow-unverified`, stamping |
+| B4, B5 | nothing | all of it |
+| B6 | launcher help, the guide, CHANGELOG | byte-for-byte assertions in the supervisor and benchmark suites |
+
+**Files.** New: `scripts/lib/cct-toml.sh`, `scripts/lib/cct-endpoint.sh`,
+`scripts/lib/llm-catalog.sh`, `scripts/lib/llm-adapters/claude-code.sh`,
+`scripts/llm-cli.sh`, `shared/templates/llm/llms.toml.example`,
+`tests/test-llm-catalog.sh`, `tests/test-llm-launch.sh`,
+`docs/llm-catalog.md`. Changed: `scripts/lib/routing-config.sh` (uses
+the extracted lexer), `scripts/cooldown-supervisor.sh` (sources the
+moved sanitizer), `adapters/claude-code/claude-code`, `scripts/cct`.
+
+**Commits.** (1) the lexer extraction alone, routing suite unchanged at
+365 with identical output, per D4's condition; (2) the sanitizer move,
+with the five test lines that read the function from its file; (3) the
+catalog, the launch, the CLI, tests and docs.
+
+**Proof.** The two suites drive the real launcher with a stub `claude`
+that records its argv and whole environment, a stub cmux and a stub
+tmux; a planted credential is asserted absent from everything typed,
+printed and logged. A launch without `--llm` is compared with master's
+launcher. The real Claude Code binary is run through `--llm` against
+local stub endpoints, in a throwaway home, and what it sends is
+recorded under `verification/`.
 
 ## Design decisions carried into tasks (see spec.md § Decisions)
 

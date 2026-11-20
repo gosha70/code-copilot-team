@@ -166,6 +166,14 @@ jobs:
       - name: cct home tests
         run: bash tests/test-cct-home.sh
 
+      # The LLM catalog (llms.toml) and per-launch --llm (#479): every
+      # refusal by name, and what a stub claude actually receives, in
+      # headless, in-pane and typed launches. No network, no multiplexer.
+      - name: LLM catalog tests
+        run: bash tests/test-llm-catalog.sh
+      - name: --llm launch tests
+        run: bash tests/test-llm-launch.sh
+
       # pre-pr-check.sh audits a PR's commits, body and title for close
       # keywords; `--closes none` is the mode for a PR that closes nothing
       # (#408). The suite drives it against a throwaway repository.
