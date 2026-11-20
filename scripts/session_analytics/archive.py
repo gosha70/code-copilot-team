@@ -251,8 +251,7 @@ def archive(
                         continue
                     raw = adapter.load(ref)
 
-                    project_key = resolver.resolve(raw.project_path)
-                    override = projects.get(project_key) if project_key else None
+                    override = resolver.override(projects, raw.project_path)
 
                     # Hard privacy boundary first (mirrors ingest FR-4):
                     # opted-out projects get NOTHING written, ever.
@@ -267,7 +266,7 @@ def archive(
                     # opt-in must archive this session).
                     if override is None or not override.trace_archive:
                         stats.sessions_skipped_not_opted_in += 1
-                        key_label = project_key or "(unresolved)"
+                        key_label = resolver.resolve(raw.project_path) or "(unresolved)"
                         stats.per_project_not_opted_in[key_label] = (
                             stats.per_project_not_opted_in.get(key_label, 0) + 1
                         )
@@ -376,8 +375,7 @@ def _purge_unauthorized(
         """
     )
     for session_ref, project_path in rows:
-        key = resolver.resolve(project_path)
-        override = projects.get(key) if key else None
+        override = resolver.override(projects, project_path)
         authorized = (
             override is not None
             and override.ingest != C.INGEST_OFF

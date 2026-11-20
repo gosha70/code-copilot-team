@@ -23,6 +23,7 @@ import asyncio
 import importlib.util
 import json
 import shutil
+import subprocess
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
@@ -72,13 +73,16 @@ EXEMPT_MODULES: dict[str, str] = {
 
 
 @contextmanager
-def corpus() -> Iterator[tuple[Path, Path]]:
+def corpus(*, git_repo: bool = False) -> Iterator[tuple[Path, Path]]:
     """(source root for the claude-code adapter, project root), rendered
-    into a fresh temp dir and removed afterwards."""
+    into a fresh temp dir and removed afterwards. With ``git_repo`` the
+    project root is a git checkout, as a real project usually is (#477)."""
     base = Path(tempfile.mkdtemp(prefix="cct-sa-canary-"))
     try:
         project = base / "canaryproj"
         project.mkdir()
+        if git_repo:
+            subprocess.run(["git", "init", "-q"], cwd=project, check=True)
         shutil.copy(FIXTURE / "AGENTS.md", project / "AGENTS.md")
         # Stored as a template: the repository's .gitignore ignores every
         # CLAUDE.md, so the fixture could not be committed under that name.
@@ -101,9 +105,12 @@ def config_for(
     global_mode: Optional[str] = None,
     ingest_off: bool = False,
     archive: bool = True,
+    by_path: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
-    """A user config keying the corpus project by its root, with the given
-    per-project mode, global mode, opt-out and trace-archive opt-in."""
+    """A user config keying the corpus project by a ``project_ids`` id, with
+    the given per-project mode, global mode, opt-out and trace-archive
+    opt-in. ``by_path`` adds a second entry for the same project, keyed by
+    its repo root as git reports it (#477)."""
     entry: dict[str, Any] = {C.CFG_PROJECT_TRACE_ARCHIVE: archive}
     if project_mode is not None:
         entry[C.CFG_REDACTION] = project_mode
@@ -113,6 +120,8 @@ def config_for(
         C.CFG_PROJECTS: {PROJECT_ID: entry},
         C.CFG_PROJECT_IDS: [{C.CFG_PROJECT_ID_MATCH: str(project), C.CFG_PROJECT_ID_ID: PROJECT_ID}],
     }
+    if by_path is not None:
+        data[C.CFG_PROJECTS][str(project.resolve())] = dict(by_path)
     if global_mode is not None:
         data[C.CFG_REDACTION] = global_mode
     return data

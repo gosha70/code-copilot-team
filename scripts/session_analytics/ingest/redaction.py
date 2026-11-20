@@ -143,10 +143,10 @@ def outbound_text(text: Optional[str], recorded: Optional[str], outbound: str) -
     return redact_text(text, C.REDACT_METADATA_ONLY)
 
 
-def current_mode(cfg: Any, project_key: Optional[str]) -> tuple[str, bool]:
+def current_mode(cfg: Any, override: Any) -> tuple[str, bool]:
     """(the project's current redaction mode, whether it is opted out),
-    from its override in ``cfg``, else the global mode."""
-    override = cfg.project_override(project_key)
+    from its combined ``override`` (``ProjectKeyResolver.override``), else
+    the global mode."""
     ingest_off = override is not None and override.ingest == C.INGEST_OFF
     if override is not None and override.redaction_mode is not None:
         return override.redaction_mode, ingest_off
@@ -197,8 +197,8 @@ class OutboundPolicy:
             params = (int(session_id),)
         for sid, copilot, native, path, recorded in db.query(sql, params):
             if path not in by_path:
-                key = resolver.resolve(path) if resolver is not None else None
-                by_path[path] = current_mode(cfg, key)
+                override = resolver.override(cfg.projects, path) if resolver is not None else None
+                by_path[path] = current_mode(cfg, override)
             current, ingest_off = by_path[path]
             mode = outbound_mode(recorded, current, ingest_off)
             if mode is None:

@@ -204,8 +204,7 @@ def ingest_heartbeats(
     projects = projects or {}
     for root in discover_heartbeat_projects(db, base, cwd):
         if resolver is not None and projects:
-            key = resolver.resolve(str(root))
-            override = projects.get(key) if key else None
+            override = resolver.override(projects, str(root))
             if override is not None and getattr(override, "ingest", None) == C.INGEST_OFF:
                 continue  # hard boundary: write NOTHING for this project
         fields = read_heartbeat(root)

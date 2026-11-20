@@ -190,8 +190,9 @@ def ingest(
                     continue
                 raw = adapter.load(ref)
 
-                project_key = resolver.resolve(raw.project_path)
-                override = projects.get(project_key) if project_key else None
+                # The project's entries under both of its keys, the stricter
+                # setting holding (#477).
+                override = resolver.override(projects, raw.project_path)
 
                 # Hard privacy boundary (FR-4): opt-out is checked BEFORE
                 # redaction precedence and is never overridable, including by
@@ -199,8 +200,13 @@ def ingest(
                 # session, not even the incremental bookkeeping row.
                 if override is not None and override.ingest == C.INGEST_OFF:
                     stats.sessions_opted_out += 1
-                    stats.per_project_opt_out[project_key] = (
-                        stats.per_project_opt_out.get(project_key, 0) + 1
+                    # Counted under the key the opt-out is filed under.
+                    opted_out_key = next(
+                        key for key in resolver.keys(raw.project_path)
+                        if key in projects and projects[key].ingest == C.INGEST_OFF
+                    )
+                    stats.per_project_opt_out[opted_out_key] = (
+                        stats.per_project_opt_out.get(opted_out_key, 0) + 1
                     )
                     continue
 

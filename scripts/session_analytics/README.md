@@ -124,23 +124,31 @@ project from ingestion, add a `projects` block to `config_data/defaults.json`
 ]
 ```
 
-- **Project key**: for each session, the key is resolved from its captured
-  `cwd` in this order: (1) the **git repo root** when that `cwd` is a local
-  git worktree at ingest time (`git -C <cwd> rev-parse --show-toplevel`); (2)
-  else the first matching `project_ids` rule (`match` is a substring of the
-  `cwd`, e.g. `/Users/dev/work/client-a` matches any subdirectory of that
-  repo); (3) else there is no per-project override and the global default
-  applies. The key is **never the raw cwd itself** — only a detected repo
-  root or a configured id — so subdirectories/worktrees of one repo share a
-  single setting instead of fragmenting. The `project_ids` map is the primary
-  keying mechanism for transcripts ingested on a machine where the repo isn't
-  checked out (git-toplevel detection needs local filesystem access to that
-  `cwd`); git-toplevel auto-detection is a convenience on the machine where
-  the sessions were recorded.
+- **Project keys**: a session's settings are looked up under two keys, both
+  resolved from its captured `cwd`: (1) the `id` of the first matching
+  `project_ids` rule (`match` is a substring of the `cwd`, e.g.
+  `/Users/dev/work/client-a` matches any subdirectory of that repo); (2) the
+  **git repo root** when that `cwd` is a local git worktree
+  (`git -C <cwd> rev-parse --show-toplevel`), as an absolute path. A
+  `projects` entry under either key applies (#477), so an entry keyed by an
+  id holds for a checked-out repo, and an entry keyed by a repo's path holds
+  inside a rule broad enough to cover it. With no entry under either key
+  there is no per-project override and the global default applies. A key is
+  **never the raw cwd itself** — only a configured id or a detected repo
+  root — so subdirectories/worktrees of one repo share a single setting
+  instead of fragmenting. Without a rule, key the `projects` entry by the
+  repo's absolute path.
+- **An entry under both keys: the stricter setting holds.** The session is
+  opted out if either entry says `ingest: "off"`. Otherwise its
+  `redaction_mode` is the stricter of the modes the two entries state, or
+  the global mode when neither states one. It is archived only if both
+  entries set `trace_archive: true`. This is the lookup everywhere a
+  project's setting is read: ingest, everything sent off the machine, the
+  trace archive and the heartbeat sweep.
 - **Redaction precedence** (per session): explicit CLI `--redact` (if passed)
-  > the resolved project's `redaction_mode` > the global default. The
-  resolved mode is what's actually applied before any DB write or judge
-  prompt, and is recorded in `copilot_session.redaction_mode`.
+  > the project's `redaction_mode` > the global default. The resolved mode
+  is what's actually applied before any DB write or judge prompt, and is
+  recorded in `copilot_session.redaction_mode`.
 - **`ingest: "off"`** is a hard privacy boundary: that project's sessions are
   skipped entirely — no DB rows, no judge calls, not even incremental
   bookkeeping. An explicit `--redact` on the CLI does **not** force-include
@@ -163,7 +171,8 @@ project from ingestion, add a `projects` block to `config_data/defaults.json`
   A key found by git-root detection needs the repository to still be on
   disk at that path; if it has moved or been deleted, the session falls back
   to the global mode and its project's opt-out no longer applies. A
-  `project_ids` rule matches the recorded path itself, so it keeps working.
+  `project_ids` rule matches the recorded path itself, so an entry keyed by
+  its id keeps applying either way.
 - **No `projects` block configured** (the default): every session ingests
   with the global `redaction_mode`, exactly as before this feature existed —
   fully additive, no migration required.
