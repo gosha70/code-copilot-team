@@ -32,8 +32,8 @@ Build, task by task                     feature branch, never master
 Closure gates                           suites at their pins, diff guards,
    │                                    full sweeps, origin re-check, docs
    ▼
-PR merge                                close keywords audited: one intended
-                                        (or zero for a non-issue PR), body only
+PR merge                                close keywords audited: one per issue
+                                        completed (zero for a non-issue PR), body only
 ```
 
 ### 1. Origin
@@ -168,9 +168,9 @@ silently folded into "green" and never used to excuse a new regression.
 
 - The PR body states what ships and which gates ran.
 - **Close-keyword discipline**:
-  - a PR that completes an issue carries **exactly one intended close
-    keyword** (`Closes #<issue>`), in the PR body only — never in commit
-    messages;
+  - a PR carries one `Closes #<issue>` line per issue it completes
+    (usually one), in the PR body — never in commit messages, and never
+    only in the title, which GitHub does not read for closing keywords;
   - a PR tied to no issue (docs, chores) carries **zero** close keywords
     anywhere — `scripts/pre-pr-check.sh --closes none` checks that;
   - GitHub fires close keywords from *any* commit message or PR-body text
@@ -189,9 +189,16 @@ silently folded into "green" and never used to excuse a new regression.
   gh pr view <n> --json body -q .body | grep -niE '(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[0-9]+'
   ```
 
-  Every match must be an intended close.
+  Every match must be an intended close. `scripts/pre-pr-check.sh
+  --closes <N>[,<N>] --title "<title>" --body-file pr-body.md` runs these
+  audits in one step, and fails when an intended issue has no close keyword
+  in the body. After opening, `gh pr view <n> --json closingIssuesReferences`
+  must list exactly the intended issues.
   `knowledge/wiki/playbooks/pre-pr-close-keyword-audit.md` has the full
   playbook. Say "leaves #N open" for issues intentionally not closed.
+- **Review gate**: a PR merges only after the maintainer adds the
+  `reviewed` label to its current head; any new push removes it
+  (`.github/workflows/review-gate.yml`).
 - A merged PR must **fully address its issue** — no partial/phased PRs
   against one issue; split into per-increment issues instead.
 - Verify the merge in a **separate command** before any cleanup

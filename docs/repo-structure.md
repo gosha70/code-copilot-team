@@ -28,9 +28,12 @@ code-copilot-team/
 │   ├── cursor/                          .cursor/rules/*.mdc, setup.sh
 │   ├── github-copilot/                  .github/copilot-instructions.md, instructions/, setup.sh
 │   ├── windsurf/                        .windsurf/rules/rules.md, setup.sh
-│   └── aider/                           CONVENTIONS.md, setup.sh
+│   ├── aider/                           CONVENTIONS.md, setup.sh
+│   └── pi/                              bin/pi-code, runtime/, resources/, docs/, setup.sh
 ├── scripts/
+│   ├── cct                              The `cct` CLI: start, features, list, routing, doctor, config, home, llm
 │   ├── generate.sh                      Builds adapter configs from shared/
+│   ├── session-analytics                Session Analytics launcher (CLI, Studio, MCP); code in session_analytics/
 │   ├── bench                            Terse benchmark comparison driver (wraps benchmark)
 │   ├── benchmark                        Benchmark harness CLI (run, compare, judge, calibrate, report)
 │   ├── wiki                             Wiki launcher: runs the .venv's wiki-studio 0.9.0 (ingest, promote, query, lint, audit-flush)
@@ -59,6 +62,8 @@ code-copilot-team/
 │   ├── test-sync.sh                     138 sync + init metadata tests
 │   ├── test-litellm-proxy-deps.sh       13 benchmark proxy pin tests (+11 with --online)
 │   ├── test-coverage-parse.sh           46 coverage parser + safety tests
+│   ├── test-verification-spec.sh      146 verification-spec tests
+│   ├── test-automation-config.sh      194 automation-config tests
 │   ├── test-verification-preset.sh      43 preset resolution tests
 │   ├── test-peer-review.sh             99 peer-review runner tests
 │   ├── test-review-loop.sh           237 review loop integration tests
@@ -68,7 +73,7 @@ code-copilot-team/
 │   ├── test-routing-config.sh         365 execution-profile registry + result + cli tests
 │   ├── test-routing-failover.sh       227 circuit + action + selection + supervisor + identity tests (#251 B)
 │   ├── test-routing-tasks.sh          160 task metadata + floor + task-addressed explain tests (#254 C)
-│   ├── test-routing-packet.sh          99 immutable delegation-packet tests (#254 C T2)
+│   ├── test-routing-packet.sh         102 immutable delegation-packet tests (#254 C T2)
 │   ├── test-routing-delegation.sh     180 route-class + packet execution + reconciliation tests (#254 C T3-T5)
 │   ├── test-routing-recovery.sh       375 probe-state + timing + probe + tick-wake tests (#257 D)
 │   ├── test-pre-pr-check.sh           17 close-keyword audit tests (#408)
@@ -82,6 +87,7 @@ code-copilot-team/
 │   ├── test-wiki-ingest.sh            42 five-verb wiki contract tests (needs the managed .venv; #384)
 │   └── test-claude-code-launcher.sh   43 branded-launcher + cct shim + gateway notice tests (#195, #410, #399)
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
+├── studio/                              Session Analytics Studio (Next.js UI over the local API)
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification
 ├── .github/workflows/codeql.yml         CI: CodeQL advanced setup — runs on fork PRs, one `CodeQL` check
 ├── .github/workflows/review-gate.yml    `reviewed` label → required status `External review on record` on the PR head

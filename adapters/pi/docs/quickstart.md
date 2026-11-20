@@ -28,8 +28,8 @@ pi-code doctor --json            # machine-readable
 ```
 
 `doctor` reports: resolved profile, config load + security floor, trust status,
-sandbox status, resource sync, always-context bundle size, and any
-misconfiguration. If it's green, the harness is ready.
+sandbox status, resource sync, always-context bundle size, legacy project
+files and git-ignore checks, and any misconfiguration. If it's green, the harness is ready.
 
 ## 3. Inspect what you'll run under
 

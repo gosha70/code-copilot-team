@@ -82,7 +82,7 @@ SDD rules propagate through the same `shared/ → generate.sh → adapters/` pip
 ### Getting Started with SDD
 
 1. Start a Plan session — describe your feature to the Plan agent.
-2. The Plan agent classifies risk, sets `spec_mode`, and writes the appropriate artifacts to `specs/<feature-id>/`.
+2. The Plan agent classifies risk, sets `spec_mode`, and writes the appropriate artifacts to `specs/<feature-id>/`. It lists any decisions it cannot make under `### Open decisions`; the main session asks you those before the plan is approved.
 3. Switch to Build — the Build agent reads the frontmatter and gates itself.
 4. CI validates on PR — `validate-spec.sh` catches any missing artifacts or incomplete specs.
 

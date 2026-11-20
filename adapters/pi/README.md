@@ -73,7 +73,7 @@ provider/wiki/benchmark rollout, two-dimensional capability reporting.
 Detailed guides live in [`docs/`](docs/):
 
 - [Quickstart](docs/quickstart.md) — install, verify, first enforced session.
-- [Configuration reference](docs/configuration-reference.md) — keys, layering, profiles.
+- [Configuration reference](docs/configuration-reference.md) — keys, layering, profiles; a project's `.cct.toml`, `.cct.local.toml` and `.cct-init.json`, and `pi-code migrate` from the legacy `.code-copilot-team/` files.
 - [Security model](docs/security-model.md) — what's enforced, what's honestly degraded; incl. #173 env scrubbing at spawn boundaries (`pi-code env scrub-list` shows what a handoff scrubs).
 - [Migration from Claude Code](docs/migration-from-claude-code.md) — what maps, what's degraded, what's Pi-native.
 - [Extension development](docs/extension-development.md) — add commands, capabilities, tests, generated resources.

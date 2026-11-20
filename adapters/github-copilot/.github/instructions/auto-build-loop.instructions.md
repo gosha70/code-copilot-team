@@ -139,7 +139,9 @@ gating reviewer + N advisory (non-gating) reviewers**:
    — the driver owns the review gate). One `--resume` continuation on
    `error_max_turns`, then park.
 3. **Test**: driver runs `test.command`; failures get bounded fix sessions
-   (`build.max_fix_sessions_per_phase`), then park.
+   (`build.max_fix_sessions_per_phase`), then park. After the last phase a
+   landing test gate runs `test.command` once more on the final head before
+   any push or PR; a failure parks `test_failure` with `parked_head` (#403).
 4. **Commit**: the DRIVER commits (`feat(<id>): phase N — <title>
    [auto-build]`); sessions never commit. Empty diff parks (`git_anomaly`).
 5. **Review**: driver initializes `.cct/review/state.json` and invokes
@@ -147,7 +149,9 @@ gating reviewer + N advisory (non-gating) reviewers**:
    whole phase diff is reviewed. FAIL → fix session + driver commit +
    `commit_ref` injection into `fixed` dispositions → re-review. BREAKER →
    park. PASS → driver hard gate (verdict PASS, no un-approved bypass,
-   `blocking_findings_open: 0`), archive `.cct/review/` into the ledger.
+   `blocking_findings_open: 0`), archive `.cct/review/` into the ledger, and
+   write the phase's review record to
+   `specs/<id>/collaboration/build-review-phase-<n>.md`.
 6. **Phase gate**: origin re-check (exit >= 2 or stale → park), commit the
    collaboration artifact + `automation-summary.md` update.
 7. **Milestone** (every `milestone_every` phases or `<!-- milestone -->`
@@ -186,6 +190,10 @@ re-derives resolution from human-produced artifacts, per reason:
 | `test_failure` / `build_session_error` / `git_anomaly` | fix manually, commit | clean worktree AND `test.command` green |
 | `provider_unavailable` | fix providers.toml or the provider service | targeted health (`--provider` chain) passes |
 | `cap_exceeded` | raise `caps.*` / `phases.max_phases` in `automation.json` | refreshed caps no longer exceeded (wall-clock guard restarts on resume) |
+| `hill_chart_error` | repair `hill.json` (restore it from git or re-add the scope), commit | the phase re-enters at the hill gate |
+| `pr_config` | set `pr.closes` in `automation.json` (commit it) or add an `issue:` to `plan.md` | a close target is derivable |
+| `pr_precheck` / `pr_error` | fix what the log names (a stray close keyword, a closed or merged PR, linked issues that differ from the targets) | the PR step re-runs at finalize and re-gates |
+| `merge_blocked` | enable branch protection on the base, or change `merge.*` | the snapshot's merge block is refreshed and auto-merge re-armed |
 
 Unresolved: `--resume` prints exactly what is still needed and exits 1 with
 no side effects. On resolution the escalation is marked `resolved`, journaled,

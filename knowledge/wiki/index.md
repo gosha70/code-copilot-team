@@ -104,8 +104,9 @@ about to add or change a page, read
   hours not days.
 - [Pre-PR Close-Keyword Audit](playbooks/pre-pr-close-keyword-audit.md) —
   prevent the failure mode where a stray `Closes #N` in a commit
-  message body auto-closes an unintended issue on PR merge; one
-  rule + one command + the `scripts/pre-pr-check.sh` enforcer.
+  message body auto-closes an unintended issue on PR merge, and require
+  each intended issue's keyword in the PR body (the title links nothing);
+  one rule + one command + the `scripts/pre-pr-check.sh` enforcer.
 
 ## Glossary
 

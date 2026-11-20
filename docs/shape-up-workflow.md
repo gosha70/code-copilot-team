@@ -104,6 +104,8 @@ shaping → shaped → bet → building → shipped
      scope-executor          — reads pitch context, transitions uphill→downhill,
                                delegates implementation to the build agent
      /hill <scope> done      — human verification gate, marks scope complete
+                               (an auto-build run moves the scopes itself as
+                               phases land; see docs/auto-build.md, Hill Chart)
        │
        ▼ (after all scopes done OR appetite exhausted)
    /cooldown                — invokes cooldown-report,
@@ -183,7 +185,7 @@ Validation rules (see `scripts/validate-pitch.sh`):
 
 | Command | Effect |
 |---|---|
-| `/shape <topic>` | Invokes `pitch-shaper`. New pitch ID, frontmatter populated, `bet_status: shaped`. |
+| `/shape <topic>` | Invokes `pitch-shaper`, then asks the pitch's listed open decisions in the main session. New pitch ID, frontmatter populated, `bet_status: shaped`. |
 | `/bet <pitch-id>` | Transitions `shaped → bet`. Sets `cycle: NN` (next free). Validates. |
 | `/cycle-start <pitch-id>` | Creates `hill.json` (all scopes `uphill`). Transitions `bet → building`. Validates. |
 | `/hill <scope> <up\|down\|done> [--force]` | Updates a scope's status. Transition guard: `done → uphill` requires `--force`. |

@@ -139,7 +139,8 @@ reviewer that answers, and `gh` authenticated for the pull request.
 `/auto-build` writes `"profile": "advisory"`, and **advisory publishes
 nothing** — it builds and reports. Choose what the run is allowed to do:
 `pr` pushes the branch and opens a PR, `merge` additionally arms gated
-auto-merge, and `unattended` is the profile that runs without you, which must
+auto-merge (only with `merge.enabled: true`, and the merge still waits for the
+`reviewed` label), and `unattended` is the profile that runs without you, which must
 be declared in `automation.json` and pass admission first:
 
 ```bash
@@ -177,8 +178,10 @@ Each phase has a dedicated agent (`~/.claude/agents/`) that loads the relevant r
 ```bash
 claude-code init ml-rag ~/projects/my-rag-app   # start from a template
 claude-code ~/projects/existing-api             # or just point at an existing project
+cct start --llm <target> ~/projects/existing-api   # this one session on another LLM (docs/llm-catalog.md)
 
 git pull && ./scripts/setup.sh --sync --claude-code   # after pulling repo updates
+cct home migrate --dry-run && cct home migrate        # once, if you installed before 2.1 (docs/cct-home.md)
 claude-code sync ~/projects/my-rag-app --dry-run      # preview what would change
 claude-code sync ~/projects/my-rag-app                # apply
 ```
@@ -221,7 +224,7 @@ per feature is [docs/features.md](docs/features.md), or ask the CLI:
 - **[Studio web UI](docs/session-analytics-cookbook.md)** _(beta)_ — The analytics, benchmarks, auto-build runs, team alerts and the project's own documentation are browsed in one local web app with a settings page for the judge and embedding providers.
 - **[LLM routing profiles](docs/llm-routing.md)** _(experimental)_ — Auto-build tasks are routed to a backend by route class and role under an execution profile, with validate, status and explain commands and a scheduled tick.
 - **[MemKernel persistent memory](shared/skills/memkernel-memory/SKILL.md)** _(experimental)_ — Session context is recalled at start, checkpointed before compaction and recovered after it by hooks that activate only when MemKernel is installed.
-- **[cct command-line front door](docs/features.md)** _(experimental)_ — One provider-neutral command lists every slash command, skill and capability, drives routing, reports environment health with doctor, and explains or validates configuration with config.
+- **[cct command-line front door](docs/features.md)** _(experimental)_ — One provider-neutral command starts a session with start, lists every slash command, skill and capability, drives routing, reports environment health with doctor, explains or validates configuration with config, shows or migrates the harness home with home, and lists or checks the LLM targets with llm.
 - **[LLM catalog and per-launch --llm](docs/llm-catalog.md)** _(experimental)_ — Named LLM targets are configured once and one is picked when a session starts, so a provider, credential or model is never exported in a shell and cannot leak into another session.
 <!-- generated:end feature-summary -->
 

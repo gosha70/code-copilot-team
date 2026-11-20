@@ -24,7 +24,15 @@ cd code-copilot-team
 
 # Re-sync after pulling repo updates
 git pull && ./scripts/setup.sh --sync --claude-code
+
+# Once, if you installed before 2.1: move your files into the one harness home
+cct home migrate --dry-run && cct home migrate
 ```
+
+User files (provider profile, routing, the LLM catalog, Session Analytics,
+Pi) live in one harness home, `${CCT_HOME:-~/.cct}`;
+[cct-home.md](cct-home.md) lists what is there and how `cct home migrate`
+moves an older install.
 
 ## Reading the docs on the web
 
@@ -44,6 +52,15 @@ in the Studio's Guides tab — all three serve the same files.
 | **GitHub Copilot** | `copilot-instructions.md` + per-rule instructions | `project/.github/` |
 | **Windsurf** | `rules.md` | `project/.windsurf/rules/` |
 | **Aider** | `CONVENTIONS.md` | `project/` |
+
+The Claude Code setup also installs the `claude-code` launcher and the `cct`
+shim into `~/.local/bin/`, and seeds `harness.json` and `providers.toml` in
+the harness home, `${CCT_HOME:-~/.cct}/`. The enforced Pi runtime lives in
+`${CCT_HOME:-~/.cct}/pi/`, with `pi-code` in `~/.local/bin/`.
+
+The `cct` shim runs the `scripts/cct` of the checkout you installed from. If
+you move that checkout, re-run setup or set `CCT_REPO_DIR`; `cct doctor`
+reports a shim whose checkout is gone.
 
 Which of them can *enforce* the contract rather than merely read it is in the
 README's [Choose your tool](../README.md#choose-your-tool) table, generated

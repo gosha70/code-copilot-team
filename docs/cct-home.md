@@ -10,9 +10,11 @@ ${CCT_HOME:-~/.cct}
 |---|---|---|
 | `providers.toml` | `setup.sh` (seed), you | peer review, auto-build, routing, doctor, Studio |
 | `routing.toml`, `routing-state.json`, `routing-probe-ledger.json` | you, the supervisor | `cct routing`, the supervisor |
+| `llms.toml` | you | `cct start --llm`, `cct llm` ([llm-catalog.md](llm-catalog.md)) |
 | `harness.json`, `harness-stamps.jsonl` | `setup.sh`, the harness-stamp hook | Session Analytics |
-| `session-analytics.json`, `session-analytics.db`, `kuzu/` | you, `cct sa setup` | Session Analytics |
-| `pi/`, `config.toml` | `setup.sh --pi` | `pi-code`, the Pi runtime |
+| `session-analytics.json`, `session-analytics.db`, `session-analytics-graph` | you, `./scripts/session-analytics setup` and `ingest` | Session Analytics |
+| `pi/` | `setup.sh --pi` | `pi-code`, the Pi runtime |
+| `config.toml` | you | `pi-code`, the Pi runtime (the global layer) |
 
 `cct home` prints the home in use and what, if anything, is still read from
 the legacy location:
@@ -102,7 +104,8 @@ after the copy. It goes back under its original name (or, if a writer
 recreated that name, stays under its private name, whose path is printed),
 and `migrate` exits 1 so you compare the two and remove the legacy one by
 hand. An interrupted run puts an unpublished entry back; one it could not
-put back is reported by `cct home` and `cct home migrate`.
+put back is reported by `cct home`, `cct home migrate` and `cct doctor`
+(also when `CCT_HOME` is set).
 It never deletes the legacy directory; once it is empty, remove it yourself.
 
 **Do not paste `migrate`'s output back into a terminal.** Versions before

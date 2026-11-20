@@ -1,6 +1,6 @@
 # Unattended auto-build
 
-The driver that builds an approved feature phase by phase outside a session, and the four gates that decide whether a phase lands: the caps that stop a run, the coverage contract, the runtime conformance evaluator, and the visual verification gate. The skill that drives it is [`auto-build-loop`](../shared/skills/auto-build-loop/SKILL.md); its cost and review settings are in the [configuration reference](configuration-reference.md).
+The driver that builds an approved feature phase by phase outside a session, the gates that decide whether a phase lands (the caps that stop a run, the coverage contract, the runtime conformance evaluator, the visual verification gate) and the landing test gate before the run publishes, and how the driver opens its PR. The skill that drives it is [`auto-build-loop`](../shared/skills/auto-build-loop/SKILL.md); its cost and review settings are in the [configuration reference](configuration-reference.md).
 
 ## Cost & Safety Caps
 
@@ -329,6 +329,44 @@ exits before the first phase. The conformance example above carries it too.
   worktree and swap-and-restore races by an active same-user process
   are out of scope. The gate bounds an unattended pipeline against a
   drifting or sloppy harness, not against a hostile local user.
+
+## Landing Test Gate
+
+After the last phase, and before the driver pushes or opens a PR, it runs the
+project's `test.command` once more on the final head (#403). A non-zero exit
+parks the run as `test_failure` with the head recorded as `parked_head`, so a
+recovery commit made during the park is reviewed before `--resume` lands it.
+A run with no `test.command` skips the gate. The log is
+`.cct/auto-build/<feature-id>/landing-test.log`.
+
+## Opening the PR (`pr` and `merge` profiles)
+
+At finalize the driver composes the PR body, audits it, and opens or adopts
+the PR:
+
+- **Close targets** are `pr.closes` in `automation.json`, else the `issue:` in
+  the plan's frontmatter; neither parks `pr_config`. The body carries one
+  `Closes #N` line per target, because GitHub links closing keywords from the
+  body and commit messages, never from the title; the title gets a
+  `(Closes #N)` marker for the first target.
+- **Audit.** `scripts/pre-pr-check.sh` checks the commits, body and title
+  before the PR is created or edited; a failure parks `pr_precheck`.
+- **One open PR.** The driver adopts an existing PR only while it is open:
+  the ledger's PR if it is still open, else an open PR for the branch. A
+  ledger PR closed by hand is journaled `pr_stale` and a new PR opened; a
+  merged one parks `pr_error` (#427).
+- **What GitHub linked.** After creating or editing the PR it reads
+  `gh pr view <n> --json closingIssuesReferences` up to three times,
+  `CCT_PR_CLOSES_RETRY_SEC` apart (default 2), and parks `pr_error` unless the
+  linked issues equal the close targets (#471). A PR into a base other than
+  the repository's default branch only warns (`pr_closes_not_linked`):
+  GitHub links closing keywords on the default branch alone.
+- **Bypassed phases** are listed as bypassed in the body, each with its
+  `collaboration/build-review-phase-<n>.md` record, never counted as
+  reviewed to PASS (#404).
+
+The driver never merges; under `merge` it arms GitHub's auto-merge, which
+still waits for the review gate (see the `auto-build-loop` skill).
 
 ## Hill Chart (Shape-Up pitches)
 

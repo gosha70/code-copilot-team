@@ -19,7 +19,7 @@ shared/skills/*/SKILL.md  →  scripts/generate.sh  →  adapters/<tool>/
 
 **New tool adapters** — Want to add support for another AI coding tool? Add a generation target in `scripts/generate.sh` and create `adapters/<tool>/setup.sh`.
 
-**Claude Code improvements** — Agents, hooks, and commands live in `adapters/claude-code/.claude/`. Changes here don't require regeneration.
+**Claude Code improvements** — Agents, hooks, and commands live in `adapters/claude-code/.claude/`. `scripts/generate.sh` builds the Claude Code plugin's and Pi's copies of the agents and commands from there, so run it after editing them and commit the generated outputs.
 
 **Bug fixes** — Especially for cross-platform issues (macOS vs Linux, bash version differences).
 
@@ -29,7 +29,7 @@ shared/skills/*/SKILL.md  →  scripts/generate.sh  →  adapters/<tool>/
 2. Create a feature branch (`git checkout -b feature/go-microservice-template`)
 3. Make your changes:
    - **Shared skills:** edit `shared/skills/<name>/SKILL.md`, then run `./scripts/generate.sh` and commit the updated `adapters/` outputs
-   - **Claude-specific:** edit `adapters/claude-code/` directly
+   - **Claude-specific:** edit `adapters/claude-code/` directly; after changing an agent or command, run `./scripts/generate.sh` and commit the regenerated plugin and Pi copies
    - **Templates:** add to `shared/templates/`
 4. Run the test suites:
    ```bash
@@ -40,7 +40,7 @@ shared/skills/*/SKILL.md  →  scripts/generate.sh  →  adapters/<tool>/
    bash tests/test-shared-structure.sh # structure + content tests
    ```
 5. Commit with a clear message (`git commit -m "Add Go microservice template with gRPC agent team"`)
-6. Open a pull request
+6. Open a pull request. Put `Closes #N` in the PR **body** for each issue it completes (the title links nothing), and run `scripts/pre-pr-check.sh --closes <N>|none --title "<title>" --body-file <path>` first; see [the close-keyword playbook](knowledge/wiki/playbooks/pre-pr-close-keyword-audit.md). The PR merges after the maintainer adds the `reviewed` label to its current head.
 
 ## Spec-First for Features
 
@@ -101,7 +101,7 @@ commit** is on record. The mechanics (`.github/workflows/review-gate.yml`):
 To prevent instruction drift and outdated quality claims:
 
 1. Follow [shared/docs/alignment-maintenance.md](shared/docs/alignment-maintenance.md) for release and monthly health checks.
-2. Keep the suite counts in `docs/repo-structure.md` in sync with `tests/test-counts.env`; `tests/test-shared-structure.sh` fails when the two disagree, so change both in the same commit.
+2. Keep the suite counts in `docs/repo-structure.md` in sync with `tests/test-counts.env`, and change both in the same commit. `tests/test-shared-structure.sh` fails when they disagree for the core suites it pins (hooks, generate, shared-structure, sync, peer-review, review-loop, auto-build-loop, ui-harness, setup-reviewer); the other lines are kept in sync by hand.
 3. Treat `tests/test-counts.env` as the source of truth for expected top-level suite totals when assertions change.
 4. Keep `.github/workflows/sync-check.yml` aligned with full gate coverage (all suites + setup before structure test).
 5. If structure tests fail on installed template parity, refresh local install and rerun:
