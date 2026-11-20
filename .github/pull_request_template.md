@@ -16,6 +16,7 @@ Briefly describe what this pull request changes and why.
 
 ## Checklist
 
+- [ ] `Closes #N` in this body for each issue the PR completes (the title links nothing), and `scripts/pre-pr-check.sh` passed
 - [ ] Linked issue, and for a feature, the approved `specs/<feature-id>/plan.md` (see CONTRIBUTING.md, "Spec-First for Features")
 - [ ] Scope is focused and does not mix unrelated changes
 - [ ] Documentation updated where needed

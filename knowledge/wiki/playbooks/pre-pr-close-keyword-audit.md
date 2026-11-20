@@ -3,12 +3,14 @@ page_type: playbook
 slug: pre-pr-close-keyword-audit
 title: Pre-PR Close-Keyword Audit
 status: stable
-last_reviewed: 2026-05-21
+last_reviewed: 2026-11-19
 sources:
   - pr: 53
   - pr: 54
   - pr: 55
   - pr: 57
+  - pr: 428
+  - pr: 472
   - path: scripts/pre-pr-check.sh
 ---
 
@@ -42,11 +44,14 @@ Examples that FIRE on GitHub's parser (do NOT use these in commit messages or PR
 
 ## The enforced version
 
-Use `scripts/pre-pr-check.sh` before opening any PR. It bundles the three recurring PR-mechanics failures into one gate:
+Use `scripts/pre-pr-check.sh` before opening any PR. It bundles four recurring PR-mechanics failures into one gate:
 
 1. **Commit-message close-keyword audit (strict mode, full nine-keyword set, case-insensitive)** — every token matching `(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[whitespace]+#<digits>` in the raw commit message text must have its ID in `--closes`. NO code-span stripping; backticked and fenced occurrences are scanned identically to plain text, because GitHub's parser does the same. The scanner iterates over EVERY match on a line (not just the first) and extracts the ID from each match. Case-insensitive at the grep level — `CLOSES`, `Closed`, `ReSoLvEs` all match.
 2. **PR body file readable in the same shell that runs `gh`** — guards the PR #41 failure where `--body-file` pointed at a path `gh` couldn't read; the script verifies existence + readability + non-emptiness (non-whitespace content) immediately before printing the suggested `gh pr create` command. Body lines scanned by the same strict per-match scanner as commit messages.
 3. **Title set inline in `gh pr create` AND carries the repo's `(Closes #N)` convention** — the script requires `--title` (so the PR never opens with the auto-generated branch-name title, the PR #41 / PR #55 failure mode) AND requires the title to contain a close-keyword marker whose ID is in `--closes`. Both are hard failures, not warnings. The script then prints the exact `gh pr create --title "..." --body-file ...` command for the caller to run next; never a follow-up edit.
+4. **Every `--closes` issue has a close keyword in the PR body** (#471, PR #472) — GitHub links closing keywords from the body and commit messages, never from the title, so a title marker alone closes nothing. A keyword only in a commit message does not count either: a repository that squash-merges with "PR title and description" drops the commit messages. A missing body keyword is a hard failure; when a commit message carries it, the failure adds a `[WARN]` line saying so.
+
+`--closes none` declares a PR that closes nothing (docs, chores, one slice of a larger issue): every close keyword in the commits, the body or the title then fails, and the title must carry no `(Closes #N)` marker. After opening, `gh pr view <n> --json closingIssuesReferences` must list exactly the intended issues.
 
 ```bash
 # Sub-issue B (closes #49 only)

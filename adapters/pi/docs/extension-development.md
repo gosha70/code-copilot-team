@@ -19,7 +19,7 @@ adapters/pi/
 │   ├── index.ts           extension entry: session_start / tool_call gates, command registration
 │   ├── cli.ts             pi-code diagnostic commands (doctor/config/features/…)
 │   ├── capabilities.ts    the runtime capability seed (drift-guarded vs pi.yaml)
-│   ├── config/            loader, profiles, floor, lint, trust, toml, migrate
+│   ├── config/            loader, profiles, floor, lint, trust, toml, migrate, home, project
 │   ├── policy/            permissions, protected(-ops), sandbox, mcp, audit
 │   ├── workflow/          sdd, phases, classify, review, verify, checkpoint, memory
 │   └── agents/            manifest, import-claude-agents, child-session, caps, worktree, team(-status), worker-analytics

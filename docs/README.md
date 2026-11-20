@@ -43,7 +43,7 @@ editing its source, never the page.
 
 - [Spec-Driven Development (SDD)](spec-driven-development.md) — The specification, plan and task artifacts a feature needs before code is written, the gates that enforce them, and what each adapter can do about it
 - [Peer Review (Multi-Copilot)](peer-review.md) — How a second model reviews your work: the round, the verdict contract, the findings file, the fallback chain, and every switch that turns it on
-- [Unattended auto-build](auto-build.md) — The driver that builds an approved feature phase by phase outside a session, and the four gates that decide whether a phase lands: the caps that stop a run, the coverage contract, the runtime conformance evaluator, and the visual verification gate
+- [Unattended auto-build](auto-build.md) — The driver that builds an approved feature phase by phase outside a session, the gates that decide whether a phase lands (the caps that stop a run, the coverage contract, the runtime conformance evaluator, the visual verification gate) and the landing test gate before the run publishes, and how the driver opens its PR
 - [LLM Routing](llm-routing.md) — Routing an auto-build task to a backend by route class and role, under an execution profile
 - [The LLM catalog and `--llm`](llm-catalog.md) — Pick the LLM for one session when you start it, from a catalog of named targets in `${CCT_HOME:-~/.cct}/llms.toml`, so no provider, credential or model variable is ever exported in a shell
 - [Project Templates](project-templates.md) — The eleven stack templates, what each one's agent team looks like, and the CI workflow each ships

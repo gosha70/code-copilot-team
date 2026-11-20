@@ -15,9 +15,12 @@ Code Copilot Team supports **dual-copilot peer review** — a second AI provider
    - Provider profile seed to `~/.cct/providers.toml`
 
    > **Upgrading?** `./scripts/setup.sh --sync --claude-code` refreshes
-   > templates and the launcher but does **not** reinstall `~/.local/bin`.
-   > If you installed before `lib/review-verdict.sh` shipped, the runner
-   > there will still refuse to start.
+   > templates, the launcher and the `cct` shim, but does **not** reinstall
+   > `peer-review-runner.sh`, `providers-health.sh` or `lib/` in
+   > `~/.local/bin`. If you installed before `lib/review-verdict.sh` shipped,
+   > the runner there will still refuse to start; run the full install again.
+   > If you installed before 2.1, also run `cct home migrate --dry-run`, then
+   > `cct home migrate` ([docs/cct-home.md](cct-home.md)).
    >
    > A full `./scripts/setup.sh --claude-code` run installs the pair, and is
    > safe to re-run over an existing install: your provider profile,
@@ -174,6 +177,7 @@ Every provider currently requires a `command` template with `{review_request}` a
 - **Circuit breakers** — max rounds (default 5), wall-clock timeout (15 min), stale findings, provider unavailability. All escalate to human via `/review-decide`.
 - **Read-only sandbox** — reviewer runs in a snapshot copy; real working tree is never modified by the reviewer.
 - **Escape hatch** — set `CCT_PEER_BYPASS=true` to skip validation. CI rejects bypass artifacts.
+- **Test claims are run** — a blocking finding that says a test fails is checked by running that test first; if it passes, the finding is marked `test_claim.disputed` and does not block, and a FAIL resting only on disputed claims becomes PASS (`verdict_override: disputed_test_claims`). `CCT_REVIEW_CHECK_TEST_CLAIMS=false` turns this off; `CCT_REVIEW_CLAIM_TIMEOUT_SEC` (default 120) bounds each run. See the [`review-loop`](../shared/skills/review-loop/SKILL.md) skill (#406).
 - **Identity tracking** — collaboration artifacts include `peer_profile` (provider name) and `runner_fingerprint` (SHA-256 of provider config) for auditability.
 
 ### Collaboration Modes
