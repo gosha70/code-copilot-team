@@ -231,7 +231,9 @@ def analytics_section(repo: Path) -> str:
 Layered: `config_data/defaults.json`, then `~/.cct/session-analytics.json`,
 then the repo-root `.env`, then real environment variables, then CLI
 arguments. The Studio's Settings page writes the same keys. An API key is
-stored by name in the environment, never in the config file.
+stored by name in the environment, never in the config file. The config
+file's directory is the harness home: with `CCT_HOME` set, the file is read
+from that directory instead (see [cct-home.md](cct-home.md)).
 
 {table(rows, ("Key", "Default", "Environment variable"))}
 {note}{extra}""")

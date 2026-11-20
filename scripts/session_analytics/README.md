@@ -46,6 +46,7 @@ The zero-install path still works without `setup` — just pass `--db`:
 | Command   | Purpose |
 |-----------|---------|
 | `setup`   | Guided first-run configuration → writes `.env`. |
+| `start`   | One command: install dependencies, configure, ingest and open the Studio. |
 | `list`    | List registered copilot adapters + judges. |
 | `ingest`  | Parse sessions into the relational store (idempotent, incremental). |
 | `doctor`  | Report store counts + source reachability (wizard status bar). |
@@ -65,13 +66,24 @@ The zero-install path still works without `setup` — just pass `--db`:
 | `team`    | The team store's status and alerts (#174). |
 | `runs`    | Auto-build runs from their ledgers, and the human verdict on each run's PR (#190 §12). |
 | `gaps`    | Inter-turn gaps by the kind of turn that ends them, and active hours at several idle cutoffs, read-only (#422). |
+| `labels`  | Judge validation: sample turns for human labels, import them, report agreement (#313). |
+| `threads` | Rebuild session lineage from native identifiers (#371 A6). |
+| `expectations` | Store what auto-build runs were required to achieve, and how it came out (#371 A5). |
+| `calibrate` | Run the routing held-out evaluation and persist its report (#266). |
 
 The Studio renders both read-only (E2 slice 4, #293) — see *Studio:
 clusters view + similar panel* below.
 
 `ingest` flags: `--copilot` (repeatable; default all), `--root`, `--db`,
-`--developer-id`, `--redact {none,code,metadata-only}`, `--incremental`
-(default) / `--full`.
+`--developer-id`, `--redact {none,code,metadata-only}`, `--since <date>`
+(only sessions modified on or after it), `--limit <n>` (the newest n),
+`--session-id <id>` (repeatable), `--list` (print what would be loaded and
+exit), `--incremental` (default) / `--full`.
+
+Exit codes: `0` ok, `2` usage or an unknown command, `3` a runtime failure,
+`8` not implemented. `doctor` exits `0` even when no store is configured or
+the store cannot be opened; its JSON then carries the reason, as
+`"store": {"error": "cannot open the store: …"}`.
 
 ## Judge (LLM-as-Judge)
 
@@ -102,8 +114,11 @@ OpenAI-compatible endpoint keeps the pipeline fully local.
 ## Configuration
 
 Defaults live in `config_data/defaults.json` (JSON, stdlib — the unit suite
-needs no third-party deps). Override per-user via `~/.cct/session-analytics.json`,
-per-env via `CCT_SA_*` env vars, or per-invocation via CLI flags. The
+needs no third-party deps). Override per-user via `session-analytics.json` in
+the harness home, `${CCT_HOME:-~/.cct}` ([what lives there](../../docs/cct-home.md)),
+per-env via `CCT_SA_*` env vars, or per-invocation via CLI flags. This page
+writes `~/.cct/…` for that home; with `CCT_HOME` set, read it as that
+directory. The
 tool-name and file-language normalization maps are data files in `config_data/`,
 not hardcoded in source.
 
@@ -167,10 +182,13 @@ project from ingestion, add a `projects` block to `config_data/defaults.json`
 - **No `projects` block configured** (the default): every session ingests
   with the global `redaction_mode`, exactly as before this feature existed —
   fully additive, no migration required.
-- The Studio **Settings** page shows the effective per-project redaction
-  (read-only), derived from already-ingested sessions' `redaction_mode`
-  grouped by project — it does not edit per-project config; that lives in
-  the layered config file above.
+- The Studio **Settings** page's "Effective per-project redaction" card
+  shows the mode each project's stored sessions were **recorded** under
+  (read-only, from `copilot_session.redaction_mode` grouped by project). It
+  is not the current configuration: what leaves the machine uses the
+  stricter of the recorded mode and the project's current one, as above.
+  The card does not edit per-project config; that lives in the layered
+  config file above.
 - **Request admission (#103).** The API validates the `Host` header against
   an allowlist (`127.0.0.1`, `localhost`) on every route, rejecting anything
   else with `400`. This is what stops **DNS rebinding** — a hostile page that
@@ -358,8 +376,12 @@ all` always requires `--out <dir>`.
 
 **Redaction-safe by construction (FR-6)**: export reads ONLY the relational
 store — it never re-reads raw transcripts, so it can only ever surface what
-`ingest` already wrote. A project opted out under E8 (`ingest: "off"`) simply
-has no rows in the store and is absent from every export. `redaction_mode` is
+`ingest` already wrote. A project opted out under E8 (`ingest: "off"`) before
+its sessions were ingested has no rows in the store and is absent from every
+export. One opted out later keeps the rows it already has, and `export`
+writes them: it reads the store as it is and does not apply the current-mode
+floor that the off-machine paths do. To drop those rows, use a new, empty
+store. `redaction_mode` is
 an exported column on both `sessions` and `turns`, so an export
 self-documents its own privacy posture per row (a `redaction: none` session
 exports its raw preview — the operator's own ingest-time choice).
@@ -503,8 +525,9 @@ population to compare over (the compare itself is A4b):
 The first four are captured **when the session starts**, not at ingest,
 by the `SessionStart` hook `harness-stamp.sh` (installed by `setup.sh`
 beside the other hooks), which appends one JSON line per session start
-to `~/.cct/harness-stamps.jsonl` (`CCT_HARNESS_STAMPS` moves it for the
-hook and the reader alike). The variable is read from the process
+to `harness-stamps.jsonl` in the harness home, `~/.cct/` unless `CCT_HOME`
+is set (`CCT_HARNESS_STAMPS` moves the file for the hook and the reader
+alike). The variable is read from the process
 environment only, never from `.env` (the hook cannot see that file), and
 must be an absolute path the hook and the reader open as the same file:
 `/home/you/ledger.jsonl`, or on Windows `C:/Users/you/ledger.jsonl`
@@ -1508,6 +1531,18 @@ numbered list, since the order is partial.
 
 Schema 12 is additive: four new tables and an index on
 `copilot_turn (uuid)`. No rebuild and no re-ingest.
+
+## Active time and idle gaps (#422)
+
+A session's duration is wall clock. Its active time sums the gaps between
+consecutive turns, each capped at an idle cutoff
+(`sessions.idle_cutoff_seconds`, default 900), and is stored per session in
+`session_activity`. `gaps` shows where a cutoff falls on your own store; the
+[cookbook](../../docs/session-analytics-cookbook.md), §5.4, has the detail.
+
+Schema 13 is additive: one new table, `session_activity`. It is created in
+place and filled for every stored session the next time the store is
+opened. No rebuild and no re-ingest.
 
 ## Tests
 
