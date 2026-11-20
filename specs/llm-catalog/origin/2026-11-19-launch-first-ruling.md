@@ -107,3 +107,19 @@ A second ruling the same day, after those changes:
 > targets, with tests.
 
 It adds departure 14 and extends departure 7.
+
+A third, after PR #480 merged that day. The reviewer of #480 had
+written, and the owner had passed on, that `ANTHROPIC_IDENTITY_TOKEN`
+and `ANTHROPIC_IDENTITY_TOKEN_FILE` "are Anthropic credentials too"
+and "by the same rule they belong on the endpoint clear list", as "a
+one-line follow-up rather than another round on this PR". The owner
+then ruled:
+
+> Identity tokens: go. A small separate PR that clears
+> ANTHROPIC_IDENTITY_TOKEN and ANTHROPIC_IDENTITY_TOKEN_FILE for
+> endpoint targets, with tests.
+
+It extends departure 7 again. The same reviewer advised leaving
+`CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR` and
+`CCR_AGENT_PROXY_TOKEN_FILE_DESCRIPTOR` alone; the owner asked for
+nothing about them.

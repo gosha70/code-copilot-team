@@ -227,9 +227,11 @@ DIRTY=(
     CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR="7"
     CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR="8"
     CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR="9"
+    ANTHROPIC_IDENTITY_TOKEN="ambient-identity-token"
+    ANTHROPIC_IDENTITY_TOKEN_FILE="/tmp/ambient-identity-token.jwt"
 )
 # The other forms of Claude Code's own credentials, and what DIRTY gives each.
-OWN_CREDENTIAL_FORMS="CLAUDE_CODE_OAUTH_REFRESH_TOKEN CLAUDE_CODE_GATEWAY_TOKEN CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR"
+OWN_CREDENTIAL_FORMS="CLAUDE_CODE_OAUTH_REFRESH_TOKEN CLAUDE_CODE_GATEWAY_TOKEN CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR ANTHROPIC_IDENTITY_TOKEN ANTHROPIC_IDENTITY_TOKEN_FILE"
 ambient_value() {
     case "$1" in
         CLAUDE_CODE_OAUTH_REFRESH_TOKEN) echo "ambient-refresh-token" ;;
@@ -237,6 +239,8 @@ ambient_value() {
         CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR) echo "7" ;;
         CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR) echo "8" ;;
         CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR) echo "9" ;;
+        ANTHROPIC_IDENTITY_TOKEN) echo "ambient-identity-token" ;;
+        ANTHROPIC_IDENTITY_TOKEN_FILE) echo "/tmp/ambient-identity-token.jwt" ;;
     esac
 }
 
@@ -424,6 +428,11 @@ printf '{"env": {"ANTHROPIC_UNIX_SOCKET": "/tmp/settings.sock"}}\n' > "$SETTINGS
 refused "settings: a unix-socket transport in an env block is refused" "$SETTINGS: ANTHROPIC_UNIX_SOCKET" -- --llm opus -p x
 printf '{"env": {"CLAUDE_CODE_GATEWAY_TOKEN": "settings-gateway-token"}}\n' > "$SETTINGS"
 refused "settings: a gateway token in an env block is refused for an endpoint target" "$SETTINGS: CLAUDE_CODE_GATEWAY_TOKEN" -- --llm deepseek -p x
+new_logs
+run_launcher -- --llm opus -p x
+assert_exit "settings: ...and is the harness's own business on a managed target" 0 "$RC"
+printf '{"env": {"ANTHROPIC_IDENTITY_TOKEN": "settings-identity-token"}}\n' > "$SETTINGS"
+refused "settings: an identity token in an env block is refused for an endpoint target" "$SETTINGS: ANTHROPIC_IDENTITY_TOKEN" -- --llm deepseek -p x
 new_logs
 run_launcher -- --llm opus -p x
 assert_exit "settings: ...and is the harness's own business on a managed target" 0 "$RC"

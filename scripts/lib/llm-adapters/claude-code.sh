@@ -44,11 +44,13 @@ LLM_CC_VAR_BEARER="ANTHROPIC_AUTH_TOKEN"
 LLM_CC_VAR_API_KEY="ANTHROPIC_API_KEY"
 LLM_CC_VAR_MODEL="ANTHROPIC_MODEL"
 # Claude Code's own credentials, in every form the installed binary
-# reads: the login token and its refresh token, the gateway token, and
-# the file-descriptor forms of the login token, the API key and the
-# gateway token. Removed for an api endpoint; a managed provider is that
-# login, so there they pass through.
-LLM_CC_VARS_OWN_CREDENTIALS="CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_OAUTH_REFRESH_TOKEN CLAUDE_CODE_GATEWAY_TOKEN CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR"
+# reads: the login token and its refresh token, the gateway token, the
+# file-descriptor forms of the login token, the API key and the gateway
+# token, and the workload-identity token by value and by file (posted
+# to the base URL's token endpoint when a federation rule is set).
+# Removed for an api endpoint; a managed provider is that login, so
+# there they pass through.
+LLM_CC_VARS_OWN_CREDENTIALS="CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_OAUTH_REFRESH_TOKEN CLAUDE_CODE_GATEWAY_TOKEN CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR ANTHROPIC_IDENTITY_TOKEN ANTHROPIC_IDENTITY_TOKEN_FILE"
 # Aliases that mean "the main model" and "the small, fast model".
 LLM_CC_VARS_MAIN_ALIASES="ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_FABLE_MODEL"
 LLM_CC_VARS_SMALL_ALIASES="ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_SMALL_FAST_MODEL"

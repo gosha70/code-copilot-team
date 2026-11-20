@@ -201,11 +201,16 @@ target, and the rest are put to the owner with the PR.
    `CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR` and
    `CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR`. The capture shows a key
    and a login token read from a file descriptor reaching a custom base
-   URL. Seen in the binary and left alone, nothing established or ruled
-   about them: `CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR`,
-   `CCR_AGENT_PROXY_TOKEN_FILE_DESCRIPTOR`, `ANTHROPIC_IDENTITY_TOKEN`
-   and `ANTHROPIC_IDENTITY_TOKEN_FILE`, and the AWS and Foundry keys,
-   which need a provider switch that is removed.
+   URL. Added by a third ruling that day, after #480 merged, again for
+   an api endpoint only: `ANTHROPIC_IDENTITY_TOKEN` and
+   `ANTHROPIC_IDENTITY_TOKEN_FILE`, the workload-identity token by
+   value and by file. The capture shows Claude Code posting it to the
+   base URL's `/v1/oauth/token` when a federation rule and an
+   organization id are set and no other credential is. Seen in the
+   binary and left alone, nothing established or ruled about them:
+   `CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR` and
+   `CCR_AGENT_PROXY_TOKEN_FILE_DESCRIPTOR`, and the AWS and Foundry
+   keys, which need a provider switch that is removed.
 8. **Two more binding keys (FR-20).** `auto_compact_window` and
    `reasoning_effort`, beside `small_fast_model` and
    `max_output_tokens`. Without them a target cannot reproduce the
