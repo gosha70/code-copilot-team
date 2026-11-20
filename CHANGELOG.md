@@ -168,15 +168,21 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Fixed
 
-- **Session Analytics: a `project_ids` rule wins over git-root detection.**
-  A session's project key came from its git repo root whenever the
-  directory was a checkout, and a `project_ids` rule was consulted only when
-  that failed. So a `projects` entry keyed by an id, as the documented
-  example does, was silently ignored for a checked-out repo: a
-  `metadata-only` override or an `ingest: "off"` opt-out did not apply at
-  ingest or on the outbound paths. A matching rule now decides the key; the
-  repo root keys only directories no rule matches. If you keyed `projects`
-  by a repo's absolute path without a rule, nothing changes (#477).
+- **Session Analytics: a project's settings apply under its `project_ids`
+  id and under its repo path.** A session's settings were looked up under
+  one key: its git repo root whenever the directory was a checkout, and a
+  `project_ids` rule only when that failed. So a `projects` entry keyed by
+  an id, as the documented example does, was silently ignored for a
+  checked-out repo: a `metadata-only` override or an `ingest: "off"`
+  opt-out did not apply at ingest or on the outbound paths. Both keys are
+  now read everywhere a project's setting is: at ingest, on every path
+  that sends stored text off the machine, for the steering-file excerpts
+  of a session analysis, in the trace archive and in the heartbeat sweep.
+  When a project has an entry under both, the stricter setting holds: it
+  is opted out if either entry says `ingest: "off"`, otherwise the
+  stricter of the two `redaction_mode`s applies, and it is archived only
+  if both set `trace_archive: true`. An entry keyed by a repo's absolute
+  path keeps working, inside a broad rule too (#477).
 - **Studio and quickstart ingest apply the configuration.** Studio's
   pipeline ingest step and the first-run ingest in `session_analytics start`
   ignored the configured redaction mode, per-project overrides and

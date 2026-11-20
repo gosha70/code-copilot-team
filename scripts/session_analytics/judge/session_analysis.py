@@ -350,8 +350,8 @@ def project_context(db: Database, session_id: int) -> ProjectContext:
     # project tightened after ingest must not leak under the stale mode.
     # An opted-out project's files are not read at all (#457 D2).
     cfg = load_config()
-    key = ProjectKeyResolver(cfg.project_id_rules).resolve(root)
-    current, ingest_off = current_mode(cfg, key)
+    override = ProjectKeyResolver(cfg.project_id_rules).override(cfg.projects, root)
+    current, ingest_off = current_mode(cfg, override)
     mode = outbound_mode(str(row[1]) if row[1] else None, current, ingest_off)
     if mode is None:
         return ProjectContext(False, None, (), ())

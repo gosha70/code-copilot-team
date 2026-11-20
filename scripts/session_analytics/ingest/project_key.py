@@ -1,30 +1,37 @@
-# session_analytics.ingest.project_key — resolve a session's project key.
+# session_analytics.ingest.project_key — the keys a project's settings are
+# filed under, and the settings a session gets from them.
 #
-# The "project key" is what per-project config (``projects.<key>`` in
-# config.py) is keyed on. It is resolved from a session's raw ``cwd``
-# (RawSession.project_path — never a repo root; see adapters/claude_code.py)
-# in two steps, tried in order:
+# Per-project config (``projects.<key>`` in config.py) can be keyed two
+# ways. A session's raw ``cwd`` (RawSession.project_path — never a repo
+# root; see adapters/claude_code.py) is resolved to both:
 #
-#   1. configured ``project_ids`` substring-match rules (config.ProjectIdRule).
-#      An explicit rule is configuration and wins (#477): before it, a rule
-#      was consulted only when step 2 failed, so a ``projects`` entry keyed
-#      by an id was silently ignored for any repo checked out on disk —
-#      ``ingest: "off"`` included.
-#   2. git toplevel detection — ``git -C <cwd> rev-parse --show-toplevel`` —
-#      for a cwd no rule matches; the key is then the repo's absolute path.
+#   1. the ``id`` of the first configured ``project_ids`` rule whose
+#      ``match`` is a substring of the cwd (config.ProjectIdRule);
+#   2. the git toplevel — ``git -C <cwd> rev-parse --show-toplevel`` — the
+#      repo's absolute path.
 #
-# Neither matching → ``None`` ("no override, the global redaction_mode
-# applies" — the regression-safe default, FR-6). The resolver never falls
-# back to returning the raw ``project_path`` itself unless step 2 genuinely
-# detected it as the git toplevel.
+# A session's settings are the entries under BOTH keys, combined so that
+# the stricter one holds (#477): opted out if either entry opts out, else
+# the stricter of their redaction modes. Consulting one key only is how
+# settings were lost: with the git root first, an entry keyed by an id was
+# silently ignored for any repo checked out on disk — ``ingest: "off"``
+# included — and with the rule first, an entry keyed by a repo's path
+# would be ignored inside any rule broad enough to cover it.
+#
+# No entry under either key → ``None`` ("no override, the global
+# redaction_mode applies" — the regression-safe default, FR-6). The raw
+# ``project_path`` itself is never a key unless step 2 genuinely detected
+# it as the git toplevel.
 
 from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import Callable, Optional, Sequence
+from typing import Callable, Mapping, Optional, Sequence
 
-from ..config import ProjectIdRule
+from .. import constants as C
+from ..config import ProjectIdRule, ProjectOverride
+from .redaction import stricter_mode
 
 
 def git_toplevel(path: str) -> Optional[str]:
@@ -64,10 +71,33 @@ def match_project_id(path: str, rules: Sequence[ProjectIdRule]) -> Optional[str]
     return None
 
 
+def combined_override(
+    projects: Mapping[str, ProjectOverride], keys: Sequence[str]
+) -> Optional[ProjectOverride]:
+    """The settings of a project whose ``projects`` entries are filed under
+    ``keys``, or ``None`` when there is no entry. With two entries the
+    stricter setting of each kind holds: opted out if either opts out, the
+    stricter of the redaction modes they state (``None`` — the global mode
+    — when neither states one), and archived only if both opt in."""
+    entries = [projects[key] for key in keys if key in projects]
+    if len(entries) < 2:
+        return entries[0] if entries else None
+    mode: Optional[str] = None
+    for entry in entries:
+        if entry.redaction_mode is not None:
+            mode = entry.redaction_mode if mode is None else stricter_mode(mode, entry.redaction_mode)
+    return ProjectOverride(
+        redaction_mode=mode,
+        ingest=C.INGEST_OFF if any(e.ingest == C.INGEST_OFF for e in entries) else C.INGEST_ON,
+        trace_archive=all(e.trace_archive for e in entries),
+    )
+
+
 class ProjectKeyResolver:
-    """Resolves + caches a session's project key for the lifetime of one
-    ingest run (one instance per ``ingest()`` call, so the cache never
-    leaks across runs)."""
+    """Resolves + caches a project path's keys for the lifetime of one run
+    (one instance per ``ingest()`` call, so the cache never leaks across
+    runs). Settings are read with ``override``; ``resolve`` only names a
+    project."""
 
     def __init__(
         self,
@@ -77,19 +107,26 @@ class ProjectKeyResolver:
     ) -> None:
         self._rules = tuple(project_id_rules)
         self._git_toplevel_fn = git_toplevel_fn
-        self._cache: dict[str, Optional[str]] = {}
+        self._cache: dict[str, tuple[str, ...]] = {}
+
+    def keys(self, project_path: Optional[str]) -> tuple[str, ...]:
+        """Every key ``project_path``'s settings may be filed under: the
+        matching rule's id, then the git root. Empty when neither resolves."""
+        if not project_path:
+            return ()
+        if project_path not in self._cache:
+            found = (match_project_id(project_path, self._rules), self._git_toplevel_fn(project_path))
+            self._cache[project_path] = tuple(dict.fromkeys(key for key in found if key))
+        return self._cache[project_path]
 
     def resolve(self, project_path: Optional[str]) -> Optional[str]:
-        if not project_path:
-            return None
-        if project_path in self._cache:
-            return self._cache[project_path]
+        """The one key a project is named by in a summary: the matching
+        rule's id, else the git root."""
+        keys = self.keys(project_path)
+        return keys[0] if keys else None
 
-        # An explicit rule wins over detection (#477); git runs only for a
-        # path no rule matches.
-        key = match_project_id(project_path, self._rules)
-        if not key:
-            key = self._git_toplevel_fn(project_path)
-
-        self._cache[project_path] = key
-        return key
+    def override(
+        self, projects: Mapping[str, ProjectOverride], project_path: Optional[str]
+    ) -> Optional[ProjectOverride]:
+        """The project's settings: its entries under every key, combined."""
+        return combined_override(projects, self.keys(project_path))

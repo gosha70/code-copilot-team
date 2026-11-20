@@ -474,7 +474,7 @@ class TestSessionAnalysis(RegistryResetTestCase):
         cfg = mock.Mock()
         cfg.redaction_mode = mode
         cfg.project_id_rules = rules
-        cfg.project_override.side_effect = lambda key: override if key else None
+        cfg.projects = {rule.id: override for rule in rules} if override is not None else {}
         return mock.patch.object(sa, "load_config", return_value=cfg)
 
     def test_project_excerpts_are_redacted_with_the_session_mode(self) -> None:

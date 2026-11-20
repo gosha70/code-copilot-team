@@ -371,8 +371,9 @@ class ProjectOverride:
 
 @dataclass(frozen=True)
 class ProjectIdRule:
-    """One ``project_ids[]`` entry: a substring-match rule used when a
-    session's cwd isn't a locally-detectable git repo."""
+    """One ``project_ids[]`` entry: a substring-match rule. A session whose
+    cwd contains ``match`` has its settings read under ``id``, as well as
+    under its git repo root (ingest/project_key.py)."""
 
     match: str
     id: str
@@ -425,9 +426,6 @@ class AnalyticsConfig:
         if not raw:
             return None
         return Path(raw).expanduser()
-
-    def project_override(self, key: Optional[str]) -> Optional[ProjectOverride]:
-        return self.projects.get(key) if key else None
 
 
 # ── pricing config (E5 cost tracking) ───────────────────────────────────

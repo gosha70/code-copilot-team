@@ -120,10 +120,12 @@ strict JSON — no comments — and this example can be copied as is:
 `trace_archive: true` keeps the full (redacted) text for Ask and the
 whole-session analyses; `ingest: "off"` never ingests that project, and
 nothing already stored from it is sent to a judge, Ask, embeddings or MCP.
-A project's key is the `id` of the first `project_ids` rule whose `match`
-is part of the session's directory. With no matching rule, it is the
-absolute path of the session's git repository root, so a `projects` entry
-for that repo must be keyed by its full path.
+A `projects` entry is found under either of two keys: the `id` of the
+first `project_ids` rule whose `match` is part of the session's directory,
+and the absolute path of the session's git repository root. When a project
+has an entry under both, the stricter setting holds: `ingest: "off"` in
+either one opts it out, otherwise the stricter `redaction_mode` applies,
+and it is archived only if both set `trace_archive: true`.
 
 ### 3.3 From the Studio instead
 

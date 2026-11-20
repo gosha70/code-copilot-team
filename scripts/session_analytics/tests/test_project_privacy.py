@@ -13,7 +13,7 @@ from session_analytics import constants as C
 from session_analytics.adapters import claude_code
 from session_analytics.config import ProjectIdRule, ProjectOverride
 from session_analytics.ingest.pipeline import ingest
-from session_analytics.ingest.project_key import ProjectKeyResolver, match_project_id
+from session_analytics.ingest.project_key import ProjectKeyResolver, combined_override, match_project_id
 from session_analytics.relational.db import Database, apply_ddl
 
 from session_analytics.tests.support import CLAUDE_CODE_ROOT, RegistryResetTestCase
@@ -92,21 +92,34 @@ class TestProjectKeyResolver(unittest.TestCase):
         self.assertEqual(second, "/repo/other")
         self.assertEqual(fake.calls, 1)  # NOT re-invoked on the cached lookup
 
-    def test_a_matching_rule_wins_over_the_git_root(self) -> None:
-        # #477: a real git checkout that a project_ids rule matches is keyed
-        # by the rule's id, so a projects entry keyed by that id applies.
+    def test_a_checkout_a_rule_matches_has_both_keys(self) -> None:
+        # #477: a real git checkout that a project_ids rule matches is filed
+        # under the rule's id AND under its repo root, so a projects entry
+        # keyed either way applies. A summary names it by the id.
         tmp = tempfile.mkdtemp(prefix="cct-sa-test-repo-")
         subprocess.run(["git", "init"], cwd=tmp, capture_output=True, check=True)
         resolver = ProjectKeyResolver((ProjectIdRule(match=tmp, id="client-a"),))
 
+        keys = resolver.keys(tmp)
+
+        self.assertEqual(len(keys), 2)
+        self.assertEqual(keys[0], "client-a")
+        self.assertEqual(Path(keys[1]).resolve(), Path(tmp).resolve())
         self.assertEqual(resolver.resolve(tmp), "client-a")
 
-    def test_a_rule_match_does_not_run_git(self) -> None:
+    def test_both_keys_are_resolved_once_per_path(self) -> None:
         fake = _CountingFake(return_value="/repo/demo")
         resolver = ProjectKeyResolver((ProjectIdRule(match="demo", id="demo-project"),), git_toplevel_fn=fake)
 
-        self.assertEqual(resolver.resolve("/repo/demo"), "demo-project")
-        self.assertEqual(fake.calls, 0)
+        self.assertEqual(resolver.keys("/repo/demo/sub"), ("demo-project", "/repo/demo"))
+        self.assertEqual(resolver.keys("/repo/demo/sub"), ("demo-project", "/repo/demo"))
+        self.assertEqual(fake.calls, 1)
+
+    def test_an_id_equal_to_the_repo_root_is_one_key(self) -> None:
+        fake = _CountingFake(return_value="/repo/demo")
+        resolver = ProjectKeyResolver((ProjectIdRule(match="demo", id="/repo/demo"),), git_toplevel_fn=fake)
+
+        self.assertEqual(resolver.keys("/repo/demo/sub"), ("/repo/demo",))
 
     def test_falsy_path_never_cached_or_resolved(self) -> None:
         fake = _CountingFake(return_value="/some/repo")
@@ -114,6 +127,7 @@ class TestProjectKeyResolver(unittest.TestCase):
 
         self.assertIsNone(resolver.resolve(None))
         self.assertIsNone(resolver.resolve(""))
+        self.assertEqual(resolver.keys(None), ())
         self.assertEqual(fake.calls, 0)
 
     def test_match_project_id_pure_function(self) -> None:
@@ -125,6 +139,56 @@ class TestProjectKeyResolver(unittest.TestCase):
         self.assertEqual(match_project_id("/repo/beta", rules), "beta-project")
         self.assertIsNone(match_project_id("/repo/gamma", rules))
         self.assertIsNone(match_project_id("", rules))
+
+
+# ── combined_override: one project, entries under two keys (#477) ───────
+
+
+class TestCombinedOverride(unittest.TestCase):
+    N, CODE, M = C.REDACT_NONE, C.REDACT_CODE, C.REDACT_METADATA_ONLY
+
+    def combined(self, by_id, by_path):
+        projects = {k: v for k, v in (("client-a", by_id), ("/repo/client-a", by_path)) if v is not None}
+        return combined_override(projects, ("client-a", "/repo/client-a"))
+
+    def test_no_entry_under_either_key_is_no_override(self) -> None:
+        self.assertIsNone(self.combined(None, None))
+        self.assertIsNone(combined_override({"client-a": ProjectOverride()}, ()))
+
+    def test_one_entry_is_that_entry(self) -> None:
+        entry = ProjectOverride(redaction_mode=self.M, trace_archive=True)
+        self.assertIs(self.combined(entry, None), entry)
+        self.assertIs(self.combined(None, entry), entry)
+
+    def test_an_opt_out_under_either_key_opts_out(self) -> None:
+        off, on = ProjectOverride(ingest=C.INGEST_OFF), ProjectOverride(redaction_mode=self.N)
+        self.assertEqual(self.combined(off, on).ingest, C.INGEST_OFF)
+        self.assertEqual(self.combined(on, off).ingest, C.INGEST_OFF)
+        self.assertEqual(self.combined(on, on).ingest, C.INGEST_ON)
+
+    def test_conflicting_modes_resolve_to_the_stricter_one(self) -> None:
+        for a, b, stricter in (
+            (self.N, self.M, self.M), (self.N, self.CODE, self.CODE), (self.CODE, self.M, self.M),
+            (self.CODE, self.CODE, self.CODE),
+        ):
+            with self.subTest(a=a, b=b):
+                first, second = ProjectOverride(redaction_mode=a), ProjectOverride(redaction_mode=b)
+                self.assertEqual(self.combined(first, second).redaction_mode, stricter)
+                self.assertEqual(self.combined(second, first).redaction_mode, stricter)
+
+    def test_a_mode_only_one_entry_states_is_the_mode(self) -> None:
+        stated, silent = ProjectOverride(redaction_mode=self.N), ProjectOverride(trace_archive=True)
+        self.assertEqual(self.combined(stated, silent).redaction_mode, self.N)
+        self.assertEqual(self.combined(silent, stated).redaction_mode, self.N)
+
+    def test_no_stated_mode_leaves_the_global_mode(self) -> None:
+        self.assertIsNone(self.combined(ProjectOverride(), ProjectOverride(trace_archive=True)).redaction_mode)
+
+    def test_the_archive_needs_both_entries_to_opt_in(self) -> None:
+        yes, no = ProjectOverride(trace_archive=True), ProjectOverride()
+        self.assertTrue(self.combined(yes, yes).trace_archive)
+        self.assertFalse(self.combined(yes, no).trace_archive)
+        self.assertFalse(self.combined(no, yes).trace_archive)
 
 
 # ── ingest() integration (per-project privacy) ──────────────────────────

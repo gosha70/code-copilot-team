@@ -272,6 +272,34 @@ class TestPrivacyAndRobustness(RegistryResetTestCase):
         finally:
             db.close()
 
+    def test_an_opt_out_keyed_by_a_project_id_stops_the_heartbeat_of_a_checkout(self) -> None:
+        # #477: the sweep reads the same combined settings as the session
+        # path, so an opt-out filed under a project_ids id holds for a
+        # project that is a git checkout.
+        import subprocess
+
+        from session_analytics.config import ProjectIdRule, ProjectOverride
+
+        base = Path(tempfile.mkdtemp(prefix="cct-hb-base-"))
+        proj = base / "client-repo"
+        _write_session(proj)
+        _write_heartbeat(proj, featureId="secret-client-feature")
+        subprocess.run(["git", "init", "-q", str(proj)], check=True)
+        dsn = self.sqlite_dsn()
+        stats = self._ingest(
+            base,
+            dsn,
+            projects={"client": ProjectOverride(ingest="off")},
+            project_id_rules=(ProjectIdRule(match="client-repo", id="client"),),
+        )
+        self.assertEqual(stats.sessions_opted_out, 1)
+        self.assertEqual(stats.heartbeats_ingested, 0)
+        db = Database.connect(dsn)
+        try:
+            self.assertIsNone(db.query_one("SELECT 1 FROM local_heartbeat"))
+        finally:
+            db.close()
+
     def test_db_error_on_one_root_never_poisons_the_session_ingest(self) -> None:
         # Review F2: a failing heartbeat upsert warns, rolls back, and the
         # session ingest proceeds untouched.
