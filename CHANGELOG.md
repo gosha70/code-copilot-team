@@ -12,6 +12,30 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Added
 
+- **Pick the LLM per session: `--llm`.** `cct start --llm <target>` (and
+  `claude-code --llm <target>`, interactive or `-p`) runs that one session
+  on a target from a catalog you configure once,
+  `${CCT_HOME:-~/.cct}/llms.toml`: Anthropic by Claude Code's own login,
+  DeepSeek, a local Ollama model, or anything behind a gateway. The
+  endpoint, credential and model are set in the process that becomes
+  `claude` and nowhere else, and competing variables (another credential,
+  Claude Code's own credentials on a third-party endpoint, custom headers,
+  provider and gateway switches, a subagent model, another model's
+  tuning) are removed from it, so nothing is exported in a shell and
+  nothing a shell exports redirects the session. A credential is named by
+  its environment variable, never written in the catalog, and a command
+  typed into cmux or tmux carries the target id only. A launch is refused
+  before Claude Code starts, with the reason, when the target is unknown,
+  its endpoint speaks another protocol, its credential is not set, or a
+  `settings.json` `env` block would override its endpoint, credential or
+  model (tuning in a settings file is noted, not refused). `cct llm list` shows the
+  targets and `cct llm validate` checks the file by line and name. Without
+  `--llm` a launch is unchanged. Remove `ANTHROPIC_BASE_URL`,
+  `ANTHROPIC_AUTH_TOKEN` and the model variables from your shell profile,
+  and refresh the installed launcher with
+  `./scripts/setup.sh --sync --claude-code`. This is the first slice of
+  the catalog in #400: Claude Code only, no compatibility probe and no
+  per-session record yet. See `docs/llm-catalog.md` (#479).
 - **Simplest complete change.** `copilot-conventions` now carries an
   ordered reuse ladder (no new code, existing project code, the standard
   library or platform, an already-used dependency, and only then the

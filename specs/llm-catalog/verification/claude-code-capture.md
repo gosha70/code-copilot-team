@@ -1,0 +1,337 @@
+# Capture — Claude Code and the launch-first slice (#479)
+
+Recorded 2026-11-19 on the owner's machine (macOS, bash 3.2.57) with
+the installed Claude Code, `claude --version` → `2.1.329 (Claude Code)`.
+This is the part of task B1 the launch needs. Not captured here, and
+still B1's to do when their slices open: `--session-id` on a new
+session, the `--output-format json` model field as evidence, and the
+minimum version for the #399 retry.
+
+## 1. What the real binary sends through `--llm`
+
+**Method.** A Python script started two local HTTP servers that answer
+`POST /v1/messages` with a minimal Anthropic Messages stream and log
+each request's path, `authorization` header, `x-api-key` header and
+`model`. It then ran the worktree's launcher, and once plain `claude`,
+headless (`-p "Reply with the single word OK." --output-format json
+--max-turns 1`) under `env -i` with a throwaway `HOME`, so no real
+configuration, login or transcript was involved and no request left
+the machine for a model. The catalog in that home named stub A as the
+endpoint of three targets: no credential, a bearer credential, an
+`x-api-key` credential. The credential variable held the planted value
+`capture-planted-credential`.
+
+**Output**, ports and the temporary home shortened:
+
+```
+=== 1. --llm open (no credential)
+exit: 0
+stderr: [claude-code] --llm open: open · capture-main · http://127.0.0.1:<A> (not probed: nothing has checked this model against Claude Code yet)
+claude's result: stub-ok | model it reports: ['capture-main']
+  request -> stub A (the selected endpoint): POST /v1/messages | authorization='Bearer none' x-api-key=None model='capture-main'
+
+=== 2. --llm bearer (credential as bearer), from a shell carrying another key and a provider switch
+exit: 0
+claude's result: stub-ok | model it reports: ['capture-main']
+  request -> stub A (the selected endpoint): POST /v1/messages | authorization='Bearer capture-planted-credential' x-api-key=None model='capture-main'
+
+=== 3. --llm apikey (credential as x-api-key)
+exit: 0
+claude's result: stub-ok | model it reports: ['capture-main']
+  request -> stub A (the selected endpoint): POST /v1/messages | authorization=None x-api-key='capture-planted-credential' model='capture-main'
+
+=== 4. plain claude: process env names stub A, ~/.claude/settings.json env names stub B
+exit: 0
+claude's result: stub-ok | model it reports: ['claude-opus-5-5']
+  request -> stub B (the endpoint a settings.json env block names): POST /v1/messages | authorization='Bearer capture-token' x-api-key=None model='claude-opus-5-5'
+
+=== 5. the launcher with that settings file present
+exit: 3
+stderr: [claude-code] --llm open refused: a Claude Code settings file sets a variable this launch must control.
+stderr:   Claude Code applies a settings env block over the environment it is started with, so the selection would be undone:
+stderr:     <home>/.claude/settings.json: ANTHROPIC_BASE_URL
+stderr:   Remove those keys from the env block, then retry.
+  (no request reached a stub)
+```
+
+Run 2's environment also carried `ANTHROPIC_API_KEY=ambient-key-nobody-
+selected`, `CLAUDE_CODE_USE_BEDROCK=1` and `ANTHROPIC_BASE_URL` naming
+stub B.
+
+**What it establishes.**
+
+- The variables FR-20 names do what the adapter assumes in 2.1.329: the
+  request goes to `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` arrives
+  as `authorization: Bearer …`, `ANTHROPIC_API_KEY` as `x-api-key`, and
+  `ANTHROPIC_MODEL` is the `model` of the request.
+- A selected launch from a shell configured for something else reaches
+  the selected endpoint only: stub B received nothing in run 2, the
+  ambient key was not sent, and the Bedrock switch did not redirect the
+  session.
+- With `auth_header = "none"` the placeholder arrives as
+  `Bearer none`, and Claude Code runs.
+- **A `settings.json` `env` block overrides the environment `claude` is
+  started with**, for the API client itself (run 4: the process
+  environment named stub A, the settings file named stub B, and the
+  request went to B). This is the question FR-20 left to the capture.
+  The adapter therefore refuses (run 5).
+
+**What it does not establish.** That a real provider's endpoint works:
+the stubs answer one fixed message. Only the main model's request was
+observed; no request for the small, fast model was made in a one-turn
+headless run, so the alias variables are asserted by the launcher
+suite against a stub `claude`, not observed on the wire.
+
+## 2. The variable names
+
+Read from the installed binary (`strings` over
+`~/.local/share/claude/versions/2.1.329`, filtered to `ANTHROPIC_*`,
+`CLAUDE_CODE_USE_*` and the tuning names). Those the adapter sets or
+removes: `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`,
+`ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_MODEL`,
+`ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`,
+`ANTHROPIC_DEFAULT_HAIKU_MODEL`, `ANTHROPIC_DEFAULT_FABLE_MODEL`,
+`ANTHROPIC_SMALL_FAST_MODEL`, `ANTHROPIC_CUSTOM_HEADERS`,
+`CLAUDE_CODE_SUBAGENT_MODEL`, `CLAUDE_CODE_MAX_OUTPUT_TOKENS`,
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `CLAUDE_CODE_EFFORT_LEVEL`,
+`CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`,
+`CLAUDE_CODE_USE_FOUNDRY`, `CLAUDE_CODE_USE_ANTHROPIC_AWS`,
+`CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD`, `CLAUDE_CODE_USE_MANTLE`,
+`CLAUDE_CODE_USE_GATEWAY`, `ANTHROPIC_UNIX_SOCKET`,
+`CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`,
+`CLAUDE_CODE_GATEWAY_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR`,
+`CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR`,
+`CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR` (these six for an api
+endpoint only),
+`ANTHROPIC_BEDROCK_BASE_URL`, `ANTHROPIC_BEDROCK_MANTLE_BASE_URL`,
+`ANTHROPIC_VERTEX_BASE_URL`, `ANTHROPIC_FOUNDRY_BASE_URL`,
+`ANTHROPIC_AWS_BASE_URL`, `ANTHROPIC_GOOGLE_CLOUD_BASE_URL`,
+`CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`, `ENABLE_TOOL_SEARCH`,
+`DISABLE_FEEDBACK_COMMAND`.
+
+Present in the binary and left alone:
+`CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR` and
+`CCR_AGENT_PROXY_TOKEN_FILE_DESCRIPTOR` (the other two names ending in
+`_FILE_DESCRIPTOR`), `ANTHROPIC_IDENTITY_TOKEN` and
+`ANTHROPIC_IDENTITY_TOKEN_FILE`, and the AWS and Foundry keys. What
+they do was not established, and nothing was ruled about them.
+
+A name in a binary says the variable exists, not what it does. The
+meaning of the base URL, the two credentials and the model is shown by
+section 1. The Opus, Sonnet, Haiku and small-fast alias variables and
+`CLAUDE_CODE_MAX_OUTPUT_TOKENS` are the ones this repository's recipes
+already export (`docs/dgx-spark/setup-cookbook.md`); the subagent,
+effort and auto-compact variables are the ones the owner's own
+per-provider file exported. The Fable alias and the provider switches
+are taken by name. None of these was observed on the wire here. The
+login token, the gateway switch and the socket variable are observed
+in section 4.
+
+## 3. A launch without `--llm` is unchanged
+
+**Method.** Master's launcher (`git show origin/master:adapters/
+claude-code/claude-code`, at `7186ff3`) and the worktree's were each
+run under `env -i` with a stub `claude` that records its argv and
+whole environment, a stub cmux and a stub tmux, from a shell carrying
+`ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_USE_BEDROCK`
+and `CLAUDE_CODE_EFFORT_LEVEL`. Timestamps and the launcher's own path
+were normalized; three things were compared per case.
+
+```
+headless     out     identical  (11 lines)
+headless     claude  identical  (16 lines)
+headless     mux     identical  (0 lines)
+resume       out     identical  (11 lines)
+resume       claude  identical  (16 lines)
+resume       mux     identical  (0 lines)
+inpane       out     identical  (20 lines)
+inpane       claude  identical  (23 lines)
+inpane       mux     identical  (0 lines)
+intmux       out     identical  (19 lines)
+intmux       claude  identical  (17 lines)
+intmux       mux     identical  (0 lines)
+typedcmux    out     identical  (19 lines)
+typedcmux    claude  identical  (0 lines)
+typedcmux    mux     identical  (1 lines)
+typedtmux    out     identical  (19 lines)
+typedtmux    claude  identical  (0 lines)
+typedtmux    mux     identical  (1 lines)
+version      out     identical  (2 lines)
+version      claude  identical  (16 lines)
+version      mux     identical  (0 lines)
+differences: 0
+```
+
+`out` is what the launcher printed, `claude` what the stub received,
+`mux` what was typed into cmux or given to tmux. The cases: a headless
+`-p` run; `--resume <id> -p`; inside cmux with `--peer-review` and
+`--continue`; inside tmux with a forwarded flag; a new cmux workspace
+with peer review and `--review-max-rounds`; a new tmux session;
+`--version`. The help text differs by the `--llm` lines only.
+
+This comparison is not in the suite: CI checks out shallowly, so
+master's launcher is not available there. The suite asserts the same
+property against the planted variables and proves the assertions with
+a mutated launcher.
+
+## 4. A login token, the gateway switch and the socket variable
+
+Recorded 2026-11-20, after the owner ruled that a selected launch
+removes `CLAUDE_CODE_USE_GATEWAY` and `ANTHROPIC_UNIX_SOCKET`, and
+`CLAUDE_CODE_OAUTH_TOKEN` for an api endpoint. Same method as section
+1: one local stub endpoint, a throwaway `HOME`, `env -i`, headless, a
+90 s limit per run.
+
+```
+=== 6. plain claude: a base URL naming the stub and a login token, no other credential
+exit: 0
+claude's result: stub-ok | is_error: False
+  request -> the stub: POST /v1/messages | authorization='Bearer capture-planted-login-token' x-api-key=None model='claude-sonnet-5-5'
+
+=== 7. --llm bearer, from a shell that carries a login token
+exit: 0
+claude's result: stub-ok | is_error: False
+  request -> the stub: POST /v1/messages | authorization='Bearer capture-planted-credential' x-api-key=None model='capture-main'
+
+=== 8. --llm open (no credential), from a shell that carries a login token
+exit: 0
+claude's result: stub-ok | is_error: False
+  request -> the stub: POST /v1/messages | authorization='Bearer none' x-api-key=None model='capture-main'
+
+=== 9. plain claude: the stub as base URL, a bearer token, and ANTHROPIC_UNIX_SOCKET naming a socket that does not exist
+exit: timeout after 90s
+  (no request reached the stub)
+
+=== 10. plain claude: the stub as base URL, a bearer token, and CLAUDE_CODE_USE_GATEWAY=1
+exit: 0
+claude's result: stub-ok | is_error: False
+  request -> the stub: POST /v1/messages | authorization='Bearer capture-token' x-api-key=None model='claude-opus-4-7'
+
+(run 10 repeated as a controlled pair, in one fresh home)
+=== 10a. plain claude: the stub as base URL and a bearer token, no switch
+  request -> the stub: POST /v1/messages | authorization='Bearer capture-token' x-api-key=None model='claude-opus-5-5'
+=== 10b. the same, with CLAUDE_CODE_USE_GATEWAY=1
+  request -> the stub: POST /v1/messages | authorization='Bearer capture-token' x-api-key=None model='claude-opus-4-7'
+=== 10c. the first again, no switch
+  request -> the stub: POST /v1/messages | authorization='Bearer capture-token' x-api-key=None model='claude-opus-5-5'
+
+=== 11. --llm bearer, from a shell that carries both of those
+exit: 0
+claude's result: stub-ok | is_error: False
+  request -> the stub: POST /v1/messages | authorization='Bearer capture-planted-credential' x-api-key=None model='capture-main'
+```
+
+**What it establishes.**
+
+- **Claude Code sends its login token to a custom base URL.** With
+  `ANTHROPIC_BASE_URL` set and no other credential, the value of
+  `CLAUDE_CODE_OAUTH_TOKEN` arrived at the stub as the bearer (run 6).
+  A selected launch to an api endpoint removes the variable: the stub
+  received the selected credential (run 7), or the placeholder for an
+  endpoint that takes none (run 8), and never the login token.
+- **`ANTHROPIC_UNIX_SOCKET` takes the request away from the base URL.**
+  With it naming a socket that does not exist, nothing reached the stub
+  and the run did not finish in 90 s (run 9). From a shell that carries
+  it, a selected launch reached the selected endpoint (run 11), which
+  it could not have done with the variable in place.
+- **`CLAUDE_CODE_USE_GATEWAY` changes what is requested.** The request
+  still reached the base URL, but for another default model: in one
+  home, `claude-opus-5-5` without the switch, `claude-opus-4-7` with
+  it, and `claude-opus-5-5` again without (runs 10a to 10c). What else
+  the switch does was not established.
+
+**What it does not establish.** What the gateway switch is for. That a
+login token is sent when another credential is also set: runs 7 and 8
+show only that it is absent after the launcher removed it.
+
+## 5. The file-descriptor forms and the gateway token
+
+Recorded 2026-11-20, after the owner's second ruling that an api
+endpoint also loses `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`,
+`CLAUDE_CODE_GATEWAY_TOKEN` and the file-descriptor forms of the
+credentials. Same method; each file-descriptor variable named a
+descriptor the run really inherited, open on a file holding a planted
+value. The refresh token was not run on its own: using one means
+asking Anthropic's token service for an access token.
+
+```
+=== 12. plain claude: the stub as base URL, and an API key by file descriptor only
+exit: 0
+claude's result: stub-ok | is_error: False
+  request -> the stub: POST /v1/messages | authorization=None x-api-key='capture-fd-api-key' model='claude-opus-5-5'
+
+=== 13. plain claude: the stub as base URL, and a login token by file descriptor only
+exit: 0
+claude's result: stub-ok | is_error: False
+  request -> the stub: POST /v1/messages | authorization='Bearer capture-fd-login-token' x-api-key=None model='claude-sonnet-5-5'
+
+=== 14a. plain claude: the stub as base URL, and CLAUDE_CODE_GATEWAY_TOKEN only
+exit: 1
+claude's result: Not logged in · Please run /login | is_error: True
+  (no request reached the stub)
+
+=== 14b. the same, with CLAUDE_CODE_USE_GATEWAY=1
+exit: 1
+claude's result: Not logged in · Please run /login | is_error: True
+  (no request reached the stub)
+
+=== 15. --llm bearer, from a shell that carries every one of them
+exit: 0
+claude's result: stub-ok | is_error: False
+  request -> the stub: POST /v1/messages | authorization='Bearer capture-planted-credential' x-api-key=None model='capture-main'
+
+=== 16. --llm open (no credential), from the same shell
+exit: 0
+claude's result: stub-ok | is_error: False
+  request -> the stub: POST /v1/messages | authorization='Bearer none' x-api-key=None model='capture-main'
+```
+
+Runs 15 and 16 carried a login token, a refresh token, a gateway token
+with the gateway switch, and all three file-descriptor variables with
+their descriptors open.
+
+**What it establishes.**
+
+- **A key or a login token handed over by file descriptor reaches a
+  custom base URL.** The binary read each from its descriptor and sent
+  it to the stub, as `x-api-key` (run 12) and as the bearer (run 13).
+- **A selected launch to an api endpoint sends none of them.** From a
+  shell carrying every form, the stub received the selected credential
+  only (run 15), or the placeholder for an endpoint that takes none
+  (run 16).
+
+**What it does not establish.** What `CLAUDE_CODE_GATEWAY_TOKEN` is
+used for: alone, with or without the gateway switch, Claude Code
+reported "Not logged in" and sent nothing (runs 14a and 14b). What the
+refresh token and the gateway token's file-descriptor form do: they
+are removed on the owner's ruling and by their names, not on an
+observation.
+
+## 6. A typed command with printable non-ASCII
+
+Recorded 2026-11-20 with bash 3.2.57 and zsh, for the ruling that the
+typed-command check refuses control characters only. A project
+directory named `café 日本語 dir` and the flag
+`--append-system-prompt=naïve 日本` were given to the launcher with
+`--shell cmux --llm opus` and a stub cmux; what it typed was then run
+by each shell, as a pane would run it.
+
+```
+outer launcher, LC_ALL=C: exit 0; typed command is pure ASCII: yes
+   pane shell /bin/bash exit 0 | claude started in that directory: yes | flag byte for byte: yes
+   pane shell /bin/zsh  exit 0 | claude started in that directory: yes | flag byte for byte: yes
+outer launcher, LC_ALL=en_US.UTF-8: exit 0; typed command is pure ASCII: no
+   pane shell /bin/bash exit 0 | claude started in that directory: yes | flag byte for byte: yes
+   pane shell /bin/zsh  exit 0 | claude started in that directory: yes | flag byte for byte: yes
+```
+
+Under the C locale the typed text was, with the temporary and checkout
+paths shortened:
+
+```
+cd $'<tmp>/caf\303\251 \346\227\245\346\234\254\350\252\236 dir' && exec env CCT_LLM_CHILD=1 <repo>/adapters/claude-code/claude-code --llm opus $'--append-system-prompt=na\303\257ve \346\227\245\346\234\254'
+```
+
+The suite covers the C-locale case with bash; the zsh and UTF-8 rows
+are this record only, since CI's runner is not guaranteed to have
+either.

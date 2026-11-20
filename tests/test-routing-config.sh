@@ -697,7 +697,7 @@ assert_eq "G/codex: the legacy usage scan reads the safe classification view" "2
 # not route by this value at all. The distinction that IS closed here:
 # two profiles naming ONE variable can reach different servers.
 RSO() { ( set +e
-          eval "$(sed -n '/^rt_sanitize_origin()/,/^}/p' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+          eval "$(sed -n '/^rt_sanitize_origin()/,/^}/p' "$REPO_DIR/scripts/lib/cct-endpoint.sh")"
           rt_sanitize_origin "$1" ) }
 assert_eq "C30/launch-origin: a plain base URL records its origin" "https://api.anthropic.com" \
     "$(RSO 'https://api.anthropic.com')"
@@ -732,7 +732,7 @@ EPFLOW() {  # <backend> <resolved-url> [ref-form] [jq-filter] [provider] -> the 
       export CODEX_HOME="${CCT_TEST_CODEX_HOME:-$EP_NO_CODEX}"
       RT_UPSTREAM_ORIGIN=""; RT_UPSTREAM_ORIGIN_SOURCE="none"
       journal() { :; }
-      eval "$(sed -n '/^rt_sanitize_origin()/,/^}/p' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+      eval "$(sed -n '/^rt_sanitize_origin()/,/^}/p' "$REPO_DIR/scripts/lib/cct-endpoint.sh")"
       eval "$(sed -n '/^rt_toml_get()/,/^}/p' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
       eval "$(sed -n '/^rt_codex_origin()/,/^}/p' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
       eval "$(sed -n '/^rt_launch_env()/,/^}/p' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
@@ -764,10 +764,10 @@ assert_eq "C30/launch-origin dataflow: an env-derived non-http(s) scheme is refu
 # distinguishable records.
 assert_eq "C30/launch-origin: two profiles sharing one endpoint_ref record DIFFERENT origins" "https://server-a:8000 https://server-b:8000" \
     "$( a=$(CCT_SHARED_URL='https://server-a:8000/v1' bash -c '
-              eval "$(sed -n "/^rt_sanitize_origin()/,/^}/p" "'"$REPO_DIR"'/scripts/cooldown-supervisor.sh")"
+              eval "$(sed -n "/^rt_sanitize_origin()/,/^}/p" "'"$REPO_DIR"'/scripts/lib/cct-endpoint.sh")"
               rt_sanitize_origin "$CCT_SHARED_URL"')
         b=$(CCT_SHARED_URL='https://server-b:8000/v1' bash -c '
-              eval "$(sed -n "/^rt_sanitize_origin()/,/^}/p" "'"$REPO_DIR"'/scripts/cooldown-supervisor.sh")"
+              eval "$(sed -n "/^rt_sanitize_origin()/,/^}/p" "'"$REPO_DIR"'/scripts/lib/cct-endpoint.sh")"
               rt_sanitize_origin "$CCT_SHARED_URL"')
         printf '%s %s' "$a" "$b" )"
 # It must come from the RESOLVED value, not endpoint_ref.
@@ -870,11 +870,11 @@ assert_eq "T2/sanitizer: a non-http(s) verified origin is refused" "8" \
     "$(EUCODE '{"origin":"ftp://served.example","status":"verified","evidence":"provider_reported"}' \
               '.upstream_origin = "https://gw.example" | .upstream_origin_source = "profile_base_url"')"
 # DRIFT PIN: the validator accepts exactly what the real sanitizer
-# emits. The sanitizer stays single-sourced in the supervisor; this
+# emits. The sanitizer stays single-sourced in lib/cct-endpoint.sh; this
 # feeds its actual output through the predicate rather than restating
 # the grammar in a second place and hoping they agree.
 assert "T2/sanitizer: the validator accepts the real sanitizer's output" \
-    bash -c "cd '$REPO_DIR' && source scripts/lib/routing-result.sh && rr_origin_is_sanitized \"\$(RSO() { eval \"\$(sed -n '/^rt_sanitize_origin()/,/^}/p' scripts/cooldown-supervisor.sh)\"; rt_sanitize_origin \"\$1\"; }; RSO 'https://user:pw@Vllm.Internal:8000/v1?k=1')\""
+    bash -c "cd '$REPO_DIR' && source scripts/lib/routing-result.sh && rr_origin_is_sanitized \"\$(RSO() { eval \"\$(sed -n '/^rt_sanitize_origin()/,/^}/p' scripts/lib/cct-endpoint.sh)\"; rt_sanitize_origin \"\$1\"; }; RSO 'https://user:pw@Vllm.Internal:8000/v1?k=1')\""
 assert "T2/sanitizer: ...and rejects the raw URL the sanitizer was given" \
     bash -c "cd '$REPO_DIR' && source scripts/lib/routing-result.sh && ! rr_origin_is_sanitized 'https://user:pw@Vllm.Internal:8000/v1?k=1'"
 assert "T2/sanitizer: an IPv6 origin round-trips through the validator" \

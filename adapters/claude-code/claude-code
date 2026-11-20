@@ -276,9 +276,21 @@ build_run_cmd_string() {
     printf -v quoted_cmd '%q ' "${CLAUDE_CMD[@]}"
     quoted_cmd="${quoted_cmd% }"
 
+    # A selected launch (--llm, #479) types IDS ONLY: this launcher, the
+    # target and the claude flags. The launcher re-run in the pane
+    # (CCT_LLM_CHILD=1) resolves the target there and reads the
+    # credential there, so no value is ever typed into a multiplexer.
+    local llm_env=""
+    if [[ -n "$LLM_TARGET" ]]; then
+        local args_q=""
+        if [[ ${#CLAUDE_ARGS[@]} -gt 0 ]]; then printf -v args_q ' %q' "${CLAUDE_ARGS[@]}"; fi
+        printf -v quoted_cmd '%q --llm %q%s' "$LAUNCHER_SELF" "$LLM_TARGET" "$args_q"
+        llm_env="CCT_LLM_CHILD=1 "
+    fi
+
     if [[ "$PEER_REVIEW_ENABLED" == "true" ]]; then
-        local extra_env=""
-        [[ -n "${REVIEW_MAX_ROUNDS:-}" ]] && printf -v extra_env 'CCT_REVIEW_MAX_ROUNDS=%q ' "$REVIEW_MAX_ROUNDS"
+        local extra_env="$llm_env"
+        [[ -n "${REVIEW_MAX_ROUNDS:-}" ]] && printf -v extra_env '%sCCT_REVIEW_MAX_ROUNDS=%q ' "$llm_env" "$REVIEW_MAX_ROUNDS"
         printf -v run_cmd 'env CCT_PEER_REVIEW_ENABLED=true CCT_PEER_PROVIDER=%q CCT_PEER_TRIGGER=phase-complete CCT_PEER_REVIEW_SCOPE=%q CCT_REVIEW_COMMITS=%q %sCCT_SESSION_START=%q %s' \
             "${PEER_PROVIDER:-}" \
             "$PEER_SCOPE" \
@@ -286,6 +298,8 @@ build_run_cmd_string() {
             "$extra_env" \
             "$session_start" \
             "$quoted_cmd"
+    elif [[ -n "$llm_env" ]]; then
+        run_cmd="env ${llm_env}${quoted_cmd}"
     else
         run_cmd="$quoted_cmd"
     fi
@@ -366,6 +380,10 @@ exec_claude_in_current_shell() {
 
     run_cmd=$(build_run_cmd_string "$session_start")
     shell_bin=$(resolve_shell_bin)
+
+    # This process becomes claude: a selected launch (--llm) sets and
+    # removes its variables here, immediately before exec.
+    if [[ -n "$LLM_TARGET" ]]; then llm_apply; fi
 
     if [[ "$PEER_REVIEW_ENABLED" == "true" ]]; then
         local env_args=(
@@ -546,6 +564,8 @@ USAGE:
     claude-code [path]                              Start Claude session (cmux on macOS, tmux elsewhere)
     claude-code --continue [path]                   Continue last session
     claude-code --resume [path]                     Resume a named session (interactive picker)
+    claude-code --llm <target> [path]               Start a session on an LLM from your catalog
+                                                    (this session only; `cct llm list` shows them)
     claude-code init <type> [path] [--playwright] [--license <type>]   Initialize project from template
     claude-code sync [path] [--dry-run]             Sync project against its template
     claude-code playwright [path]                   Install Playwright CLI skills into a project
@@ -570,6 +590,13 @@ OPTIONS:
     --continue, -c       Continue the most recent Claude session
     --resume, -r         Resume a named session (interactive picker)
     --shell <auto|cmux|tmux>  Session backend (default: auto)
+    --llm <target>       Run this session on a target from the LLM catalog
+                         (${CCT_HOME:-~/.cct}/llms.toml): <llm>, or <llm>@<binding>.
+                         Sets the provider, credential and model for this session
+                         only and removes competing variables from it; nothing is
+                         exported in your shell. Works with -p too. Without --llm
+                         the launch is unchanged. Resume a session with the target
+                         it was started with: the launcher does not record it yet.
 
 Any other --flag is forwarded verbatim to the underlying `claude` CLI
 (e.g. --dangerously-skip-permissions). Use --flag=value for value-bearing
@@ -1361,6 +1388,9 @@ start_tmux_session() {
     if [[ "$PEER_REVIEW_ENABLED" == "true" ]]; then
         echo "  Peer:    ${PEER_PROVIDER:-profile default} (scope: $PEER_SCOPE)"
     fi
+    if [[ -n "$LLM_TARGET" ]]; then
+        echo "  LLM:     $LLM_TARGET ($LLM_CC_LABEL)"
+    fi
 
     # Session transcript logging
     mkdir -p "$LOGS_DIR"
@@ -1380,6 +1410,13 @@ start_tmux_session() {
 
     # Check if session already exists
     if tmux has-session -t "$session_name" 2>/dev/null; then
+        # A selected launch never attaches to a session it did not start:
+        # that session runs whatever it was started with, and attaching
+        # would report a selection that was not applied.
+        if [[ -n "$LLM_TARGET" ]]; then
+            llm_refuse "tmux session '$session_name' already exists, and attaching to it would not apply the selection" \
+                "Attach without --llm (claude-code $project_dir), or end that session first."
+        fi
         # If peer-review flags changed, recreate the session so env vars are injected
         if [[ -n "$PEER_REVIEW_ENABLED" ]]; then
             echo "Recreating session '$session_name' with peer-review config..."
@@ -1392,6 +1429,8 @@ start_tmux_session() {
             return
         fi
     fi
+
+    if [[ -n "$LLM_TARGET" ]]; then llm_refuse_untypable; fi
 
     echo "Creating session '$session_name'..."
     echo "  Log: $log_file"
@@ -1436,6 +1475,9 @@ start_cmux_session() {
     if [[ "$PEER_REVIEW_ENABLED" == "true" ]]; then
         echo "  Peer:    ${PEER_PROVIDER:-profile default} (scope: $PEER_SCOPE)"
     fi
+    if [[ -n "$LLM_TARGET" ]]; then
+        echo "  LLM:     $LLM_TARGET ($LLM_CC_LABEL)"
+    fi
     echo "  Shell:   cmux"
     echo "  Log:     $log_file"
     echo "──────────────────────────────────────"
@@ -1445,6 +1487,10 @@ start_cmux_session() {
         echo "Launching Claude in the current cmux terminal..."
         exec_claude_in_current_shell "$project_dir" "$log_file"
     fi
+
+    # The command below is TYPED into a new pane. Anything in it that
+    # holds a control character is refused first.
+    if [[ -n "$LLM_TARGET" ]]; then llm_refuse_untypable "$project_dir"; fi
 
     session_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     launch_cmd=$(build_launch_command "$project_dir" "$session_start" "$log_file")
@@ -1590,9 +1636,173 @@ run_headless() {
     exec "${CLAUDE_CMD[@]}" "$@"
 }
 
+# ── Per-launch LLM selection (#479, part of #400) ────────────
+# --llm <target> runs THIS session on a target from the LLM catalog
+# (${CCT_HOME:-~/.cct}/llms.toml; `cct llm list` shows it). The
+# provider, credential and model variables are set in the process that
+# becomes claude and nowhere else, and competing ones are removed from
+# it, so nothing is exported in a shell and nothing a shell exports can
+# redirect the session. Without --llm none of this runs and the launch
+# is unchanged.
+#
+# Two steps:
+#   prepare  in the launcher the user ran: resolve the target and refuse
+#            (exit 3, with the reason) before any session vehicle is
+#            touched. Reads no credential value.
+#   apply    in the process about to exec claude: this one, or the
+#            launcher re-run inside the pane it created (CCT_LLM_CHILD=1,
+#            which prepares again there). Sets and removes the variables.
+# The catalog code lives in the checkout, like `build`'s driver.
+LLM_TARGET=""
+LLM_REST_ARGS=()
+LLM_EXIT_REFUSED=3
+LAUNCHER_SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+
+llm_set_target() {  # <value given to --llm>
+    if [[ -z "$1" || "${1:0:1}" == "-" ]]; then
+        echo "Error: --llm requires a target (cct llm list shows them)" >&2
+        exit 1
+    fi
+    LLM_TARGET="$1"
+}
+
+# Takes --llm out of an argument list that is otherwise forwarded to
+# claude verbatim (the headless path): sets LLM_TARGET and LLM_REST_ARGS.
+llm_split_args() {
+    LLM_REST_ARGS=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --llm)   llm_set_target "${2:-}"; shift 2 ;;
+            --llm=*) llm_set_target "${1#*=}"; shift ;;
+            *)       LLM_REST_ARGS+=("$1"); shift ;;
+        esac
+    done
+}
+
+llm_refuse() {  # <reason> [<remedy line>...]
+    printf '[claude-code] --llm %s refused: %s\n' "$LLM_TARGET" "$1" >&2
+    shift
+    local line
+    for line in "$@"; do printf '  %s\n' "$line" >&2; done
+    exit "$LLM_EXIT_REFUSED"
+}
+
+# A control character must never be typed into a pane: a newline ends
+# the command and an escape starts a terminal sequence. Matched byte by
+# byte, whatever the locale: the C0 controls and DEL, and the C1
+# controls in their UTF-8 form. Printable text is not refused, in
+# whatever form %q writes it: bash 3.2 writes printable non-ASCII as
+# $'…', which bash and zsh, the shells a pane runs, both read.
+llm_has_control_char() {  # <value>
+    ( LC_ALL=C
+      case "$1" in
+          *[[:cntrl:]]*) exit 0 ;;
+          *$'\302'[$'\200'-$'\237']*) exit 0 ;;
+      esac
+      exit 1 )
+}
+
+llm_refuse_control_chars() {  # <value> <what it is> <remedy>
+    if llm_has_control_char "$1"; then
+        llm_refuse "the $2 holds a control character, which must never be typed into a new pane" "$3"
+    fi
+}
+
+# Everything a selected launch TYPES into a new pane is checked: the
+# project path (cmux types a `cd`; tmux is handed the directory as an
+# argument and types none), this launcher's own path, and each flag
+# forwarded to claude. The target is an id and cannot hold one. A launch
+# from inside a pane types nothing and is not checked.
+llm_refuse_untypable() {  # [<project-dir>]
+    local arg in_pane="Run the launcher from inside a cmux or tmux pane, where nothing is typed"
+    if [[ -n "${1:-}" ]]; then
+        llm_refuse_control_chars "$1" "project path" "$in_pane, or rename the directory."
+    fi
+    llm_refuse_control_chars "$LAUNCHER_SELF" "launcher's own path" "$in_pane, or install the launcher under a plain path."
+    for arg in ${CLAUDE_ARGS[@]+"${CLAUDE_ARGS[@]}"}; do
+        llm_refuse_control_chars "$arg" "argument forwarded to claude" "$in_pane."
+    done
+}
+
+llm_load_libs() {
+    local repo="${CCT_REPO_DIR:-$CCT_REPO_DIR_DEFAULT}"
+    if [[ -z "$repo" || ! -f "$repo/scripts/lib/llm-catalog.sh" ]]; then
+        # Fallback: this launcher is a checkout's own copy.
+        repo="$(cd "$(dirname "$LAUNCHER_SELF")/../.." 2>/dev/null && pwd)" || repo=""
+    fi
+    if [[ -z "$repo" || ! -f "$repo/scripts/lib/llm-catalog.sh" ]]; then
+        llm_refuse "cannot locate the code-copilot-team checkout (scripts/lib/llm-catalog.sh)" \
+            "Set CCT_REPO_DIR to your checkout, or re-run adapters/claude-code/setup.sh from it."
+    fi
+    # shellcheck source=/dev/null
+    source "$repo/scripts/lib/llm-catalog.sh"
+    # shellcheck source=/dev/null
+    source "$repo/scripts/lib/llm-adapters/claude-code.sh"
+}
+
+llm_prepare() {  # <project-dir>
+    local project="$1" catalog rc=0 note
+    llm_load_libs
+    catalog="$(lc_catalog_path)"
+    if [[ ! -e "$catalog" ]]; then
+        llm_refuse "there is no LLM catalog at $catalog" \
+            "Copy shared/templates/llm/llms.toml.example from your checkout there and edit it (docs/llm-catalog.md)."
+    fi
+    # Validated in THIS shell (the parsed catalog stays for the resolver);
+    # a failure is printed by a second run.
+    lc_validate "$catalog" >/dev/null || rc=$?
+    if [[ $rc -ne 0 ]]; then
+        printf '[claude-code] --llm %s refused: the LLM catalog is not valid (%s)\n' "$LLM_TARGET" "$catalog" >&2
+        { lc_validate "$catalog" || true; } | sed 's/^/  /' >&2
+        exit "$LLM_EXIT_REFUSED"
+    fi
+    if ! lc_resolve "$LLM_CC_HARNESS" "$LLM_TARGET"; then
+        llm_refuse "$LC_R_ERR"
+    fi
+    llm_cc_plan "$LC_R_BINDING"
+    if [[ "$LLM_CC_STATE" != "unverified" ]]; then
+        llm_refuse "$LC_R_LLM@$LC_R_BINDING is $LLM_CC_STATE on $LLM_CC_HARNESS: $LLM_CC_REASON"
+    fi
+    # In THIS shell: the function reports through two globals.
+    rc=0
+    llm_cc_settings_conflicts "$project" || rc=$?
+    if [[ $rc -eq 1 ]]; then
+        printf '[claude-code] --llm %s refused: a Claude Code settings file sets a variable this launch must control.\n' "$LLM_TARGET" >&2
+        printf '  Claude Code applies a settings env block over the environment it is started with, so the selection would be undone:\n' >&2
+        printf '%s' "$LLM_CC_SETTINGS_REFUSED" | sed 's/^/    /' >&2
+        printf '  Remove those keys from the env block, then retry.\n' >&2
+        exit "$LLM_EXIT_REFUSED"
+    elif [[ $rc -eq 2 ]]; then
+        echo "[claude-code] note: jq is not installed, so settings.json env blocks were not checked for variables that would override --llm $LLM_TARGET" >&2
+    fi
+    # Tuning in a settings file does not change the target, so it is
+    # said, not refused: that value is the one the session will use.
+    while IFS= read -r note; do
+        [[ -z "$note" ]] && continue
+        printf '[claude-code] note: %s sets %s in its env block; Claude Code applies it over this launch, so that value is the one the session uses.\n' \
+            "${note%: *}" "${note##*: }" >&2
+    done <<< "$LLM_CC_SETTINGS_NOTED"
+    return 0
+}
+
+llm_apply() {
+    # The pane marker must not reach claude: a launcher started from
+    # inside the session would take itself for that pane's child.
+    unset CCT_LLM_CHILD
+    printf '[claude-code] --llm %s: %s (not probed: nothing has checked this model against Claude Code yet)\n' \
+        "$LLM_TARGET" "$LLM_CC_LABEL" >&2
+    llm_cc_apply
+}
+
 for _arg in "$@"; do
     case "$_arg" in
         -p|--print)
+            llm_split_args "$@"
+            if [[ -n "$LLM_TARGET" ]]; then
+                llm_prepare "$PWD"
+                llm_apply
+                run_headless "${LLM_REST_ARGS[@]}"
+            fi
             gateway_compat_notice
             run_headless "$@"
             ;;
@@ -1684,6 +1894,14 @@ while [[ $# -gt 0 ]]; do
             PLAYWRIGHT=1
             shift
             ;;
+        --llm)
+            llm_set_target "${2:-}"
+            shift 2
+            ;;
+        --llm=*)
+            llm_set_target "${1#*=}"
+            shift
+            ;;
         *)
             # Subcommand boundary: once we hit a known wrapper subcommand,
             # stop global parsing so the subcommand owns its remaining
@@ -1722,6 +1940,16 @@ set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 # token whose path doesn't resolve.
 if [[ ${#CLAUDE_ARGS[@]} -gt 0 ]]; then
     CLAUDE_CMD+=("${CLAUDE_ARGS[@]}")
+fi
+
+# --llm selects the LLM of a SESSION; a wrapper subcommand starts none.
+if [[ -n "$LLM_TARGET" ]]; then
+    case "${1:-}" in
+        init|build|permissions|list|sync|playwright|help|-h|--help)
+            echo "Error: --llm selects the LLM for a session; it does not apply to '$1'." >&2
+            exit 1
+            ;;
+    esac
 fi
 
 case "${1:-}" in
@@ -1894,9 +2122,25 @@ case "${1:-}" in
         show_help
         ;;
     *)
-        # The notice belongs where a session is about to start, not on
-        # help or list (review of PR #425).
-        gateway_compat_notice
+        if [[ -n "$LLM_TARGET" ]]; then
+            if [[ "${CCT_LLM_CHILD:-}" == "1" ]]; then
+                # Inside the pane this launcher created: no session
+                # vehicle and no banner, only resolve, apply and exec.
+                llm_prepare "$PWD"
+                llm_apply
+                exec "${CLAUDE_CMD[@]}"
+            fi
+            # Refused here, before any session vehicle is touched. A
+            # directory that does not exist is start_session's error.
+            if [[ -d "${1:-.}" ]]; then
+                llm_prepare "$(cd "${1:-.}" && pwd)"
+            fi
+        else
+            # The notice belongs where a session is about to start, not on
+            # help or list (review of PR #425). It describes the shell's
+            # own gateway variables, which a selected launch replaces.
+            gateway_compat_notice
+        fi
         start_session "${1:-}"
         ;;
 esac

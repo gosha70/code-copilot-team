@@ -54,6 +54,7 @@
         "docs/peer-review.md",
         "docs/auto-build.md",
         "docs/llm-routing.md",
+        "docs/llm-catalog.md",
         "docs/project-templates.md",
         "docs/configuration-reference.md",
         "docs/repo-structure.md",

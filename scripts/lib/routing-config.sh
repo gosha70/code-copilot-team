@@ -26,9 +26,16 @@
 # bash 3.2 compatible: no associative arrays; parsed form is a
 # newline-list of ctx<US>key<US>type<US>value records (US = \x1f;
 # array elements joined with RS = \x1e).
+#
+# The line lexer (key = value, the value forms and their named
+# rejections) and the secret-shape scan live in cct-toml.sh, shared with
+# the LLM catalog (#479, #400 D4). The tables and keys stay here.
 
-RC_US=$'\x1f'
-RC_RS=$'\x1e'
+# shellcheck source=cct-toml.sh
+source "$(dirname "${BASH_SOURCE[0]}")/cct-toml.sh"
+
+RC_US="$CT_US"
+RC_RS="$CT_RS"
 
 # The framework vocabulary (decision 2). Tiers are CLOSED semantic
 # classes — operators configure profiles/priorities/pools, never the
@@ -81,8 +88,8 @@ rc_parse() {
 
     while IFS= read -r raw || [[ -n "$raw" ]]; do
         lineno=$((lineno + 1))
-        line="${raw#"${raw%%[![:space:]]*}"}"
-        line="${line%"${line##*[![:space:]]}"}"
+        ct_trim "$raw"
+        line="$CT_LINE"
         [[ -z "$line" || "${line:0:1}" == "#" ]] && continue
 
         # table headers
@@ -114,16 +121,12 @@ rc_parse() {
         fi
 
         # key = value
-        if [[ ! "$line" =~ ^([A-Za-z0-9_.-]+)[[:space:]]*=[[:space:]]*(.*)$ ]]; then
-            _rc_err "$lineno" "unrecognized line (not a comment, table header, or key = value): '$line'"
+        if ! ct_split_kv "$line"; then
+            _rc_err "$lineno" "$CT_ERR"
             continue
         fi
-        key="${BASH_REMATCH[1]}"
-        val="${BASH_REMATCH[2]}"
-        if [[ "$key" == *.* ]]; then
-            _rc_err "$lineno" "dotted keys are not accepted: '$key'"
-            continue
-        fi
+        key="$CT_KEY"
+        val="$CT_VAL"
         if [[ -z "$ctx" ]]; then
             if [[ "$key" == "schema_version" ]]; then
                 ctx=""  # recorded under the root context below
@@ -153,42 +156,12 @@ rc_parse() {
         fi
         seen_keys="${seen_keys}${ctx}${RC_US}${key}"$'\n'
 
-        # value forms — reject the unsupported ones BY NAME first
-        case "$val" in
-            '"""'*) _rc_err "$lineno" "multiline strings are not accepted"; continue ;;
-            "'"*)   _rc_err "$lineno" "literal (single-quoted) strings are not accepted"; continue ;;
-            "{"*)   _rc_err "$lineno" "inline tables are not accepted"; continue ;;
-        esac
-        if [[ "$val" =~ ^\"([^\"\\]|\\\")*\"$ ]]; then
-            local s="${val:1:${#val}-2}"
-            s="${s//\\\"/\"}"
-            _rc_put "$ctx" "$key" "string" "$s"
-        elif [[ "$val" == "true" || "$val" == "false" ]]; then
-            _rc_put "$ctx" "$key" "bool" "$val"
-        elif [[ "$val" =~ ^-?[0-9]+$ ]]; then
-            _rc_put "$ctx" "$key" "int" "$val"
-        elif [[ "${val:0:1}" == "[" ]]; then
-            if [[ ! "$val" =~ ^\[[[:space:]]*(\"([^\"\\]|\\\")*\"([[:space:]]*,[[:space:]]*\"([^\"\\]|\\\")*\")*[[:space:]]*)?\]$ ]]; then
-                _rc_err "$lineno" "only single-line arrays of basic strings are accepted: '$val'"
-                continue
-            fi
-            local inner="${val:1:${#val}-2}" elems="" e rest
-            rest="$inner"
-            while [[ "$rest" =~ ^[[:space:]]*\"(([^\"\\]|\\\")*)\"[[:space:]]*(,(.*))?$ ]]; do
-                e="${BASH_REMATCH[1]}"; e="${e//\\\"/\"}"
-                elems="${elems}${e}${RC_RS}"
-                rest="${BASH_REMATCH[4]}"
-                [[ -z "${BASH_REMATCH[3]}" ]] && rest=""
-                [[ -z "$rest" ]] && break
-            done
-            _rc_put "$ctx" "$key" "array" "${elems%"$RC_RS"}"
-        elif [[ "$val" == *'"'* ]]; then
-            _rc_err "$lineno" "malformed quoting: '$val'"
-            continue
-        else
-            _rc_err "$lineno" "unrecognized value form: '$val' (basic string, integer, boolean, or array of basic strings)"
+        # value forms — the unsupported ones are rejected BY NAME
+        if ! ct_lex_value "$val"; then
+            _rc_err "$lineno" "$CT_ERR"
             continue
         fi
+        _rc_put "$ctx" "$key" "$CT_TYPE" "$CT_VALUE"
     done < "$file"
 
     [[ -z "$RC_ERRORS" ]]
@@ -265,13 +238,7 @@ _rc_in_list() {  # <needle> <space-separated list>
 # Catches obvious value-shaped secrets in ANY field. Not complete
 # secret detection — the structural boundary above is the guarantee.
 rc_secretish() {  # <value> -> 0 when the value looks like a secret
-    local v="$1"
-    [[ "$v" =~ ^sk-[A-Za-z0-9_-]{8,} ]] && return 0
-    [[ "$v" =~ [Bb]earer[[:space:]]+[A-Za-z0-9._~+/-]+=* ]] && return 0
-    [[ "$v" == *"-----BEGIN "*"PRIVATE KEY"* ]] && return 0
-    [[ "$v" =~ ^[0-9a-fA-F]{32,}$ ]] && return 0
-    [[ "$v" =~ ^[A-Za-z0-9+/]{40,}={0,2}$ ]] && return 0
-    return 1
+    ct_secretish "$1"
 }
 
 # ── validate ─────────────────────────────────────────────────────────

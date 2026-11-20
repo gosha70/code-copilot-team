@@ -330,6 +330,8 @@ export CLAUDE_CODE_MAX_OUTPUT_TOKENS=32000
 
 All five model variables are required. Claude Code asks for `sonnet`/`haiku`/`opus` by name; an unpinned tier 404s against a server that has never heard of it, and it reads as a network failure rather than a config one.
 
+These exports configure every Claude Code session started from that shell. To run one session on this model and leave the others alone, put the gateway in the LLM catalog instead and start it with `cct start --llm spark-qwen`: the launcher sets the same variables for that session only. [The LLM catalog](../llm-catalog.md) describes the file, and its example carries this target.
+
 ### Gateways that reject dynamic tool blocks
 
 When a deferred tool is loaded mid-session, Claude Code adds the tool's full

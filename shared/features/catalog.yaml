@@ -419,3 +419,21 @@ features:
       windsurf: neutral
       aider: neutral
     guide: docs/features.md
+
+  - id: llm-catalog
+    title: LLM catalog and per-launch --llm
+    problem: >-
+      Named LLM targets are configured once and one is picked when a
+      session starts, so a provider, credential or model is never exported
+      in a shell and cannot leak into another session.
+    maturity: experimental
+    since: unreleased
+    adapters:
+      claude-code: enforced
+      pi: unsupported
+      codex: unsupported
+      cursor: unsupported
+      github-copilot: unsupported
+      windsurf: unsupported
+      aider: unsupported
+    guide: docs/llm-catalog.md

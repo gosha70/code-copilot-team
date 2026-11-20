@@ -195,7 +195,7 @@ rr_effective_upstream_unverifiable() {
 # rr_origin_is_sanitized <value> — TRUE for exactly that grammar.
 #
 # This VALIDATES; it does not sanitize. The sanitizer stays
-# single-sourced in cooldown-supervisor.sh and a test feeds its real
+# single-sourced in lib/cct-endpoint.sh and a test feeds its real
 # output through this predicate so the two cannot drift. A second
 # guard is warranted because `verified` will one day carry a value
 # from OUTSIDE this tree: a provider-reported string is authoritative
