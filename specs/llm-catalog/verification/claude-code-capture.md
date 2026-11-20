@@ -101,8 +101,9 @@ removes: `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`,
 `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`,
 `CLAUDE_CODE_GATEWAY_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR`,
 `CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR`,
-`CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR` (these six for an api
-endpoint only),
+`CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR`, `ANTHROPIC_IDENTITY_TOKEN`,
+`ANTHROPIC_IDENTITY_TOKEN_FILE` (these eight for an api endpoint
+only),
 `ANTHROPIC_BEDROCK_BASE_URL`, `ANTHROPIC_BEDROCK_MANTLE_BASE_URL`,
 `ANTHROPIC_VERTEX_BASE_URL`, `ANTHROPIC_FOUNDRY_BASE_URL`,
 `ANTHROPIC_AWS_BASE_URL`, `ANTHROPIC_GOOGLE_CLOUD_BASE_URL`,
@@ -112,9 +113,8 @@ endpoint only),
 Present in the binary and left alone:
 `CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR` and
 `CCR_AGENT_PROXY_TOKEN_FILE_DESCRIPTOR` (the other two names ending in
-`_FILE_DESCRIPTOR`), `ANTHROPIC_IDENTITY_TOKEN` and
-`ANTHROPIC_IDENTITY_TOKEN_FILE`, and the AWS and Foundry keys. What
-they do was not established, and nothing was ruled about them.
+`_FILE_DESCRIPTOR`), and the AWS and Foundry keys. What they do was
+not established, and nothing was ruled about them.
 
 A name in a binary says the variable exists, not what it does. The
 meaning of the base URL, the two credentials and the model is shown by
@@ -335,3 +335,89 @@ cd $'<tmp>/caf\303\251 \346\227\245\346\234\254\350\252\236 dir' && exec env CCT
 The suite covers the C-locale case with bash; the zsh and UTF-8 rows
 are this record only, since CI's runner is not guaranteed to have
 either.
+
+## 7. The workload-identity token
+
+Recorded 2026-11-20, after #480 merged, for the owner's ruling that an
+api endpoint also loses `ANTHROPIC_IDENTITY_TOKEN` and
+`ANTHROPIC_IDENTITY_TOKEN_FILE`. Same method as section 5, with one
+addition: the stub also answered `POST /v1/oauth/token` with an access
+token of its own, and reported for each request which planted values
+it carried, in any header or in the body. The identity token was a
+planted string in the shape of a JWT; the federation rule and the
+organization id were made-up values. The launcher runs were made twice,
+with the launcher as merged by #480 (`447453e`) and with this change.
+Output, the launcher's own notice line left out:
+
+```
+=== 17a. plain claude: the stub as base URL; ANTHROPIC_IDENTITY_TOKEN with a federation rule and an organization id; no other credential
+exit: 0
+claude's result: stub-ok | is_error: False
+  request -> the stub: POST /v1/oauth/token | authorization=None x-api-key=None model=None
+      carries: the identity token from ANTHROPIC_IDENTITY_TOKEN
+  request -> the stub: POST /v1/messages | authorization='Bearer capture-exchanged-access-token' x-api-key=None model='claude-opus-5-5'
+      carries: the access token the stub issued in exchange
+
+=== 17b. the same with ANTHROPIC_IDENTITY_TOKEN_FILE instead
+exit: 0
+claude's result: stub-ok | is_error: False
+  request -> the stub: POST /v1/oauth/token | authorization=None x-api-key=None model=None
+      carries: the identity token from ANTHROPIC_IDENTITY_TOKEN_FILE
+  request -> the stub: POST /v1/messages | authorization='Bearer capture-exchanged-access-token' x-api-key=None model='claude-opus-5-5'
+      carries: the access token the stub issued in exchange
+
+=== 17c. plain claude: the stub as base URL; ANTHROPIC_IDENTITY_TOKEN alone (no rule, no organization)
+exit: 1
+claude's result: Not logged in · Please run /login | is_error: True
+  (no request reached the stub)
+
+=== 17d. plain claude: the stub as base URL; both identity variables, rule and organization, AND ANTHROPIC_AUTH_TOKEN
+exit: 0
+claude's result: stub-ok | is_error: False
+  request -> the stub: POST /v1/messages | authorization='Bearer capture-planted-credential' x-api-key=None model='claude-opus-5-5'
+      carries: the catalog credential (CAPTURE_KEY)
+
+=== 18 [447453e, as merged by #480]. --llm bearer, from a shell that carries both identity variables, the rule and the organization
+exit: 0
+claude's result: stub-ok | is_error: False
+  request -> the stub: POST /v1/messages | authorization='Bearer capture-planted-credential' x-api-key=None model='capture-main'
+      carries: the catalog credential (CAPTURE_KEY)
+
+=== 19 [447453e, as merged by #480]. --llm open (no credential), from the same shell
+exit: 0
+claude's result: stub-ok | is_error: False
+  request -> the stub: POST /v1/messages | authorization='Bearer none' x-api-key=None model='capture-main'
+      carries: none of the planted values
+
+=== 20 [447453e, as merged by #480]. --llm xkey (the credential as x-api-key), from the same shell
+exit: 0
+claude's result: stub-ok | is_error: False
+  request -> the stub: POST /v1/messages | authorization=None x-api-key='capture-planted-credential' model='capture-main'
+      carries: the catalog credential (CAPTURE_KEY)
+```
+
+Runs 18 to 20 with this change gave the same three results, request
+for request.
+
+**What it establishes.**
+
+- **The identity token is a credential that follows the base URL.**
+  With a federation rule and an organization id set and no other
+  credential, Claude Code posted the token, read from the variable
+  (run 17a) or from the file the other variable names (run 17b), to
+  `/v1/oauth/token` on the stub, then used whatever access token came
+  back as its bearer.
+- **Alone it is not used** (run 17c), **and another credential
+  outranks it**: with `ANTHROPIC_AUTH_TOKEN` also set, no token request
+  was made and the identity token was not sent (run 17d).
+- **A selected launch did not send it before this change either.** The
+  launcher always sets a credential for an api endpoint, the selected
+  one or the placeholder, so runs 18 to 20 show the token absent with
+  the launcher as merged by #480 as well.
+
+**What it does not establish.** That removing the two variables
+changes any request: it changes the session's environment, which the
+suite checks, and no longer leaves the outcome resting on that
+precedence. What the federation rule, organization id, service-account
+and workspace variables do on their own; they are not credentials and
+the launch leaves them alone.
