@@ -106,17 +106,20 @@ show() {
 }
 
 # move_entry <src> <dst>: move without ever replacing dst, and never half.
-#   0 moved · 1 dst exists (conflict; both left in place) · 2 error
+#   0 moved · 1 dst exists (conflict; both left in place) · 4 copied across
+#   devices, both kept · 2 error
 # A regular file or symlink is hard-linked into place with `ln -P`, which
 # fails if dst appears meanwhile (no check-then-move window), then the
 # legacy name is unlinked. A directory is claimed with `mkdir` (same
 # guarantee) and then published whole with rename(2) onto the claim: the
 # inode moves, so modes and timestamps are kept, and if anything appeared
 # inside the claim meanwhile the rename fails and the legacy directory is
-# untouched. Across devices the tree is copied (`cp -p`) into a staging
-# directory beside dst and published with the same rename; the legacy tree
-# is removed only after the publish. No step leaves a directory split
-# between the two homes.
+# untouched. Across devices the entry is copied (`cp -pRP`) into a staging
+# directory beside dst and published with the same rename. The legacy entry
+# is kept, back under its own name or, if that name was recreated meanwhile,
+# under its .cct-migrate-aside.* name, and is reported unresolved, so
+# migrate exits 1 (keep_both). No step leaves a directory split between the
+# two homes.
 # What this process owns right now, and nothing else: the one staging
 # directory it created, the one empty claim it has not published yet, and
 # the one legacy entry it has set aside. On exit or a signal the stage and
