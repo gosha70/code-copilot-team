@@ -876,6 +876,46 @@ assert_eq "explicit valid balanced init succeeds" "0" "$GOOD_RC"
 assert_eq "explicit balanced init applied dontAsk" "dontAsk" \
   "$(jq -r '.permissions.defaultMode' "$GOOD_PROJ/.claude/settings.json" 2>/dev/null)"
 
+# 18m. A FRESH install (no --sync) delivers the profiles, so the documented
+#      `cct permissions balanced` works on a new machine (#493). Every case
+#      above reads the profiles from the repository or from a HOME built with
+#      --sync, which is how a fresh install without them went unseen.
+#      `./scripts/setup.sh --claude-code` runs this adapter script with no
+#      arguments; calling it directly skips only the wiki tooling step.
+FRESH_HOME="$TEST_TMPDIR/perm-fresh-home"
+mkdir -p "$FRESH_HOME"
+FRESH_RC=0
+printf '2\n' | HOME="$FRESH_HOME" bash "$REPO_DIR/adapters/claude-code/setup.sh" \
+  > "$TEST_TMPDIR/perm-fresh-install.log" 2>&1 || FRESH_RC=$?
+assert_eq "a fresh install (no --sync) exits 0" "0" "$FRESH_RC"
+assert_file_exists "a fresh install installs the balanced profile" \
+  "$FRESH_HOME/.claude/permissions/balanced.json"
+assert_file_exists "...the relaxed profile" "$FRESH_HOME/.claude/permissions/relaxed.json"
+assert_file_exists "...and the per-stack deny extras" \
+  "$FRESH_HOME/.claude/permissions/deny-extras/web-dynamic.json"
+
+# The installed cct shim, the installed launcher, and nothing from the repo
+# copy: exactly what a user types after the install.
+FRESH_PROJ="$TEST_TMPDIR/proj-fresh"
+FRESH_RUN=(env HOME="$FRESH_HOME" PATH="$FRESH_HOME/.local/bin:$PATH")
+"${FRESH_RUN[@]}" cct init ml-rag "$FRESH_PROJ" < /dev/null > /dev/null 2>&1
+FRESH_PERM_RC=0
+FRESH_PERM_OUT=$("${FRESH_RUN[@]}" cct permissions balanced "$FRESH_PROJ" < /dev/null 2>&1) || FRESH_PERM_RC=$?
+assert_eq "cct permissions balanced works right after a fresh install" "0" "$FRESH_PERM_RC"
+assert_eq "...applies the balanced profile" "dontAsk" \
+  "$(jq -r '.permissions.defaultMode' "$FRESH_PROJ/.claude/settings.json" 2>/dev/null)"
+assert_eq "...and records the tier" "balanced" \
+  "$(jq -r '.permissions' "$FRESH_PROJ/.claude/template.json" 2>/dev/null)"
+
+# A profile file that is missing is reported as missing, with the command
+# that installs it, not as an unknown tier.
+rm "$FRESH_HOME/.claude/permissions/balanced.json"
+FRESH_MISSING_OUT=$("${FRESH_RUN[@]}" cct permissions balanced "$FRESH_PROJ" < /dev/null 2>&1 || true)
+assert_contains "a missing profile file is named as missing" "$FRESH_MISSING_OUT" \
+  "permission profile 'balanced' not found"
+[[ "$FRESH_MISSING_OUT" != *"unknown permission tier"* ]]
+assert_ok "...and not reported as an unknown tier" "$?"
+
 # ══════════════════════════════════════════════════════════════
 echo ""
 echo "=== #212: setup.sh must never silently ignore a flag ==="

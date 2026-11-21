@@ -201,6 +201,14 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Fixed
 
+- **A fresh install has the permission profiles.** `setup.sh --claude-code`
+  copied the `balanced` and `relaxed` profiles and the per-stack deny
+  extras into `~/.claude/permissions/` only on `--sync`. On a fresh install
+  `cct permissions balanced` therefore failed as an "unknown permission
+  tier", and `cct init --permissions balanced` failed because the profile
+  was not found, until the next `--sync`. Both paths now copy them, and a
+  missing profile file is reported as missing, with the command that
+  installs it (#493).
 - **The Analysis funnel's zero counts clear the contrast floor.** A stage
   with nothing in it was drawn in amber at 3.19:1 on white, below the
   4.5:1 the release gate enforces. It is now 5.02:1.

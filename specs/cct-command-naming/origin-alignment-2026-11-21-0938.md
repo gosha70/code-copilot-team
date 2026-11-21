@@ -57,11 +57,12 @@ Working claim:
   commands the README shows. The guides show `build` and `permissions`;
   `playwright` completes the launcher's set so that no page mixes the two
   names. Each is one name in the same passthrough.
-- Found and NOT fixed here: a fresh `setup.sh --claude-code` install does
-  not copy the permission profiles (only `--sync` does), so
-  `claude-code permissions balanced`, and now `cct permissions balanced`,
-  fail with "unknown permission tier" until `--sync` runs. It is on
-  master too, and is reported to the owner separately.
+- Found while checking `cct permissions`, and not part of this feature: a
+  fresh `setup.sh --claude-code` install did not copy the permission
+  profiles (only `--sync` did), so `claude-code permissions balanced`,
+  and with it `cct permissions balanced`, failed with "unknown permission
+  tier" until `--sync` ran. It was on master too. The owner had it filed
+  as #493 and fixed in the same PR, in its own commit.
 
 Verdict: aligned
 Confidence: high

@@ -303,6 +303,25 @@ install_helper_scripts() {
     done
 }
 
+# Permission profiles (default = absence of a file; balanced/relaxed +
+# per-stack deny-extras). The launcher resolves tiers from here, so a fresh
+# install needs them as much as --sync does: without them `cct permissions
+# balanced` and `cct init --permissions balanced` failed until the next
+# --sync (#493). ONE implementation, called from both paths.
+# install_permission_profiles <verb> — <verb> is the word the [done] line uses.
+install_permission_profiles() {
+    local source_dir="$SCRIPT_DIR/permissions"
+    local target_dir="$CLAUDE_DIR/permissions"
+    [[ -d "$source_dir" ]] || return 0
+    mkdir -p "$target_dir"
+    cp "$source_dir"/*.json "$target_dir/" 2>/dev/null || true
+    if [[ -d "$source_dir/deny-extras" ]]; then
+        mkdir -p "$target_dir/deny-extras"
+        cp "$source_dir/deny-extras"/*.json "$target_dir/deny-extras/" 2>/dev/null || true
+    fi
+    echo "[done] $1 permission profiles to $target_dir"
+}
+
 # The harness identity the SessionStart hook harness-stamp.sh reads
 # (#371 A4): the release (package.json) and the FULL commit the
 # instructions were installed from. Only the installer knows the repo,
@@ -386,19 +405,8 @@ if [[ "$SYNC_MODE" == "1" ]]; then
         echo "[done] Synced commands to $COMMANDS_TARGET"
     fi
 
-    # Permission profiles (default = absence of a file; balanced/relaxed +
-    # per-stack deny-extras). The launcher resolves tiers from here.
-    PERMISSIONS_SOURCE="$SCRIPT_DIR/permissions"
-    PERMISSIONS_TARGET="$CLAUDE_DIR/permissions"
-    if [[ -d "$PERMISSIONS_SOURCE" ]]; then
-        mkdir -p "$PERMISSIONS_TARGET"
-        cp "$PERMISSIONS_SOURCE"/*.json "$PERMISSIONS_TARGET/" 2>/dev/null || true
-        if [[ -d "$PERMISSIONS_SOURCE/deny-extras" ]]; then
-            mkdir -p "$PERMISSIONS_TARGET/deny-extras"
-            cp "$PERMISSIONS_SOURCE/deny-extras"/*.json "$PERMISSIONS_TARGET/deny-extras/" 2>/dev/null || true
-        fi
-        echo "[done] Synced permission profiles to $PERMISSIONS_TARGET"
-    fi
+    # Permission profiles: the launcher resolves tiers from here.
+    install_permission_profiles Synced
 
     # Hooks
     HOOKS_SOURCE="$SCRIPT_DIR/.claude/hooks"
@@ -1075,6 +1083,9 @@ if [[ -d "$COMMANDS_SOURCE" ]]; then
 else
     echo "[skip] Command files not found at $COMMANDS_SOURCE"
 fi
+
+# Permission profiles: the launcher resolves tiers from here (#493).
+install_permission_profiles Installed
 
 # ══════════════════════════════════════════════════════════════
 # 11a2. GLOBAL HELPER SCRIPTS

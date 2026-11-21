@@ -704,7 +704,7 @@ preflight_permission_tier() {
     esac
     if [[ ! -f "$PERMISSIONS_DIR/$tier.json" ]]; then
         echo "Error: permission profile '$tier' not found at $PERMISSIONS_DIR/$tier.json."
-        echo "       Run setup.sh --sync to install permission profiles."
+        echo "       Run ./scripts/setup.sh --sync --claude-code from your checkout to install permission profiles."
         return 1
     fi
     if ! command_exists jq; then
@@ -733,9 +733,14 @@ apply_permission_profile() {
         return 0
     fi
 
+    case "$tier" in
+        balanced|relaxed) ;;
+        *) echo "Error: unknown permission tier '$tier' (expected default|balanced|relaxed)."; return 1 ;;
+    esac
     local prof="$PERMISSIONS_DIR/$tier.json"
     if [[ ! -f "$prof" ]]; then
-        echo "Error: unknown permission tier '$tier' (expected default|balanced|relaxed)."
+        echo "Error: permission profile '$tier' not found at $prof."
+        echo "       Run ./scripts/setup.sh --sync --claude-code from your checkout to install permission profiles."
         return 1
     fi
 
