@@ -19,8 +19,16 @@
 #   - `pip check` -> "No broken requirements found."
 #   - `litellm --version` -> LiteLLM: Current Version = 1.95.0
 #
+# BUMPED on 2026-11-20, litellm 1.95.0 -> 1.100.4: the first release patched
+# for GHSA-7hp6-4w63-5g45 (high, proxy-admin privilege escalation). It is
+# also outside GHSA-3cv6-jpf6-8222 (medium, authenticated SSRF), which
+# 1.95.1 fixed. 1.100.4's `proxy` extra declares the same
+# `fastapi<1.0,>=0.136.3`, so the fastapi pin stays.
+# Re-checked that day on python 3.13 with
+# `bash tests/test-litellm-proxy-deps.sh --online`: 24 passed, 0 failed.
+#
 # TO UPGRADE: bump both together, then re-run
 # `bash tests/test-litellm-proxy-deps.sh --online`, which provisions a clean
 # venv and re-checks the import, pip check, and the proxy module import.
-litellm[proxy]==1.95.0
+litellm[proxy]==1.100.4
 fastapi==0.139.2
