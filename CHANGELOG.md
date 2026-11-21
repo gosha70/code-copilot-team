@@ -30,8 +30,8 @@ pull request to this repository merges only after its head is reviewed.
   (#479, the first slice of #400).
 - **One home and one project file.** User files live under `~/.cct`, and a Pi
   project's committed configuration is `.cct.toml`. Both legacy locations are
-  read through the 2.1.x line; `cct home migrate` and `pi-code migrate` move
-  what is left in them (#411, #460).
+  read through the 2.1.x line; `cct home migrate` and `pi-code migrate` bring
+  over what is left in them (#411, #460).
 - **`cct` is the command.** `cct start` opens a session, `cct init` and
   `cct sync` create and update a project from a template, and every other
   launcher command has a `cct` name too. `setup.sh --claude-code` puts
@@ -62,17 +62,24 @@ Nothing has to be recreated. The Session Analytics store moves from schema 12
 to 13 in place, and both legacy locations are still read.
 
 - **Refresh the install after pulling:**
-  `./scripts/setup.sh --sync --claude-code`. It installs the launcher that
-  knows `--llm` and the `cct` shim in `~/.local/bin`, and removes the
-  peer-review defaults an earlier setup wrote into `~/.claude/settings.json`,
-  which overrode the `--peer-review` flag (#410, #479, #481).
+  `./scripts/setup.sh --sync --claude-code`, adding `--pi` if you use
+  `pi-code`. The Claude Code refresh installs the launcher that knows
+  `--llm` and the `cct` shim in `~/.local/bin`, and removes the peer-review
+  defaults an earlier setup wrote into `~/.claude/settings.json`, which
+  overrode the `--peer-review` flag (#410, #479, #481).
 - **Refresh the Studio's dependencies:** `cd studio && npm install`. They
   are installed on first run only, so an existing install keeps Next.js
   15.5.28, which three advisories affect, until you do (see Security).
 - **Move the user home when convenient.** `~/.code-copilot-team` is read
-  through the 2.1.x line. `cct doctor` lists what is still served from it,
-  `cct home migrate --dry-run` previews the move and `cct home migrate` makes
-  it. 2.2 removes the fallback (#411).
+  through the 2.1.x line, and 2.2 removes the fallback. First refresh every
+  adapter you installed (`./scripts/setup.sh --sync --claude-code`, adding
+  `--pi` if you use `pi-code`) and close running `pi-code` sessions: an
+  older `pi-code` points `CCT_HOME` at the legacy home and would recreate
+  it after the move. `cct doctor` lists what is still served from the
+  legacy home, and `cct home migrate --dry-run` previews the move. On the
+  same filesystem `cct home migrate` moves each entry. With `CCT_HOME` on
+  another filesystem it copies each entry into the home, keeps the legacy
+  one, exits 1, and names what to check and remove by hand (#411).
 - **Move a Pi project's configuration.** `.code-copilot-team/config.toml` is
   read through the 2.1.x line as well. `pi-code migrate [dir] --dry-run`
   previews the move to `.cct.toml`. 2.2 removes this fallback together with
@@ -99,6 +106,13 @@ to 13 in place, and both legacy locations are still read.
   `/plugin install cct@code-copilot-team`; its components are `/cct:shape`
   and `cct:build`. A copy installed under the earlier `code-copilot-team`
   name keeps working until uninstalled (#410).
+- **Use a documented permission tier.** `cct permissions` now accepts only
+  `default`, `balanced`, and `relaxed`, matching `cct init --permissions`. A
+  tier created by adding another JSON file under `~/.claude/permissions/` is
+  refused. Choose one of the three tiers and keep project-specific additions
+  in `.claude/settings.local.json`; if the old custom tier was shared across
+  projects, those additions must now be managed separately for each project
+  (#493).
 - **The wiki verbs need the `wiki-studio` wheel.** `scripts/setup.sh`
   installs it into the checkout's `.venv` for an adapter installed from a
   checkout (Python 3.11–3.13), and `./scripts/wiki` names the remedy when it
