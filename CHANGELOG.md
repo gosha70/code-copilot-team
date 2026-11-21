@@ -327,6 +327,18 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   `### Open decisions` in the plan), and `/shape` asks them in the main
   session and records the answers before reporting (#407).
 
+### Security
+
+- **The benchmark's LiteLLM proxy pin moves to a patched release.**
+  `scripts/requirements-litellm-proxy.txt` pinned `litellm[proxy]==1.95.0`,
+  which two advisories affect: privilege escalation to proxy admin through
+  cross-domain reuse of the salt key (GHSA-7hp6-4w63-5g45, high), and an
+  authenticated SSRF that can exfiltrate provider credentials
+  (GHSA-3cv6-jpf6-8222, medium). The pin is now 1.100.4, the first release
+  patched for the first and past the fix for the second; `fastapi` stays
+  at 0.139.2. The proxy is started only by the Anthropic-vs-vLLM
+  benchmark, in an ephemeral venv, bound to 127.0.0.1.
+
 ### Changed
 
 - **Session Analytics: a project's privacy change applies to what leaves
