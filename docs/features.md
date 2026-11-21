@@ -39,7 +39,7 @@ the primary guide. Maturity and release state are defined in
 | [LLM routing profiles](../docs/llm-routing.md) | Auto-build tasks are routed to a backend by route class and role under an execution profile, with validate, status and explain commands and a scheduled tick. | experimental | v2.0.0 |
 | [MemKernel persistent memory](../shared/skills/memkernel-memory/SKILL.md) | Session context is recalled at start, checkpointed before compaction and recovered after it by hooks that activate only when MemKernel is installed. | experimental | v1.1.0 |
 | [cct command-line front door](../docs/features.md) | One provider-neutral command starts a session with start, lists every slash command, skill and capability, drives routing, reports environment health with doctor, explains or validates configuration with config, shows or migrates the harness home with home, and lists or checks the LLM targets with llm. | experimental | v2.0.0 |
-| [LLM catalog and per-launch --llm](../docs/llm-catalog.md) | Named LLM targets are configured once and one is picked when a session starts, so a provider, credential or model is never exported in a shell and cannot leak into another session. | experimental | unreleased |
+| [LLM catalog and per-launch --llm](../docs/llm-catalog.md) | Named LLM targets are configured once and one is picked when a session starts, so a provider, credential or model is never exported in a shell and cannot leak into another session. | experimental | v2.1.0 |
 
 ### Adapter support
 
