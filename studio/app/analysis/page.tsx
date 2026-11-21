@@ -133,7 +133,7 @@ function Funnel({ counts }: { counts: PipelineStatus["counts"] }) {
           <span
             className={
               "font-semibold tabular-nums " +
-              (c.value > 0 ? "text-slate-800" : "text-amber-600")
+              (c.value > 0 ? "text-slate-800" : "text-amber-700")
             }
           >
             {c.value.toLocaleString()}

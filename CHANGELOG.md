@@ -192,6 +192,9 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Fixed
 
+- **The Analysis funnel's zero counts clear the contrast floor.** A stage
+  with nothing in it was drawn in amber at 3.19:1 on white, below the
+  4.5:1 the release gate enforces. It is now 5.02:1.
 - **The Studio's per-project redaction card says what it shows.** The
   Settings card titled "Effective per-project redaction" lists the mode each
   project's stored sessions were recorded under, which is not the mode in
