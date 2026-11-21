@@ -431,7 +431,7 @@ features:
       session starts, so a provider, credential or model is never exported
       in a shell and cannot leak into another session.
     maturity: experimental
-    since: unreleased
+    since: v2.1.0
     adapters:
       claude-code: enforced
       pi: unsupported
