@@ -23,7 +23,7 @@ chmod +x claude-setup.sh claude-code
 ./claude-setup.sh
 
 # 3. Verify
-claude-code list
+cct templates
 ```
 
 After setup, your `~/.claude/` directory looks like:
@@ -99,7 +99,7 @@ When starting a brand-new project from scratch.
 
 ```bash
 # Step 1: Initialize project with template
-claude-code init ml-rag ~/projects/medical-rag
+cct init ml-rag ~/projects/medical-rag
 
 # What this does:
 #   - Creates ~/projects/medical-rag/ (if it doesn't exist)
@@ -115,7 +115,7 @@ claude-code init ml-rag ~/projects/medical-rag
 #     - etc.
 
 # Step 3: Start Claude session
-claude-code ~/projects/medical-rag
+cct start ~/projects/medical-rag
 
 # This creates tmux session "claude-medical-rag" in that directory.
 # Claude reads: ~/.claude/CLAUDE.md (global) + ./CLAUDE.md (project)
@@ -125,7 +125,7 @@ claude-code ~/projects/medical-rag
 
 ```bash
 # Initialize
-claude-code init java-enterprise ~/projects/order-service
+cct init java-enterprise ~/projects/order-service
 
 # Customize CLAUDE.md:
 #   - Databases: PostgreSQL + Redis (no MongoDB for this one)
@@ -134,7 +134,7 @@ claude-code init java-enterprise ~/projects/order-service
 #   - etc.
 
 # Start
-claude-code ~/projects/order-service
+cct start ~/projects/order-service
 
 # Now inside Claude, you also get custom slash commands:
 #   /project:build        → full build + test
@@ -145,9 +145,9 @@ claude-code ~/projects/order-service
 ### Example: New dynamic web app
 
 ```bash
-claude-code init web-dynamic ~/projects/saas-dashboard
+cct init web-dynamic ~/projects/saas-dashboard
 # Customize, then:
-claude-code ~/projects/saas-dashboard
+cct start ~/projects/saas-dashboard
 ```
 
 ---
@@ -158,11 +158,11 @@ When returning to a project that already has `CLAUDE.md` configured.
 
 ```bash
 # Option A: Start new session (if tmux session doesn't exist)
-claude-code ~/projects/order-service
+cct start ~/projects/order-service
 # Creates tmux session "claude-order-service" and starts Claude
 
 # Option B: Resume existing session (if already running)
-claude-code ~/projects/order-service
+cct start ~/projects/order-service
 # Detects existing tmux session and attaches to it
 
 # Option C: From project directory
@@ -299,7 +299,7 @@ Every template includes `/project:team-review` — triggers all team roles to re
 
 ### Customizing Your Team
 
-After `claude-code init`, you can edit the Agent Team section in your project's CLAUDE.md:
+After `cct init`, you can edit the Agent Team section in your project's CLAUDE.md:
 
 - **Add a role**: copy an existing role block and modify expertise/constraints
 - **Remove a role**: delete the block (Team Lead will handle those tasks directly)
@@ -378,10 +378,10 @@ Configure `/permissions` to reduce confirmation prompts. See [permissions-guide.
 The launcher creates separate tmux sessions per project directory. You can have multiple running:
 ```bash
 # Terminal 1
-claude-code ~/projects/order-service    # → tmux session: claude-order-service
+cct start ~/projects/order-service      # → tmux session: claude-order-service
 
 # Terminal 2
-claude-code ~/projects/medical-rag      # → tmux session: claude-medical-rag
+cct start ~/projects/medical-rag        # → tmux session: claude-medical-rag
 
 # List all sessions
 tmux list-sessions
@@ -438,20 +438,20 @@ Set `keep-coding-instructions: true` to retain Claude Code's software engineerin
 ## Launcher Command Reference
 
 ```
-claude-code [path]                  Start/resume Claude session (default: current dir)
-claude-code init <type> [path]      Initialize project from template
-claude-code sync [path] [--dry-run] Sync project against its template
-claude-code list                    List available templates
-claude-code help                    Show full usage
+cct start [path]                    Start/resume Claude session (default: current dir)
+cct init <type> [path]              Initialize project from template
+cct sync [path] [--dry-run]         Sync project against its template
+cct templates                       List available templates
+cct help                            Show full usage
 ```
 
 ### Template Sync
 
-After updating templates (`claude-setup.sh --sync`), use `claude-code sync` to propagate changes to existing projects:
+After updating templates (`./scripts/setup.sh --sync --claude-code`), use `cct sync` to propagate changes to existing projects:
 
 ```bash
-claude-code sync --dry-run              # preview changes in current directory
-claude-code sync ~/projects/my-app      # apply sync to a specific project
+cct sync --dry-run                      # preview changes in current directory
+cct sync ~/projects/my-app              # apply sync to a specific project
 ```
 
 Sync updates commands and `.claude/` contents (e.g. `remediation.json`) but never overwrites `CLAUDE.md` — it shows a diff for manual review. Projects track their template in `.claude/template.json`; older projects without this file are matched by their `CLAUDE.md` heading.

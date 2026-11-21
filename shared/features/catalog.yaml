@@ -405,11 +405,13 @@ features:
   - id: cct-cli
     title: cct command-line front door
     problem: >-
-      One provider-neutral command starts a session with start, lists every
-      slash command, skill and capability, drives routing, reports
-      environment health with doctor, explains or validates configuration
-      with config, shows or migrates the harness home with home, and lists
-      or checks the LLM targets with llm.
+      One provider-neutral command starts a session with start, runs the
+      launcher's project commands (init, templates, sync, build,
+      permissions, playwright) under the same name, lists every slash
+      command, skill and capability, drives routing, reports environment
+      health with doctor, explains or validates configuration with config,
+      shows or migrates the harness home with home, and lists or checks the
+      LLM targets with llm.
     maturity: experimental
     since: v2.0.0
     adapters:

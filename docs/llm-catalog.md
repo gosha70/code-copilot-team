@@ -9,7 +9,7 @@ cct start --llm opus .             # this session only, on Anthropic
 cct start .                        # unchanged: Claude Code as you configured it
 ```
 
-`claude-code --llm <target> [path]` is the same thing; `cct start` passes its arguments to that launcher. Headless runs take it too: `claude-code --llm deepseek -p "…"`.
+`cct start` passes its arguments to the `claude-code` launcher, so `claude-code --llm <target> [path]` is the same thing. Headless runs take it too: `cct start --llm deepseek -p "…"`.
 
 This is the first slice of the catalog specified in [#400](https://github.com/gosha70/code-copilot-team/issues/400): Claude Code only. What it does not do yet is listed [at the end](#not-in-this-version).
 

@@ -1,6 +1,6 @@
 # Claude Code Permission Profiles Guide
 
-`claude-code init` and `claude-code permissions` write a project's permission
+`cct init` and `cct permissions` write a project's permission
 posture as one of three **tiers**. Pick a tier by how much you trust the
 codebase — the tier does the work, so you don't hand-maintain allow/deny lists.
 
@@ -76,16 +76,16 @@ adds `Bash(npx prisma migrate reset:*)`, `Bash(npx prisma db push:*)`,
 
 ```bash
 # At init (default tier if the flag is omitted; interactive prompt in a TTY):
-claude-code init web-dynamic ./my-app --permissions balanced
-claude-code init web-dynamic ./my-app --permissions relaxed --yes-dangerous
+cct init web-dynamic ./my-app --permissions balanced
+cct init web-dynamic ./my-app --permissions relaxed --yes-dangerous
 
 # Switch an existing project onto (or off) a managed tier:
-claude-code permissions balanced ./my-app
-claude-code permissions relaxed  ./my-app --yes-dangerous
-claude-code permissions default  ./my-app   # strips the managed keys, keeps your custom ones
+cct permissions balanced ./my-app
+cct permissions relaxed  ./my-app --yes-dangerous
+cct permissions default  ./my-app   # strips the managed keys, keeps your custom ones
 ```
 
-The chosen tier is recorded in `.claude/template.json`. `claude-code sync`
+The chosen tier is recorded in `.claude/template.json`. `cct sync`
 **reports** permission-profile drift but never re-applies it — switching a
 safety boundary is always an explicit act.
 

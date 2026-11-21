@@ -32,7 +32,7 @@ echo "=== cct CLI ==="
 
 assert "cct is executable" "[[ -x '$CCT' ]]"
 HELP=$(bash "$CCT" help)
-for c in start features list routing doctor config home help; do
+for c in start init templates sync build permissions playwright features list routing doctor config home help; do
   assert "help documents: $c" "grep -qE '^  $c ' <<<\"\$HELP\""
 done
 # Capture, then grep: these commands exit nonzero by design, and under
@@ -44,6 +44,8 @@ assert "an unknown command suggests the real ones" \
   "grep -q 'Did you mean: features' <<<\"\$UNKNOWN_OUT\""
 assert "an unknown command suggests start too" \
   "grep -q ', start, ' <<<\"\$UNKNOWN_OUT\""
+assert "an unknown command suggests the launcher's commands too" \
+  "grep -q 'start, init, templates, sync, build, permissions, playwright, help' <<<\"\$UNKNOWN_OUT\""
 
 # ── start: a harness session is a cct action (#410) ──────────
 # A mock launcher records its argv; cct must hand everything through
@@ -81,6 +83,32 @@ assert "start without a launcher names the install command" \
   "grep -q 'setup.sh --claude-code' <<<\"\$NOLAUNCHER_OUT\""
 assert "start without a launcher says it wants the installed one, not the checkout" \
   "grep -q 'INSTALLED launcher' <<<\"\$NOLAUNCHER_OUT\""
+
+# ── the launcher's other commands, under the cct name ────────
+# Each hands its arguments to the same installed launcher, behind the
+# launcher's own command name; `cct templates` is the launcher's `list`,
+# because `cct list` is the feature index.
+: > "$START_LOG"
+while IFS='|' read -r cct_args launcher_argv; do
+  # shellcheck disable=SC2086  # the fixture's words are split on purpose
+  PASS_RC=0; PATH="$START_BIN:$PATH" START_LOG="$START_LOG" bash "$CCT" $cct_args </dev/null || PASS_RC=$?
+  assert "cct $cct_args runs: claude-code $launcher_argv" \
+    "[[ '$PASS_RC' == '0' ]] && grep -qxF 'LAUNCHER-ARGV: $launcher_argv' '$START_LOG'"
+done <<'PAIRS'
+init ml-rag /tmp/demo-rag --permissions balanced|init ml-rag /tmp/demo-rag --permissions balanced
+sync /tmp/demo-rag --dry-run|sync /tmp/demo-rag --dry-run
+build demo-feature --dry-run|build demo-feature --dry-run
+permissions balanced /tmp/demo-rag|permissions balanced /tmp/demo-rag
+playwright /tmp/demo-rag|playwright /tmp/demo-rag
+templates|list
+PAIRS
+PASS_RC=0; PATH="$START_BIN:$PATH" START_LOG="$START_LOG" MOCK_LAUNCHER_RC=3 bash "$CCT" init ml-rag /tmp/demo-rag || PASS_RC=$?
+assert "init returns the launcher's exit code" "[[ '$PASS_RC' == '3' ]]"
+NOINIT_OUT=$(HOME="$EMPTY_HOME" PATH="/usr/bin:/bin" bash "$CCT" init ml-rag /tmp/demo-rag 2>&1 || true)
+PASS_RC=0; HOME="$EMPTY_HOME" PATH="/usr/bin:/bin" bash "$CCT" init ml-rag /tmp/demo-rag >/dev/null 2>&1 || PASS_RC=$?
+assert "init without an installed launcher exits 2" "[[ '$PASS_RC' == '2' ]]"
+assert "init without a launcher names itself and the install command" \
+  "grep -q 'cct init: the claude-code launcher is not installed' <<<\"\$NOINIT_OUT\" && grep -q 'setup.sh --claude-code' <<<\"\$NOINIT_OUT\""
 rm -r "$START_BIN" "$START_HOME" "$EMPTY_HOME"; rm "$START_LOG"
 
 # ── doctor reports the CCT home and what the legacy home still serves (#411) ──

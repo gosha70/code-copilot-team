@@ -38,4 +38,4 @@ Each template ships a `.github/workflows/` file so CI is wired up the moment the
 
 **Dual-branch trigger.** All workflows fire on push to `master` or `main` — whichever convention a project uses.
 
-**Bootstrap path.** `claude-code init <type>` copies `.github/workflows/` into the new project automatically. `claude-code sync` keeps the workflow file up to date alongside `remediation.json` and commands.
+**Bootstrap path.** `cct init <type>` copies `.github/workflows/` into the new project automatically. `cct sync` keeps the workflow file up to date alongside `remediation.json` and commands.
