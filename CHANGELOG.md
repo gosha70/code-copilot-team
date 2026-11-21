@@ -376,6 +376,20 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   cct@code-copilot-team`. Copies installed under the earlier
   `code-copilot-team` name keep working until uninstalled (#410).
 
+### Security
+
+- **Studio dependency advisories cleared.** Three moderate advisories
+  affect `next` up to 15.5.28: an SVG rejection bypass in image
+  optimization (GHSA-7qx7-33qx-rqx2), HttpOnly cookie exposure through an
+  internal response header on Edge runtime routes (GHSA-f3mh-rxg3-f5g2),
+  and cross-client response injection in self-hosted applications that
+  forward fetched responses (GHSA-pc58-hwjq-p385). `next` moves 15.5.28 →
+  15.5.29. A fourth, quadratic-time selector parsing in the build-time
+  `postcss-selector-parser` below 6.1.5 (GHSA-rj75-hqrm-r3gf), is cleared
+  by 6.1.6. `npm audit` in `studio/` now reports no advisory, runtime or
+  build-time. An existing Studio install keeps the old versions until
+  `npm install` is run in `studio/` again.
+
 ## [2.0.0]
  The harness learned to run unattended, to route work across models, and to
 show its own work. Six real unattended builds shaped the autonomy engine — and
