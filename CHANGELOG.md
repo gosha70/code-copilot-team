@@ -196,9 +196,12 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   Settings card titled "Effective per-project redaction" lists the mode each
   project's stored sessions were recorded under, which is not the mode in
   effect once a project is tightened or opted out. It is now "Recorded
-  per-project redaction", with a "Recorded redaction" column, and its text
-  says a tightening or an opt-out applies at once to everything sent off the
-  machine, where it used to say the change affects future ingests (#488).
+  per-project redaction", with a "Recorded redaction" column. Its text used
+  to say a config change affects future ingests. It now says that tightening
+  a project's mode or opting it out applies at once to everything sent off
+  the machine, that stored previews change only on a full re-ingest, and
+  that an opted-out project's stay in the store until you start a new one
+  (#488).
 - **Session Analytics: a project's settings apply under its `project_ids`
   id and under its repo path.** A session's settings were looked up under
   one key: its git repo root whenever the directory was a checkout, and a

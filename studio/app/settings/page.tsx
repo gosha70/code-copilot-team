@@ -896,8 +896,8 @@ export default function SettingsPage() {
         <p className="text-xs text-slate-600 mb-3">
           Read-only — the redaction mode each project’s already-ingested sessions were recorded
           with. Tightening a project’s mode or opting it out in the per-project config file
-          applies at once to everything sent off the machine; stored previews change only on a
-          re-ingest.
+          applies at once to everything sent off the machine. Stored previews change only on a
+          full re-ingest, and an opted-out project’s stay in the store until you start a new one.
         </p>
         {projectsError ? (
           <ErrorNote error={projectsError} />
