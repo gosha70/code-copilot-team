@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<!-- CCT 2.1.0 release map: a snapshot of the 2.1.0 release in progress (PR #492), with what is new, how to upgrade, and the steps left. Open this file in a browser: no build, no server. Fonts come from
+<!-- CCT 2.1.0 release map: how the 2.1.0 release was made (PR #492, tag v2.1.0), what is new, how to upgrade, and what comes after. Open this file in a browser: no build, no server. Fonts come from
      Google Fonts and fall back to system fonts offline. The logo is cct-logo.png beside it. -->
 <style>body { margin: 0; } img { max-width: 100%; } [hidden] { display: none !important; }</style>
 <title>CCT 2.1.0 Release Map</title>
@@ -344,18 +344,18 @@ td.new code { color: var(--ink); }
     <div class="brand">
       <img class="logo" src="cct-logo.png" alt="Code Copilot Team logo: a husky at a ship's wheel" width="68" height="68">
       <div class="brand-text">
-        <p class="eyebrow">Code Copilot Team · release in progress</p>
+        <p class="eyebrow">Code Copilot Team · released 21 Nov 2026</p>
         <h1>CCT <span class="ver">2.1.0</span> release map</h1>
       </div>
     </div>
-    <p class="lede">What 2.1.0 changes for you, how a session goes on it, how to upgrade from 2.0, and where the release stands. Click any box for the details.</p>
+    <p class="lede">What 2.1.0 changes for you, how a session goes on it, how to upgrade from 2.0, and how the release was made. Click any box for the details.</p>
     <div class="verdict" aria-label="Release status at a glance">
-      <span class="pill"><span class="dot done"></span><span><b>PR #492</b> <span class="mono">head 7bee4b6</span></span></span>
-      <span class="pill"><span class="dot done"></span><span>Readiness <b>READY</b> on 32ccd31 · re-run due</span></span>
-      <span class="pill"><span class="dot done"></span><span>CI <b>15 checks pass</b> on 7bee4b6 · 2 wait for the label</span></span>
-      <span class="pill"><span class="dot you"></span><span>Waiting for you: <b>merge #495 → label → merge → tag</b></span></span>
+      <span class="pill"><span class="dot done"></span><span><b>v2.1.0</b> published · Latest</span></span>
+      <span class="pill"><span class="dot done"></span><span>Tag <span class="mono">v2.1.0 → 86b8384</span></span></span>
+      <span class="pill"><span class="dot done"></span><span>Readiness <b>READY</b> · 155 passed · 0 failed</span></span>
+      <span class="pill"><span class="dot done"></span><span>Release workflow <b>passed</b></span></span>
     </div>
-    <p class="foot">Snapshot of 21 Nov 2026 at #492's head 7bee4b6, read from GitHub and the release branch. It does not update by itself.</p>
+    <p class="foot">Final state, 21 Nov 2026: v2.1.0 was published from 86b8384, the commit the readiness check and the review approved. It does not update by itself.</p>
   </div>
 </header>
 
@@ -423,15 +423,21 @@ td.new code { color: var(--ink); }
             return '<div class="prgroup"><b>' + g[0] + ' · ' + g[1].length + '</b><div class="nums">' + g[1].map(pr).join(" ") + '</div></div>';
           }).join("");
       } },
-    { row: "done", id: "pr", title: "Release PR #492", sub: "version 2.0.0 → 2.1.0, and the CHANGELOG", detail: function () {
+    { row: "done", id: "pr", title: "Release PR #492", sub: "version 2.0.0 → 2.1.0 and the CHANGELOG · merged", detail: function () {
         return '<p>Against master it changes 12 files, and nothing else: the version, the files generated from it, and the release notes.</p>' +
           sec("Version 2.0.0 → 2.1.0 in five carriers", ul(["<code>package.json</code> and <code>package-lock.json</code>", "<code>adapters/pi/package.json</code>, which the release scripts treat as the authority", "<code>adapters/pi/bin/pi-code</code>", "the Claude Code plugin manifest"])) +
           sec("Follows from the version", ul(["The SBOM and <code>docs/features.md</code> are regenerated", "The LLM catalog feature is marked <code>since: v2.1.0</code>", "The README, the install guide and the Codespace tour name v2.1.0"])) +
           sec("CHANGELOG [2.1.0]", '<p>A summary, 8 highlights and 13 upgrade notes, then 18 Added, 21 Fixed, 6 Changed and 2 Security entries.</p>') +
-          sec("Commits", ul(['<code>25a76c3</code> release: 2.1.0', '<code>1144c1a</code> merge of master, bringing in ' + pr(494), '<code>32ccd31</code> the 2.1.0 notes name the new cct commands', '<code>7bee4b6</code> the 2.1.0 upgrade notes say what migrate and permissions do'])) +
+          sec("Commits", ul(['<code>25a76c3</code> release: 2.1.0', '<code>1144c1a</code> merge of master, bringing in ' + pr(494), '<code>32ccd31</code> the 2.1.0 notes name the new cct commands', '<code>7bee4b6</code> the 2.1.0 upgrade notes say what migrate and permissions do', '<code>86b8384</code> merge of master, bringing in ' + pr(495)])) +
           '<p><a href="' + REPO + '/pull/492" target="_blank" rel="noopener">Open #492 on GitHub</a></p>';
       } },
-    { row: "done", id: "gate", title: "READY", sub: "on 32ccd31: 155 passed, 0 failed · re-run due", big: true, detail: function () {
+    { row: "done", id: "fixes", title: "Review fixes", sub: "two upgrade notes and a guide · 7bee4b6, #495", detail: function () {
+        return '<p>Two external reviews of <code>32ccd31</code> found two upgrade notes that said less than ships. Both are corrected in <code>7bee4b6</code>:</p>' +
+          ul(['<b>Moving the user home.</b> On the same filesystem <code>cct home migrate</code> moves each entry; with <code>CCT_HOME</code> on another filesystem it copies each entry, keeps the legacy one and exits 1. The note also says to refresh every installed adapter (with <code>--pi</code> for <code>pi-code</code>) and to close running <code>pi-code</code> sessions first, because the 2.0 <code>pi-code</code> would recreate the old home.',
+              '<b>Permission tiers.</b> <code>cct permissions</code> accepts only <code>default</code>, <code>balanced</code> and <code>relaxed</code>. A new note says what to do with a custom tier instead.']) +
+          '<p>The guide paragraph that said the cross-filesystem copy is deleted is fixed in ' + pr(495) + ', merged as <code>4214e7c</code> and brought into this branch by the merge <code>86b8384</code>.</p>';
+      } },
+    { row: "done", id: "gate", title: "READY", sub: "readiness check: 155 passed, 0 failed, 0 warnings", big: true, detail: function () {
         var max = 70;
         var bars = LAYERS.map(function (l) {
           var w = Math.max(4, Math.round(Math.min(l[1], max) / max * 100));
@@ -441,69 +447,55 @@ td.new code { color: var(--ink); }
           return '<label class="check"><input type="checkbox" id="manual-' + i + '" data-manual="' + i + '"><span>' + esc(m) + '</span></label>';
         }).join("");
         return '<p><code>tests/test-release-readiness.sh --version 2.1.0 --require-browser</code> on the committed tree, with its own API, Studio and store:</p>' +
-          '<div class="verdict-block">passed:   155\nfailed:   0\nwarnings: 0\ncommit:   32ccd31272e9d2d8bdaeab3d95b4160b1f388700\ntree:     clean\n\n<span class="ready">READY for the manual items above.</span></div>' +
-          '<p>This verdict is for <code>32ccd31</code>. The head has moved to <code>7bee4b6</code>, and master gains ' + pr(495) + ' before the release, so the check runs again on the head that results. This page will then show that verdict.</p>' +
+          '<div class="verdict-block">passed:   155\nfailed:   0\nwarnings: 0\ncommit:   86b8384600e98403b15c9435e0471fbe327cf22b\ntree:     clean\n\n<span class="ready">READY for the manual items above.</span></div>' +
+          '<p>Earlier verdicts, on <code>25a76c3</code> and <code>32ccd31</code>, were also READY with the same counts.</p>' +
           sec("Passed checks by layer", '<div class="bars">' + bars + '</div>') +
           sec("Recorded, not failed", '<p>The Sessions page scrolls sideways on narrow screens: by 89px at 768px and by 467px at 390px. Its layout is unchanged since v2.0.0.</p>') +
           sec("Left for a person", checks + '<p class="foot">Ticks are kept in this browser only.</p>');
       } },
-    { row: "done", id: "fixes", title: "Review fixes", sub: "two upgrade notes corrected · 7bee4b6", detail: function () {
-        return '<p>Two external reviews of <code>32ccd31</code> found two upgrade notes that said less than ships. Both are corrected in <code>7bee4b6</code>:</p>' +
-          ul(['<b>Moving the user home.</b> On the same filesystem <code>cct home migrate</code> moves each entry; with <code>CCT_HOME</code> on another filesystem it copies each entry, keeps the legacy one and exits 1. The note also says to refresh every installed adapter (with <code>--pi</code> for <code>pi-code</code>) and to close running <code>pi-code</code> sessions first, because the 2.0 <code>pi-code</code> would recreate the old home.',
-              '<b>Permission tiers.</b> <code>cct permissions</code> accepts only <code>default</code>, <code>balanced</code> and <code>relaxed</code>. A new note says what to do with a custom tier instead.']) +
-          '<p>The guide paragraph that said the cross-filesystem copy is deleted is fixed in ' + pr(495) + ', which merges before #492.</p>';
+    { row: "done", id: "ci", title: "18 checks pass", sub: "CI on 86b8384, review gates included", detail: function () {
+        return '<p>Every check on <code>86b8384</code> passed: the 15 CI checks, the two review-gate checks once the label went on, and <code>release</code>, the release workflow run on the tagged commit.</p>' +
+          sec("Passing", ul(CI_CHECKS.concat(["Review gate", "External review on record", "release"]).map(function (c) { return '<code>' + esc(c) + '</code>'; })));
       } },
-    { row: "done", id: "ci", title: "15 checks pass", sub: "CI on 7bee4b6 · 2 wait for your label", detail: function () {
-        return '<p>Every check on the head passes. The two review-gate checks are the only red ones, and they wait for your label.</p>' +
-          sec("Passing", ul(CI_CHECKS.map(function (c) { return '<code>' + esc(c) + '</code>'; }))) +
-          sec("Waiting for the label", ul(["<code>Review gate</code>", "<code>External review on record</code>"]));
-      } },
-    { row: "you", id: "docs495", title: "Merge #495 first", sub: "the cct home guide fix", detail: function () {
-        return '<p>' + pr(495) + ' corrects one paragraph of <code>docs/cct-home.md</code> and one code comment: across filesystems, <code>migrate</code> keeps the legacy copy. Documentation only.</p>' +
-          '<p>Once it merges, master is merged into the release branch, the readiness check runs on that committed head, and #492\'s verdict and this page are updated. The label then goes on that exact head.</p>';
-      } },
-    { row: "you", id: "review", title: "Add the reviewed label", sub: "the required review status", detail: function () {
-        return '<p>Adding <code>reviewed</code> makes the review-gate workflow set the commit status <code>External review on record</code> on the PR\'s head. A new commit drops the label, and the status fails again for the new head.</p>' +
+    { row: "you", state: "done", id: "review", title: "Labelled reviewed", sub: "on 86b8384, after the re-review", detail: function () {
+        return '<p>The reviewer re-reviewed <code>86b8384</code>, and the <code>reviewed</code> label went on that head. The review-gate workflow then set the commit status <code>External review on record</code> on it. A new commit would have dropped the label.</p>' +
           sec("What master requires", ul(["<code>CodeQL</code>", "<code>External review on record</code>", "<code>pi-tests</code>", "<code>sync-check</code>"])) +
           '<p class="foot">These are the required checks of the <code>master-protection</code> ruleset.</p>';
       } },
-    { row: "you", id: "merge", title: "Merge #492", sub: "publishes nothing by itself", detail: function () {
-        return '<p>Merging does not publish anything. From then on the README and the install guide on master tell new users to clone <code>v2.1.0</code>, so the tag should follow soon after.</p>';
+    { row: "you", state: "done", id: "merge", title: "Merged #492", sub: "2a60217 · 22:31 UTC", detail: function () {
+        return '<p>Merged at 22:31:03 UTC with a merge commit, <code>2a60217</code>, so <code>86b8384</code> stays in master\'s history. The README and the install guide on master now tell new users to clone <code>v2.1.0</code>.</p>';
       } },
-    { row: "you", id: "tag", title: "Push the v2.1.0 tag", sub: "this is what publishes", detail: function () {
-        return '<p>Pushing a <code>v*.*.*</code> tag starts the release workflow. For 2.0.0 the tag was a lightweight tag on the release branch\'s head (<code>e1beb42</code>), pushed before #388 merged, so master never named a tag that did not exist. Doing the same here:</p>' +
-          cmd('git fetch origin\ngit tag v2.1.0 "$(gh pr view 492 --json headRefOid --jq .headRefOid)"\ngit push origin v2.1.0') +
-          '<p>That tags whatever #492\'s head is when you run it, so run it after the last push to #492. The head was <code>7bee4b6</code> in this snapshot and moves again when master is merged in.</p>' +
-          '<p>Tagging the merge commit after you merge works too: both carry version 2.1.0. <code>prepare-release.sh</code> refuses a tag that disagrees with <code>adapters/pi/package.json</code>, and a tag that would move.</p>';
+    { row: "you", state: "done", id: "tag", title: "Tagged v2.1.0", sub: "86b8384 · lightweight", detail: function () {
+        return '<p>A lightweight tag on <code>86b8384</code>, the head the readiness check and the review approved, pushed right after the merge. Pushing it started the release workflow.</p>' +
+          sec("The steps, for the next release", cmd("git fetch origin pull/492/head\ngit tag v2.1.0 FETCH_HEAD\ngit rev-parse --short v2.1.0     # must print the approved head\ngit push origin v2.1.0")) +
+          '<p><code>prepare-release.sh</code> refuses a tag that disagrees with <code>adapters/pi/package.json</code>, and a tag that would move. For 2.0.0 the tag went on the release branch\'s head (<code>e1beb42</code>) before #388 merged.</p>';
       } },
-    { row: "next", id: "workflow", title: "Release workflow", sub: "release.yml checks, then assembles", detail: function () {
-        return '<p>Started by the tag, on GitHub\'s runners:</p>' +
-          '<ol><li>Check out with full history and tags, then <code>npm ci</code>.</li>' +
-          '<li>Capability registry and generated docs are valid and current.</li>' +
-          '<li>The committed SBOM is up to date.</li>' +
-          '<li>The Pi runtime suite and the Pi adapter suite pass.</li>' +
-          '<li><code>prepare-release.sh 2.1.0</code> writes <code>SHA256SUMS</code> (101 files) and the release notes from the [2.1.0] section (549 lines in the local dry run).</li>' +
+    { row: "next", state: "done", id: "workflow", title: "Release workflow passed", sub: "run 44957184425 · 31 s", detail: function () {
+        return '<p>Started by the tag at 22:31:28 UTC on <code>86b8384</code>. Every step passed (<a href="' + REPO + '/actions/runs/44957184425" target="_blank" rel="noopener">run 44957184425</a>):</p>' +
+          '<ol><li>Checked out with full history and tags, then <code>npm ci</code>.</li>' +
+          '<li>Capability registry and generated docs: valid and current.</li>' +
+          '<li>The committed SBOM: up to date.</li>' +
+          '<li>The Pi runtime suite and the Pi adapter suite: passed.</li>' +
+          '<li><code>prepare-release.sh 2.1.0</code>: <code>SHA256SUMS</code> for 101 files, and 563 lines of release notes from the [2.1.0] section, the same as the local run.</li>' +
           '<li><code>gh release create v2.1.0</code> with <code>SHA256SUMS</code> and <code>sbom.cdx.json</code>.</li></ol>' +
           '<p>There is no registry push. The tag is the install path.</p>';
       } },
-    { row: "next", id: "published", title: "GitHub Release v2.1.0", sub: "notes, checksums, SBOM", detail: function () {
-        return '<p>v2.1.0 appears under Releases with the CHANGELOG section as its notes and two assets, <code>SHA256SUMS</code> and <code>sbom.cdx.json</code>, the same two that v2.0.0 has.</p>' +
-          '<p>The Quick Start\'s clone command starts working:</p>' + cmd("git clone --branch v2.1.0 https://github.com/gosha70/code-copilot-team.git");
+    { row: "next", state: "done", id: "published", title: "GitHub Release v2.1.0", sub: "published 22:31 UTC · Latest", detail: function () {
+        return '<p><a href="' + REPO + '/releases/tag/v2.1.0" target="_blank" rel="noopener">v2.1.0</a> is published and marked Latest. Its notes are the CHANGELOG section, identical to the local release notes, and it carries two assets, <code>SHA256SUMS</code> (10,990 bytes) and <code>sbom.cdx.json</code> (2,020 bytes), the same two that v2.0.0 has.</p>' +
+          '<p>The Quick Start\'s clone command now works:</p>' + cmd("git clone --branch v2.1.0 https://github.com/gosha70/code-copilot-team.git");
       } },
-    { row: "later", id: "after", title: "Queued for after", sub: "#487 · the docs site's alerts", detail: function () {
-        return sec("Waiting on the release", ul([
+    { row: "later", id: "after", title: "Queued for after", sub: "#487 · #497 · the docs site's alerts", detail: function () {
+        return sec("Next", ul([
           iss(487) + ': <code>export</code> honours a project\'s later opt-out or tightening, with a flag for a raw export. First deliverable: a lightweight plan.',
-          '29 open Dependabot alerts in <code>site/package-lock.json</code>, the docs site\'s build: 12 high, 13 medium, 4 low.'
-        ])) +
-        sec("Known and harmless", ul([
-          'After the tag, a local run of the Pi adapter suite fails one assertion until the next version bump. It runs <code>prepare-release.sh</code> without a version, and the script refuses to move a released tag. CI\'s checkout has no tags and passes.'
+          iss(497) + ': since the tag, a local run of the Pi adapter suite fails one assertion until the next version bump: it runs <code>prepare-release.sh</code> without a version, and the script refuses to move a released tag. CI and the release run pass. Minor.',
+          '29 open Dependabot alerts in <code>site/package-lock.json</code>, the docs site\'s build: 12 high, 13 medium, 4 low (as of 21 Nov).'
         ]));
       } }
   ];
   var ROWS = [
     ["done", "Done", "Built, checked and green"],
-    ["you", "Your steps", "Nothing happens until you act"],
-    ["next", "What the tag starts", "Automatic once the tag is pushed"],
+    ["you", "Your steps", "Labelled, merged and tagged", "done"],
+    ["next", "What the tag started", "The release workflow published it", "done"],
     ["later", "After the release", "Deliberately held back"]
   ];
 
@@ -687,20 +679,20 @@ td.new code { color: var(--ink); }
     { id: "commands", label: "Old → new commands" },
     { id: "tools", label: "Tool support" }
   ];
-  var DEFAULT_SELECTION = { status: "gate", "whats-new": "llm", parts: "cct", "first-session": "f1", upgrade: null, commands: null, tools: "llm-catalog" };
+  var DEFAULT_SELECTION = { status: "published", "whats-new": "llm", parts: "cct", "first-session": "f1", upgrade: null, commands: null, tools: "llm-catalog" };
   var panelFor = {};
 
   function boxAttrs(id) { return 'type="button" data-select="' + id + '" aria-pressed="false"'; }
 
   function renderStatus() {
-    var h = '<div class="view-head"><h2>Where 2.1.0 stands</h2><p class="note">The readiness check passed on 32ccd31. Review then corrected two upgrade notes (7bee4b6) and a guide paragraph (#495, which merges first), so the check runs again on the head that results. After that, three steps are yours, and the tag starts the rest.</p></div><div class="rows">';
+    var h = '<div class="view-head"><h2>How 2.1.0 was released</h2><p class="note">Every step is done. The readiness check and CI passed on 86b8384, #492 merged, the v2.1.0 tag started the release workflow, and the GitHub Release is published. A few items wait for after the release.</p></div><div class="rows">';
     ROWS.forEach(function (r) {
       var items = STAGES.filter(function (s) { return s.row === r[0]; });
-      h += '<div class="row"><div class="row-label">' + stateChip(r[0]) + '<span class="count">' + r[2] + '</span></div><div class="flow">';
+      h += '<div class="row"><div class="row-label">' + stateChip(r[3] || r[0]) + '<span class="count">' + r[2] + '</span></div><div class="flow">';
       items.forEach(function (s, i) {
         if (i > 0) h += '<span class="arrow" aria-hidden="true">→</span>';
-        h += '<button class="box state-' + s.row + '" ' + boxAttrs(s.id) + '><span class="' + (s.big ? "big" : "t") + '">' + esc(s.title) + '</span><span class="s">' + esc(s.sub) + '</span></button>';
-        panelFor[s.id] = { chip: stateChip(s.row), title: s.title, body: s.detail };
+        h += '<button class="box state-' + (s.state || s.row) + '" ' + boxAttrs(s.id) + '><span class="' + (s.big ? "big" : "t") + '">' + esc(s.title) + '</span><span class="s">' + esc(s.sub) + '</span></button>';
+        panelFor[s.id] = { chip: stateChip(s.state || s.row), title: s.title, body: s.detail };
       });
       h += '</div></div>';
     });

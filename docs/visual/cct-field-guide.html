@@ -357,7 +357,7 @@ td.num.hi { color: var(--ok); font-weight: 500; }
       <span class="pill"><span class="dot ok"></span><span>Can block at runtime: <b>Claude Code · Pi · Codex</b></span></span>
       <span class="pill"><span class="dot you"></span><span>Harness Studio runs <b>on your machine</b></span></span>
     </div>
-    <p class="foot">Written on 21 Nov 2026 from the repository's master branch (16f6913), which carries the 2.1.0 content. Every command is one the README, the guides or <span class="mono">cct help</span> shows.</p>
+    <p class="foot">Describes CCT 2.1.0, released 21 Nov 2026 (tag v2.1.0). Every command is one the README, the guides or <span class="mono">cct help</span> shows.</p>
   </div>
 </header>
 
@@ -739,8 +739,8 @@ td.num.hi { color: var(--ok); font-weight: 500; }
     { id: "r1", n: 1, t: "Install and open a session", s: "Rules load in every session; hooks refuse risky edits and ask before commit or push.", k: "cct start ~/projects/my-app",
       body: function () {
         return sec("You get", ul(["The global manifest and four rules in every session, without asking for them.", "Hooks that refuse edits to " + c(".env") + " and lock files, and stop the first commit or push until you agree.", "Type checks after edits and the test suite when the agent stops."])) +
-          sec("Do this", cmd("git clone https://github.com/gosha70/code-copilot-team.git\ncd code-copilot-team\n./scripts/setup.sh --claude-code\ncct start ~/projects/my-app") +
-            p("Once the " + c("v2.1.0") + " tag is published, add " + c("--branch v2.1.0") + " to the clone to pin the release.")) +
+          sec("Do this", cmd("git clone --branch v2.1.0 https://github.com/gosha70/code-copilot-team.git\ncd code-copilot-team\n./scripts/setup.sh --claude-code\ncct start ~/projects/my-app") +
+            p(c("--branch v2.1.0") + " pins the release; leave it out to follow master, which is in development.")) +
           sec("Expect", p("A session opens with your git branch in the status line, and the rules load without being asked for.")) +
           sec("Verify", p("Ask the agent \"which rules are loaded?\". It names the four global rules. Ask it to edit " + c(".env") + " and protect-files refuses.")) +
           sec("If not", cmd("cct doctor\n./scripts/setup.sh --sync --claude-code") + p(c("cct doctor") + " names what is missing: a tool, the provider profile, or an adapter.")) +
@@ -748,10 +748,10 @@ td.num.hi { color: var(--ok); font-weight: 500; }
       } },
     { id: "r2", n: 2, t: "Start a project from a template", s: "A stack CLAUDE.md with an agent team, commands and a CI workflow.", k: "cct init ml-rag ~/projects/my-rag-app",
       body: function () {
-        return sec("Do this", cmd("cct templates                                     # the eleven templates\ncct init ml-rag ~/projects/my-rag-app\ncct init web-dynamic ./my-app --permissions balanced\ncct start ~/projects/my-rag-app")) +
+        return sec("Do this", cmd("cct templates                                     # the eleven stack templates (ui-harness too, after a --sync)\ncct init ml-rag ~/projects/my-rag-app\ncct init web-dynamic ./my-app --permissions balanced\ncct start ~/projects/my-rag-app")) +
           sec("Expect", p("The project gets a " + c("CLAUDE.md") + " with the stack's agent team, slash commands, and a CI workflow that skips cleanly until you add a toolchain file. Its Next steps line reads " + c("Run: cct start <dir>") + ".")) +
           sec("Later", cmd("cct sync ~/projects/my-rag-app --dry-run\ncct sync ~/projects/my-rag-app") + p("Sync never overwrites your " + c("CLAUDE.md") + ".")) +
-          sec("Templates", p("ml-rag, ml-langchain, ml-app, ml-utils, ml-n8n, java-enterprise, java-tooling, gradle-plugin, web-static, web-dynamic, domain-pack. The " + c("ui-harness") + " bundle adds a design harness to any web project.")) +
+          sec("Templates", p("ml-rag, ml-langchain, ml-app, ml-utils, ml-n8n, java-enterprise, java-tooling, gradle-plugin, web-static, web-dynamic, domain-pack. The " + c("ui-harness") + " bundle adds a design harness to any web project; after a " + c("--sync") + ", " + c("cct templates") + " lists it as a twelfth row.")) +
           more([doc("docs/project-templates.md", "Project templates")]);
       } },
     { stage: "Everyday work", stageNote: "add these as you need them" },
