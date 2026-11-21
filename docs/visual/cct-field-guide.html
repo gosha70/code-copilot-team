@@ -1,0 +1,1265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- CCT Field Guide: how CCT fits together, how to grow from a first session to unattended builds, and how to watch and tune it in Harness Studio. Open this file in a browser: no build, no server. Fonts come from
+     Google Fonts and fall back to system fonts offline. The logo is cct-logo.png beside it. -->
+<style>body { margin: 0; } img { max-width: 100%; } [hidden] { display: none !important; }</style>
+<title>CCT Field Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: the release map's sibling. A header, a sticky tab rail, then a work area with a
+   detail panel on the right (below the work area on phones). The "map" tab is a stack of
+   bands joined by the command that carries things from one band to the next. */
+:root {
+  /* SAIL palette, sampled from the reference: foam #ebf6f2, mist #c5dee3, sea #5d9cad,
+     deep sea #305f71, navy #254550, sail coral #e19573. */
+  --bg: #ebf6f2;
+  --surface: #ffffff;
+  --surface-2: #f4faf8;
+  --ink: #254550;
+  --muted: #4b6b78;
+  --line: #c5dee3;
+  --accent: #305f71;
+  --accent-soft: #dcecef;
+  --sea: #5d9cad;
+  --sail: #e19573;
+  --sail-line: #d27a55;
+  --ok: #305f71;
+  --ok-soft: #dcecef;
+  --you: #a4532e;
+  --you-soft: #fbeae2;
+  --warn: #a4532e;
+  --warn-soft: #fbeae2;
+  --next: #4b6b78;
+  --next-soft: #e3eef1;
+  --code-bg: #e6f2f1;
+  --navy: #254550;
+  --navy-2: #2d5361;
+  --navy-line: #46707e;
+  --navy-ink: #ebf6f2;
+  --navy-muted: #b9d3da;
+  --nav: #1b333d;
+  --nav-2: #2b4e5b;
+  --nav-ink: #ebf6f2;
+  --nav-muted: #a9c6cf;
+  --shadow: 0 1px 2px rgba(37, 69, 80, 0.07), 0 4px 14px rgba(37, 69, 80, 0.06);
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --radius: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #10222a; --surface: #172e38; --surface-2: #1c3743; --ink: #ebf6f2; --muted: #9dbac3;
+    --line: #2a4854; --accent: #8fc7d6; --accent-soft: #1d3e4a; --sea: #6faebf; --sail: #e8a282; --sail-line: #e8a282;
+    --ok: #8fc7d6; --ok-soft: #1b3b46; --you: #f2b596; --you-soft: #3b2b25; --warn: #f2b596; --warn-soft: #3b2b25;
+    --next: #93aeb8; --next-soft: #20363f; --code-bg: #0e1e25; --nav: #0b1a20; --nav-2: #1d3a46; --nav-ink: #ebf6f2;
+    --nav-muted: #8fb0ba; --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 14px rgba(0, 0, 0, 0.25);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #10222a; --surface: #172e38; --surface-2: #1c3743; --ink: #ebf6f2; --muted: #9dbac3;
+  --line: #2a4854; --accent: #8fc7d6; --accent-soft: #1d3e4a; --sea: #6faebf; --sail: #e8a282; --sail-line: #e8a282;
+  --ok: #8fc7d6; --ok-soft: #1b3b46; --you: #f2b596; --you-soft: #3b2b25; --warn: #f2b596; --warn-soft: #3b2b25;
+  --next: #93aeb8; --next-soft: #20363f; --code-bg: #0e1e25; --nav: #0b1a20; --nav-2: #1d3a46; --nav-ink: #ebf6f2;
+  --nav-muted: #8fb0ba; --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 14px rgba(0, 0, 0, 0.25);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.55;
+}
+body::before {
+  content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px);
+  z-index: 10; background: var(--navy);
+}
+a { color: var(--accent); }
+a:hover { text-decoration-thickness: 2px; }
+code, pre, kbd { font-family: var(--font-mono); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.wrap {
+  max-width: 1240px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+
+/* header */
+/* the navy hull: the husky at the helm, a ship's wheel turning behind it */
+.top { position: relative; overflow: hidden; background: var(--navy); color: var(--navy-ink); }
+.top .wrap { position: relative; z-index: 1; padding-block: 22px 18px; display: grid; gap: 14px; }
+.brand { display: flex; align-items: center; gap: 16px; min-width: 0; }
+.brand .logo { width: 68px; height: 68px; flex: none; }
+.brand-text { display: grid; gap: 4px; min-width: 0; }
+.wheel-mark {
+  position: absolute; z-index: 0; right: -90px; top: 50%; width: 420px; height: 420px;
+  color: var(--sea); opacity: 0.2; pointer-events: none;
+  transform: translateY(-50%) rotate(8deg);
+  animation: helm 1.8s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+@keyframes helm { from { transform: translateY(-50%) rotate(-40deg); } to { transform: translateY(-50%) rotate(8deg); } }
+@media (max-width: 640px) {
+  .wheel-mark { width: 280px; height: 280px; right: -120px; top: 34%; }
+  .brand { gap: 12px; }
+  .brand .logo { width: 52px; height: 52px; }
+}
+.top .eyebrow, .top .lede, .top .foot { color: var(--navy-muted); }
+.top h1 { color: var(--navy-ink); }
+.top .pill { background: var(--navy-2); border-color: var(--navy-line); color: var(--navy-ink); }
+.top .pill .dot { background: var(--navy-muted); }
+.top .pill .dot.you { background: var(--sail); }
+.eyebrow {
+  font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--muted); margin: 0;
+}
+h1 {
+  font-family: var(--font-display); font-weight: 700; font-size: clamp(28px, 4.6vw, 44px);
+  line-height: 1.05; letter-spacing: -0.01em; margin: 0; text-wrap: balance;
+}
+h1 .ver { color: var(--sail); }
+.lede { margin: 0; max-width: 72ch; color: var(--muted); }
+.facts { display: flex; flex-wrap: wrap; gap: 8px; }
+.pill {
+  display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line);
+  background: var(--surface-2); border-radius: 999px; padding: 4px 11px; font-size: 13px;
+}
+.pill b { font-weight: 600; }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--next); }
+.dot.ok { background: var(--ok); }
+.dot.accent { background: var(--accent); }
+.dot.you { background: var(--sail); }
+.mono { font-family: var(--font-mono); font-size: 0.92em; }
+.foot { color: var(--muted); font-size: 13px; margin: 0; }
+
+/* tabs */
+.tabs {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5;
+  background: var(--surface); border-bottom: 1px solid var(--line);
+}
+.tablist { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: thin; }
+.tab {
+  appearance: none; border: 0; background: none; color: var(--muted); cursor: pointer;
+  font-family: var(--font-display); font-weight: 600; font-size: 15px; letter-spacing: 0.01em;
+  padding: 12px 14px 11px; border-bottom: 3px solid transparent; white-space: nowrap;
+}
+.tab:hover { color: var(--ink); }
+.tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--sail-line); }
+
+/* board */
+.board .wrap {
+  padding-block: 22px 48px;
+  display: grid; gap: 22px; grid-template-columns: minmax(0, 1fr);
+}
+@media (min-width: 980px) {
+  .board .wrap { grid-template-columns: minmax(0, 1fr) 380px; align-items: start; }
+  .panel { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 66px); max-height: calc(100vh - 90px); overflow: auto; }
+}
+.view { min-width: 0; display: grid; gap: 22px; }
+.view-head { display: grid; gap: 6px; }
+h2 {
+  font-family: var(--font-display); font-weight: 600; font-size: 24px; line-height: 1.15; margin: 0;
+  text-wrap: balance;
+}
+h3 {
+  font-family: var(--font-display); font-weight: 600; font-size: 17px; margin: 0; letter-spacing: 0.01em;
+}
+.note { color: var(--muted); margin: 0; max-width: 72ch; }
+.group { display: grid; gap: 10px; }
+
+/* clickable boxes */
+.box {
+  appearance: none; text-align: left; font: inherit; color: inherit; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 11px 13px; display: grid; gap: 3px; min-width: 0; align-content: start;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.box:hover { border-color: var(--sea); }
+.box[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft), var(--shadow); }
+.box .t { font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
+.box .t.path { font-family: var(--font-mono); font-size: 14px; font-weight: 500; }
+.box .s { color: var(--muted); font-size: 13.5px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 11.5px;
+  letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); width: max-content; max-width: 100%;
+}
+.tag {
+  display: inline-block; font-family: var(--font-mono); font-size: 11px; border: 1px solid var(--line);
+  border-radius: 4px; padding: 0 6px; color: var(--muted); background: var(--surface-2); width: max-content;
+}
+.tag.beta { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, var(--line)); background: var(--warn-soft); }
+.tag.exp { color: var(--accent); border-color: color-mix(in srgb, var(--sea) 60%, var(--line)); background: var(--accent-soft); }
+.tag.block { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, var(--line)); background: var(--ok-soft); }
+
+/* map: bands joined by links */
+.stack { display: grid; }
+.band {
+  display: grid; gap: 10px 16px; grid-template-columns: minmax(0, 1fr);
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px;
+}
+@media (min-width: 760px) { .band { grid-template-columns: 148px minmax(0, 1fr); align-items: start; } }
+.band-head { display: grid; gap: 2px; align-content: start; min-width: 0; }
+.band-head .k { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.band-head .n { font-family: var(--font-display); font-weight: 600; font-size: 18px; line-height: 1.15; }
+.band-head .w { font-family: var(--font-mono); font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.band-boxes { display: grid; gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); min-width: 0; }
+@media (max-width: 520px) { .band-boxes { grid-template-columns: minmax(0, 1fr); } }
+.band.evidence { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+.link {
+  position: relative; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px;
+  padding: 9px 6px 9px 34px; color: var(--muted); font-size: 13.5px; min-width: 0;
+}
+.link::before { content: ""; position: absolute; left: 15px; top: 0; bottom: 0; border-left: 2px solid var(--line); }
+.link .ar {
+  position: absolute; left: 7px; top: 50%; transform: translateY(-50%); width: 18px; height: 18px;
+  display: grid; place-items: center; background: var(--bg); color: var(--accent); font-size: 13px; line-height: 1;
+}
+.link .via {
+  font-family: var(--font-mono); font-size: 12.5px; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--line); padding: 1px 7px; border-radius: 4px; overflow-wrap: anywhere;
+}
+.loop-box { border-style: dashed; background: var(--surface); }
+.loop-box .t::before { content: "\21BA  "; color: var(--accent); }
+
+/* ladder */
+.rungs { display: grid; gap: 8px; }
+.rung { grid-template-columns: 34px minmax(0, 1fr); align-items: start; gap: 3px 12px; }
+.rung .n {
+  grid-row: span 3; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
+  font-family: var(--font-display); font-weight: 700; background: var(--accent-soft); color: var(--accent);
+}
+.rung .head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.rung code.inline { font-size: 12.5px; color: var(--ink); background: var(--code-bg); padding: 2px 6px; border-radius: 4px; overflow-wrap: anywhere; width: max-content; max-width: 100%; }
+.stage { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.stage .k { font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+
+/* studio */
+.grid-3 { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+.cycle { display: grid; gap: 8px; container-type: inline-size; }
+.flow { display: flex; flex-wrap: nowrap; align-items: stretch; gap: 8px; }
+.flow .box { flex: 1 1 0; }
+.flow .arrow { flex: none; align-self: center; color: var(--muted); font-family: var(--font-mono); font-size: 14px; }
+.cycle .back { color: var(--muted); font-size: 13.5px; display: flex; gap: 8px; align-items: baseline; }
+.cycle .back b { color: var(--accent); font-weight: 600; }
+@container (max-width: 760px) {
+  .flow { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+  .flow .arrow { display: none; }
+}
+.box .step { font-family: var(--font-display); font-weight: 700; color: var(--accent); font-size: 14px; }
+.navbar { border-radius: var(--radius); overflow: hidden; border: 1px solid var(--line); }
+.navbar .bar1 { background: var(--nav); color: var(--nav-ink); display: flex; align-items: center; gap: 14px; padding: 9px 12px; overflow-x: auto; white-space: nowrap; }
+.navbar .word { font-family: var(--font-display); font-weight: 700; font-size: 15px; }
+.navbar .sect { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--nav-muted); }
+.navbar .sect.on { color: var(--nav-ink); font-weight: 600; text-decoration: underline; text-decoration-color: var(--sail); text-underline-offset: 6px; text-decoration-thickness: 2px; }
+.navbar .set { margin-left: auto; font-size: 13px; color: var(--nav-muted); }
+.navbar .bar2 { background: var(--nav-2); color: var(--nav-muted); display: flex; gap: 4px; padding: 6px 12px; overflow-x: auto; white-space: nowrap; font-size: 13px; }
+.navbar .bar2 span { padding: 2px 8px; border-radius: 4px; }
+.navbar .bar2 span.on { background: color-mix(in srgb, var(--nav-ink) 18%, transparent); color: var(--nav-ink); }
+.lanes { display: grid; gap: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 900px) { .lanes { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .lanes { grid-template-columns: minmax(0, 1fr); } }
+.lane { display: grid; gap: 8px; align-content: start; min-width: 0; }
+.lane-head {
+  font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--muted); padding-bottom: 4px; border-bottom: 1px dashed var(--line);
+}
+.box.sub { margin-left: 16px; }
+.box.sub .t::before { content: "\21B3  "; color: var(--muted); }
+
+/* recipes */
+.recipes { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); }
+.box .where { font-family: var(--font-mono); font-size: 12px; color: var(--accent); overflow-wrap: anywhere; }
+
+/* tables */
+.scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); font-weight: 500; background: var(--surface-2); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+td code { font-size: 12.5px; white-space: nowrap; }
+td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
+td.num.zero { color: var(--muted); }
+td.num.hi { color: var(--ok); font-weight: 500; }
+
+/* panel */
+.panel {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 18px; display: grid; gap: 14px; min-width: 0;
+}
+.panel h3 { font-size: 20px; line-height: 1.2; text-wrap: balance; overflow-wrap: anywhere; }
+.panel p, .panel li { margin: 0; }
+.panel ul, .panel ol { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+.panel .sec { display: grid; gap: 8px; min-width: 0; }
+.panel .sec > .k {
+  font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+}
+.panel code:not(pre code) { font-size: 12.5px; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+.panel .linkbtn {
+  appearance: none; font: inherit; font-size: 14px; cursor: pointer; color: var(--accent); background: none;
+  border: 0; padding: 0; text-decoration: underline; text-align: left;
+}
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 12px; font-size: 14px; }
+.kv dt { font-family: var(--font-mono); font-size: 12.5px; color: var(--ink); }
+.kv dd { margin: 0; color: var(--muted); }
+.cmd { position: relative; background: var(--code-bg); border: 1px solid var(--line); border-radius: var(--radius); min-width: 0; }
+.cmd pre { margin: 0; padding: 10px 70px 10px 12px; overflow-x: auto; font-size: 12.5px; line-height: 1.5; }
+.copy {
+  position: absolute; top: 6px; right: 6px; appearance: none; cursor: pointer; font: inherit; font-size: 12px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 4px; padding: 2px 8px;
+}
+.warnbox { border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line)); background: var(--warn-soft); border-radius: var(--radius); padding: 10px 12px; font-size: 14px; }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } .wheel-mark { animation: none; } }
+</style>
+</head>
+<body>
+<header class="top">
+  <svg class="wheel-mark" viewBox="-210 -210 420 420" aria-hidden="true" focusable="false">
+    <g fill="none" stroke="currentColor">
+      <circle r="148" stroke-width="12"/>
+      <circle r="124" stroke-width="4"/>
+      <circle r="40" stroke-width="10"/>
+      <g stroke-width="9">
+        <line y1="-192" y2="192"/>
+        <line y1="-192" y2="192" transform="rotate(45)"/>
+        <line y1="-192" y2="192" transform="rotate(90)"/>
+        <line y1="-192" y2="192" transform="rotate(135)"/>
+      </g>
+      <g stroke-width="22" stroke-linecap="round">
+        <line y1="-194" y2="-166"/><line y1="166" y2="194"/>
+        <line y1="-194" y2="-166" transform="rotate(45)"/><line y1="166" y2="194" transform="rotate(45)"/>
+        <line y1="-194" y2="-166" transform="rotate(90)"/><line y1="166" y2="194" transform="rotate(90)"/>
+        <line y1="-194" y2="-166" transform="rotate(135)"/><line y1="166" y2="194" transform="rotate(135)"/>
+      </g>
+    </g>
+    <circle r="16" fill="currentColor"/>
+  </svg>
+  <div class="wrap">
+    <div class="brand">
+      <img class="logo" src="cct-logo.png" alt="Code Copilot Team logo: a husky at a ship's wheel" width="68" height="68">
+      <div class="brand-text">
+        <p class="eyebrow">Code Copilot Team · 2.1.0 · for the people who use it</p>
+        <h1>CCT <span class="ver">field guide</span></h1>
+      </div>
+    </div>
+    <p class="lede">What gets installed where, what runs when you start a session, how to grow from a first session to unattended builds, and how to watch and tune all of it in Harness Studio. Click any box for the details.</p>
+    <div class="facts" aria-label="CCT at a glance">
+      <span class="pill"><span class="dot accent"></span><span><b>One source</b>, seven tools</span></span>
+      <span class="pill"><span class="dot ok"></span><span>Can block at runtime: <b>Claude Code · Pi · Codex</b></span></span>
+      <span class="pill"><span class="dot you"></span><span>Harness Studio runs <b>on your machine</b></span></span>
+    </div>
+    <p class="foot">Written on 21 Nov 2026 from the repository's master branch (16f6913), which carries the 2.1.0 content. Every command is one the README, the guides or <span class="mono">cct help</span> shows.</p>
+  </div>
+</header>
+
+<nav class="tabs" aria-label="Sections">
+  <div class="wrap">
+    <div class="tablist" role="tablist" id="tablist"></div>
+  </div>
+</nav>
+
+<main class="board">
+  <div class="wrap">
+    <div id="views"></div>
+    <aside class="panel" id="panel" aria-live="polite"></aside>
+  </div>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var REPO = "https://github.com/gosha70/code-copilot-team";
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+  function c(s) { return '<code>' + esc(s) + '</code>'; }
+  function doc(path, label) { return '<a href="' + REPO + '/blob/master/' + path + '" target="_blank" rel="noopener">' + esc(label || path) + '</a>'; }
+  function iss(n) { return '<a href="' + REPO + '/issues/' + n + '" target="_blank" rel="noopener">#' + n + '</a>'; }
+  function cmd(text) { return '<div class="cmd"><pre><code>' + esc(text) + '</code></pre><button class="copy" type="button">Copy</button></div>'; }
+  function sec(k, html) { return '<div class="sec"><div class="k">' + k + '</div>' + html + '</div>'; }
+  function p(html) { return '<p>' + html + '</p>'; }
+  function ul(items) { return '<ul>' + items.map(function (i) { return '<li>' + i + '</li>'; }).join("") + '</ul>'; }
+  function kv(pairs) { return '<dl class="kv">' + pairs.map(function (r) { return '<dt>' + esc(r[0]) + '</dt><dd>' + r[1] + '</dd>'; }).join("") + '</dl>'; }
+  function more(links) { return sec("Read more", ul(links)); }
+  function chip(text) { return '<span class="chip">' + esc(text) + '</span>'; }
+  function maturity(m) { return m === "beta" ? '<span class="tag beta">beta</span>' : m === "experimental" ? '<span class="tag exp">experimental</span>' : ''; }
+  function goto(id, label) { return '<button type="button" class="linkbtn" data-goto="' + id + '">' + esc(label) + '</button>'; }
+
+  var panelFor = {};
+  function boxAttrs(id) { return 'type="button" data-select="' + id + '" aria-pressed="false"'; }
+
+  /* ── How it fits together ───────────────────────────────────── */
+  var BANDS = [
+    {
+      key: "Where it starts", name: "The checkout", where: "code-copilot-team/",
+      boxes: [
+        { id: "shared", t: "shared/", path: true, s: "Rules, skills, templates and the feature catalog, written once",
+          body: function () {
+            return p("Everything the harness tells an agent lives here once. Each tool's files are generated from it, so Claude Code, Pi, Codex and the rest receive the same rules.") +
+              sec("Inside", kv([
+                ["skills/", "24 skills. Four install as rules that load in every session: coding standards, conventions, copyright headers, safety."],
+                ["templates/", "The eleven stack templates, the SDD templates, the UI harness and the provider profile template."],
+                ["features/catalog.yaml", "The feature catalog. The README's tables, docs/features.md and " + c("cct features") + " are generated from it, so they cannot drift."],
+                ["capabilities/, schemas/", "What each enforced runtime can do, and the schemas the validators check."]
+              ])) +
+              sec("Check it", cmd("./scripts/cct list        # every feature, command, skill and capability")) +
+              more([doc("docs/repo-structure.md", "Repo structure"), doc("docs/features.md", "Feature index")]);
+          } },
+        { id: "adapters", t: "adapters/", path: true, s: "One folder per tool: Claude Code, Pi, Codex, Cursor, Copilot, Windsurf, Aider",
+          body: function () {
+            return p(c("scripts/generate.sh") + " writes each tool's generated files from " + c("shared/") + ". The Claude Code plugin is generated the same way, so the plugin and the full install never disagree.") +
+              p("Agents, hooks and slash commands are written for Claude Code in " + c("adapters/claude-code/.claude/") + ". Pi has its own enforcement runtime in " + c("adapters/pi/runtime/") + ".") +
+              sec("Enforced or read", p("A tool either has a gate that can block (a hook, a stop gate, the Pi runtime) or receives the feature as text it reads. The table under this map gives the count for each tool.")) +
+              more([doc("docs/install.md", "Install options"), doc("docs/maturity.md", "Feature maturity and adapter support")]);
+          } },
+        { id: "scripts", t: "scripts/", path: true, s: "setup.sh, cct, session-analytics, the auto-build driver, the review runner",
+          body: function () {
+            return sec("The commands you run from the checkout", kv([
+                ["setup.sh", "Installs a tool's harness, and re-syncs it after " + c("git pull") + " with " + c("--sync") + "."],
+                ["cct", "The front door. The " + c("cct") + " in " + c("~/.local/bin") + " is a shim that runs this file."],
+                ["session-analytics", "Ingests transcripts, runs the judge, and starts the API and Harness Studio."],
+                ["auto-build-loop.sh", "The unattended build driver behind " + c("cct build") + "."],
+                ["review-round-runner.sh", "One peer-review round; also the probe that proves a reviewer answers."],
+                ["validate-*.sh", "The gates CI runs on specs, configuration, features and workflows."]
+              ])) +
+              sec("If you move the checkout", p("The shim points at the checkout you installed from. Re-run setup or set " + c("CCT_REPO_DIR") + "; " + c("cct doctor") + " reports a shim whose checkout is gone.")) +
+              more([doc("docs/repo-structure.md", "Repo structure")]);
+          } },
+        { id: "studio-app", t: "studio/", path: true, s: "Harness Studio, the local web app over your session data",
+          body: function () {
+            return p("A Next.js app. You never start it by hand: " + c("./scripts/session-analytics serve") + " starts it together with the API it reads from.") +
+              sec("Beside it in the checkout", kv([
+                ["benchmarks/", "The benchmark harness: coding agents run against a task set and scored by a judge."],
+                ["knowledge/wiki/", "The project wiki. Agents are told to read its index before re-reading raw sources."]
+              ])) +
+              p(goto("studio", "Open the Harness Studio tab"));
+          } }
+      ],
+      via: { code: "./scripts/setup.sh --claude-code", text: "installs the harness on your machine. Run it again with --sync after git pull." }
+    },
+    {
+      key: "On your machine", name: "Installed once", where: "your home directory",
+      boxes: [
+        { id: "claude-home", t: "~/.claude/", path: true, s: "The Claude Code harness: manifest, rules, skills, agents, hooks, commands",
+          body: function () {
+            return sec("What setup.sh installs here", kv([
+                ["CLAUDE.md", "The global manifest, the base every project builds on."],
+                ["rules/", "4 rules, loaded in every session."],
+                ["skills/", "20 skills, loaded when a task needs them."],
+                ["agents/", "14 agents: research, plan, build and review, plus ten utility agents."],
+                ["hooks/", "12 hooks. These are what can block."],
+                ["commands/", "14 slash commands, such as " + c("/phase-complete") + " and " + c("/review-submit") + "."],
+                ["settings.json", "Wires the hooks to Claude Code's events."],
+                ["permissions/", "The balanced and relaxed profiles that " + c("cct permissions") + " applies."]
+              ])) +
+              sec("Which layer wins", p("More specific always wins: a project's " + c("CLAUDE.md") + " overrides this manifest, and " + c("CLAUDE.local.md") + " overrides both.")) +
+              sec("The plugin instead", p(c("/plugin install cct@code-copilot-team") + " gives the skills, agents and commands and the same seven core hooks. It cannot ship rules that load in every session, the global manifest, the launcher or the templates; " + c("setup.sh") + " is the full harness.")) +
+              more([doc("docs/configuration-layers.md", "Configuration layers"), doc("docs/install.md", "Install options")]);
+          } },
+        { id: "local-bin", t: "~/.local/bin/", path: true, s: "The commands you type: cct, claude-code, pi-code",
+          body: function () {
+            return kv([
+                ["cct", "The front door: start, init, templates, sync, build, permissions, playwright, features, list, routing, doctor, config, home, llm."],
+                ["claude-code", "The launcher " + c("cct start") + " runs. It opens Claude Code in a per-project cmux or tmux session, logs the transcript, and takes " + c("--llm") + " and " + c("--peer-review") + "."],
+                ["pi-code", "The enforced Pi harness, installed by " + c("./scripts/setup.sh --pi") + "."],
+                ["providers-health.sh, peer-review-runner.sh", "Peer-review helpers for use by hand."]
+              ]) +
+              sec("Check the machine", cmd("cct doctor        # tools, provider profile, each installed adapter") + p("Read-only. It reports whether a key variable is set, never its value.")) +
+              more([doc("docs/features.md", "Feature index (cct-cli)")]);
+          } },
+        { id: "cct-home", t: "~/.cct/", path: true, s: "The CCT home: providers, LLM targets, routing, harness stamps, analytics",
+          body: function () {
+            return p("Everything CCT keeps for you lives in one directory. " + c("CCT_HOME") + " moves it, for tests or a second install.") +
+              sec("Inside", kv([
+                ["providers.toml", "Reviewers and providers, for peer review, auto-build, routing, doctor and the Studio."],
+                ["llms.toml", "The named targets " + c("cct start --llm") + " picks from."],
+                ["routing.toml", "Routing profiles, with their state files beside it."],
+                ["harness.json, harness-stamps.jsonl", "Which CCT release and commit you installed, and which harness each session started under."],
+                ["session-analytics.*", "The analytics config file, the SQLite store and the graph."],
+                ["pi/, config.toml", "The Pi runtime and its global configuration."]
+              ])) +
+              sec("Upgrading from 2.0", p("First refresh every adapter you installed (" + c("./scripts/setup.sh --sync --claude-code") + ", adding " + c("--pi") + " if you use " + c("pi-code") + ") and close running " + c("pi-code") + " sessions. An older " + c("pi-code") + " still points at the old home and would recreate it after the move.") +
+                cmd("cct home                      # what is still read from ~/.code-copilot-team\ncct home migrate --dry-run    # what would move\ncct home migrate") +
+                p("On the same filesystem " + c("migrate") + " moves each entry. With " + c("CCT_HOME") + " on another filesystem it copies each entry, keeps the old one, exits 1 and says what to check and remove by hand. The 2.1.x line still reads the old home as a fallback; 2.2 removes it.")) +
+              more([doc("docs/cct-home.md", "The CCT home")]);
+          } },
+        { id: "other-tools", t: "Other tools", s: "Codex, Cursor, GitHub Copilot, Windsurf, Aider, and Pi",
+          body: function () {
+            return kv([
+                ["--pi", c("~/.cct/pi/") + " and " + c("pi-code") + ". The enforced harness."],
+                ["--codex", c("~/.codex/") + ": " + c("AGENTS.md") + " and skills."],
+                ["--cursor <project>", c("<project>/.cursor/rules/")],
+                ["--github-copilot <project>", c("<project>/.github/")],
+                ["--windsurf <project>", c("<project>/.windsurf/rules/")],
+                ["--aider <project>", c("<project>/CONVENTIONS.md")]
+              ]) +
+              sec("Everything at once", cmd("./scripts/setup.sh --all ~/my-project")) +
+              p("Pi installed with " + c("pi install") + " gets the skills and prompt templates only. " + c("pi-code") + " is the version that enforces.") +
+              more([doc("docs/install.md", "Install options")]);
+          } }
+      ],
+      via: { code: "cct init <template> <dir>", text: "seeds a new project from a template; cct sync keeps it current." }
+    },
+    {
+      key: "In your project", name: "Per repository", where: "<project>/",
+      boxes: [
+        { id: "project-claude", t: "CLAUDE.md + .claude/", path: true, s: "The project's own rules, agent team, commands and permissions",
+          body: function () {
+            return p(c("cct init") + " writes a stack-specific " + c("CLAUDE.md") + " with its agent team, the project's slash commands under " + c(".claude/commands/") + ", and a CI workflow under " + c(".github/workflows/") + ".") +
+              sec("Keep it current", cmd("cct sync ~/projects/my-app --dry-run   # preview\ncct sync ~/projects/my-app             # apply") + p("Sync updates commands and " + c(".claude/") + " contents and never overwrites your " + c("CLAUDE.md") + ".")) +
+              sec("Permissions", cmd("cct permissions balanced ./my-app      # or relaxed") + p("Applies the tier's permission profile to the project. " + c("cct sync") + " reports drift from it.")) +
+              more([doc("docs/project-templates.md", "Project templates"), doc("adapters/claude-code/docs/permissions-guide.md", "Permissions guide")]);
+          } },
+        { id: "local-md", t: "CLAUDE.local.md", path: true, s: "Your personal overrides; gitignored, and it wins over both",
+          body: function () {
+            return p("Put preferences that are yours and not the team's here: a test command you like, a directory to stay out of, how terse to be. It is gitignored, and it overrides both the project's " + c("CLAUDE.md") + " and the global manifest.") +
+              more([doc("docs/configuration-layers.md", "Configuration layers")]);
+          } },
+        { id: "specs", t: "specs/<feature-id>/", path: true, s: "Plan, spec, tasks: what the build agent must follow",
+          body: function () {
+            return kv([
+                ["plan.md", "Always. Its frontmatter declares " + c("spec_mode") + ", " + c("status") + " and " + c("origin") + "."],
+                ["spec.md", "Requirements and scenarios, for " + c("full") + " and " + c("lightweight") + " work."],
+                ["tasks.md", "The task breakdown, for " + c("full") + " work."],
+                ["verification.yaml", "Binds each requirement to the test that proves it. Needed for unattended runs."],
+                ["automation.json", "Written by " + c("/auto-build") + ": the run's profile and caps."]
+              ]) +
+              sec("How much is required", kv([
+                ["full", "Security, schema changes, integrations, more than two files."],
+                ["lightweight", "One or two files, nothing critical."],
+                ["none", "Bug fixes, docs, trivial changes: plan.md only."]
+              ])) +
+              p("Shape Up pitches live under " + c("specs/pitches/<id>/") + ".") +
+              more([doc("docs/spec-driven-development.md", "Spec-driven development")]);
+          } },
+        { id: "dot-cct", t: ".cct/", path: true, s: "Run state: the review loop and the auto-build ledgers",
+          body: function () {
+            return kv([
+                [".cct/review/", "The peer-review loop's state, and the breaker file " + c("/review-decide") + " resolves."],
+                [".cct/auto-build/<feature>/", "One ledger per unattended run: " + c("termination.json") + " says why it stopped, " + c("triage-report.md") + " says whether it can resume."]
+              ]) +
+              sec("For Pi projects", p(c(".cct.toml") + " at the repository root is the committed Pi configuration, with " + c(".cct.local.toml") + " beside it for personal settings.")) +
+              more([doc("docs/auto-build.md", "Unattended auto-build"), doc("docs/cct-home.md", "The CCT home")]);
+          } }
+      ],
+      via: { code: "cct start ~/projects/my-app", text: "opens a session in the project, under the harness you installed." }
+    },
+    {
+      key: "While you work", name: "The session", where: "Claude Code or pi-code",
+      boxes: [
+        { id: "launcher", t: "The launcher", s: "cct start runs claude-code: a named terminal session, a transcript, flags",
+          body: function () {
+            return p(c("cct start") + " runs the installed " + c("claude-code") + " launcher and passes every argument through. It opens Claude Code in the project inside a per-project cmux or tmux session, with your git branch in the status line, and logs the transcript.") +
+              sec("Variations", cmd("cct start                                   # this directory\ncct start ~/projects/my-app                 # that project\ncct start --llm deepseek ~/projects/my-app  # this session on another LLM\ncct start --peer-review <name> ~/projects/my-app")) +
+              more([doc("docs/llm-catalog.md", "The LLM catalog and --llm"), doc("docs/peer-review.md", "Peer review")]);
+          } },
+        { id: "reads", t: "What the model reads", s: "4 rules always, skills on demand, a phase agent for each step",
+          body: function () {
+            return sec("Always loaded", p("The global manifest, the four rules, the project's " + c("CLAUDE.md") + " and your " + c("CLAUDE.local.md") + ".")) +
+              sec("On demand", p("20 skills, each a " + c("SKILL.md") + " the model opens when a task matches it: spec workflow, review loop, design system, infra verification and more.")) +
+              sec("Agents", p("Research, plan, build and review agents carry the four phases. Utility agents: code-simplifier, doc-writer, security-review, verify-app, visual-reviewer, phase-recap, pitch-shaper, scope-executor, cycle-retro, cooldown-report.")) +
+              sec("Slash commands", p(c("/phase-complete") + " " + c("/review-submit") + " " + c("/review-decide") + " " + c("/origin-check") + " " + c("/auto-build") + " " + c("/ralph-start") + " " + c("/shape") + " " + c("/bet") + " " + c("/cycle-start") + " " + c("/hill") + " " + c("/cooldown") + " " + c("/retro") + " " + c("/promote-lesson") + " " + c("/list-agents"))) +
+              p("All of this is text the model reads. The hooks are what can stop it.");
+          } },
+        { id: "hooks", t: "Hooks", s: "What can block: protected files, git, verification, review", tag: "block",
+          body: function () {
+            return sec("Before a tool runs", kv([
+                ["protect-files", "Refuses edits to " + c(".env") + ", lock files, " + c(".git/") + ", credentials and secrets."],
+                ["protect-git", "Stops the first " + c("git commit") + " or " + c("git push") + " and makes the agent ask you."]
+              ])) +
+              sec("After an edit", kv([
+                ["auto-format", "Runs the project's formatter. Never blocks."],
+                ["verify-after-edit", "Runs the type checker. Reports by default; can be set to block."]
+              ])) +
+              sec("When the agent stops", kv([
+                ["verify-on-stop", "Runs the test suite. Reports by default; can be set to block."],
+                ["peer-review-on-stop", "Checks that the review loop finished."]
+              ])) +
+              sec("At session start", kv([
+                ["reinject-context", "Re-injects the phase, open PRD items, recent git log and pending work, also after compaction."],
+                ["harness-stamp", "Records which harness this session runs under, for the Studio."]
+              ])) +
+              p("Plus " + c("notify") + ", and three MemKernel hooks that do nothing unless MemKernel is installed.") +
+              more([doc("adapters/claude-code/docs/hooks-guide.md", "Hooks guide"), doc("adapters/claude-code/docs/hooks-test-cases.md", "Hooks: manual test cases")]);
+          } },
+        { id: "pi", t: "pi-code", path: true, s: "The same contract on Pi, enforced by CCT's runtime extension",
+          body: function () {
+            return cmd("./scripts/setup.sh --pi\npi-code") +
+              p(c("pi-code") + " wraps Pi and loads CCT's enforcement runtime. The rules every session needs are handed to Pi as always-on context before any task runs. It needs Pi 0.79.0 or later.") +
+              p("A project's committed Pi settings are " + c(".cct.toml") + ". " + c("pi-code doctor") + " reports the always-on context's size and whether it was injected.") +
+              more([doc("adapters/pi/README.md", "Pi adapter")]);
+          } }
+      ],
+      via: { code: "the session calls out to", text: "a second model, the driver, the LLM targets and routing", side: true }
+    },
+    {
+      key: "Beside the session", name: "Called from it", where: "configured in ~/.cct/",
+      boxes: [
+        { id: "reviewer", t: "Peer reviewer", s: "A second model reviews the diff and returns PASS, FAIL or INCONCLUSIVE",
+          body: function () {
+            return p("Any provider declared in " + c("~/.cct/providers.toml") + ": a hosted API such as DeepSeek, a model on your own GPU, or another CLI. It reviews the diff in a read-only sandbox and answers with a verdict and findings.") +
+              ul(["A phase cannot complete on a FAIL.", "A reviewer that fails falls back down a chain.", "After 5 rounds, 15 minutes, a finding the reviewer rejects twice running, or no reviewer at all, the loop stops and waits for " + c("/review-decide approve | reject | retry") + "."]) +
+              p(goto("r5", "How to set it up: rung 5")) +
+              more([doc("docs/auto-code-review-setup.md", "Auto code review cookbook"), doc("docs/peer-review.md", "Peer review")]);
+          } },
+        { id: "driver", t: "Auto-build driver", s: "Builds an approved feature phase by phase, outside the session", tag: "beta",
+          body: function () {
+            return p(c("cct build <feature-id>") + " runs " + c("scripts/auto-build-loop.sh") + " from the project directory. Each phase gets a headless build session, a gating review, bounded fix sessions, and a commit the driver makes.") +
+              ul(["Stops itself when spend, wall clock, review rounds or turns pass the caps frozen at admission.", "Refuses a phase whose requirement coverage fell below the contract frozen at admission.", "Leaves a ledger of every decision and, on the right profile, opens a PR."]) +
+              p(goto("r7", "How to run one: rung 7")) +
+              more([doc("docs/auto-build.md", "Unattended auto-build")]);
+          } },
+        { id: "llm-catalog", t: "LLM catalog", s: "Named LLM targets; one picked per session with --llm", tag: "experimental",
+          body: function () {
+            return p("Targets live in " + c("~/.cct/llms.toml") + ". You pick one when a session starts, so no provider, credential or model variable is exported in your shell and none leaks into the next session.") +
+              cmd("cct llm validate\ncct llm list\ncct start --llm deepseek .") +
+              p(goto("r4", "More: rung 4")) +
+              more([doc("docs/llm-catalog.md", "The LLM catalog and --llm")]);
+          } },
+        { id: "routing", t: "Routing", s: "Sends auto-build tasks to a backend by route class and role", tag: "experimental",
+          body: function () {
+            return p("Routing profiles in " + c("~/.cct/routing.toml") + " decide which backend handles a task, by route class and role, under an execution profile.") +
+              cmd("cct routing validate\ncct routing status\ncct routing explain --route-class <class>") +
+              p("Harness Studio's Routing page shows the evidence sets these decisions are calibrated on.") +
+              more([doc("docs/llm-routing.md", "LLM routing")]);
+          } }
+      ],
+      via: { code: "./scripts/session-analytics ingest", text: "reads the transcript every session leaves on disk." }
+    },
+    {
+      key: "Afterwards", name: "The evidence", where: "Session Analytics", cls: "evidence",
+      boxes: [
+        { id: "transcripts", t: "Transcripts", s: "What Claude Code, Pi and Aider leave on disk, plus harness stamps",
+          body: function () {
+            return kv([
+                ["Claude Code", c("~/.claude/projects/") + " by default."],
+                ["Pi", "Pi's session files."],
+                ["Aider", c(".aider.chat.history.md") + " in each project. Set " + c("CCT_SA_SOURCE_AIDER") + " to the folder that holds your aider projects; there is no default."]
+              ]) +
+              sec("Harness stamps", p("At session start the harness-stamp hook appends a line to " + c("~/.cct/harness-stamps.jsonl") + ": the CCT release and commit, a digest of the rules, skills, agents and commands in " + c("~/.claude") + ", a digest of the provider profile. Ingest joins it to the session. Pi, Aider and plugin-only sessions are unstamped.")) +
+              more([doc("docs/session-analytics-cookbook.md", "Session Analytics cookbook")]);
+          } },
+        { id: "store", t: "The store", s: "SQLite in ~/.cct, or one shared Postgres for a team",
+          body: function () {
+            return p("One database, named by " + c("CCT_SA_DB") + " in the checkout's " + c(".env") + ". The CLI, the API and the Studio all read the same file.") +
+              ul([
+                "Redaction runs before anything is written. The default, " + c("code") + ", strips code blocks and tool inputs and keeps prose.",
+                "Each turn keeps a 500-character redacted preview. Full text is kept only for projects you opt into the archive.",
+                "A team points every developer's ingest at one Postgres database; the Team page then shows everyone."
+              ]) +
+              more([doc("docs/session-analytics-cookbook.md", "Session Analytics cookbook, sections 3 and 8.4")]);
+          } },
+        { id: "judge", t: "The judge", s: "An LLM labels every turn and writes the session analyses",
+          body: function () {
+            return p("The judge labels each turn: corrections, questions, commands, rework, misunderstanding, helpfulness, sentiment, and a quality score from 1 to 5. On demand it also writes three whole-session analyses: Agent Tuning, Prompt Coaching and Efficiency.") +
+              kv([
+                ["ollama", "The default. Local, so no session text leaves the machine."],
+                ["claude-code", "The " + c("claude") + " CLI on your PATH."],
+                ["openai", "Any OpenAI-compatible endpoint: LM Studio, vLLM, OpenAI, Azure."]
+              ]) +
+              p("Configured in one place: Studio › Settings › LLM-as-Judge.");
+          } },
+        { id: "studio-box", t: "Harness Studio", s: "The web app at localhost:3000, over an API on 127.0.0.1",
+          body: function () {
+            return cmd("./scripts/session-analytics serve   # API on 127.0.0.1:8765, Studio on http://localhost:3000") +
+              p("The same store is reachable from the CLI and from an MCP server (" + c("./scripts/session-analytics mcp") + "), so an agent can query your sessions too.") +
+              p(goto("studio", "Open the Harness Studio tab"));
+          } }
+      ]
+    }
+  ];
+
+  BANDS.forEach(function (b) {
+    b.boxes.forEach(function (x) {
+      panelFor[x.id] = { chip: chip(b.key), title: x.t, body: x.body };
+    });
+  });
+  panelFor.loop = {
+    chip: chip("The loop"), title: "What you learn goes back into the harness",
+    body: function () {
+      return p("The Studio shows where sessions go wrong. The fix usually lands in a " + c("CLAUDE.md") + " (yours or the project's), a rule or skill, the project's permissions, or a hook.") +
+        ul([
+          "Rules, skills, agents and commands: change them in the checkout and run " + c("./scripts/setup.sh --sync --claude-code") + ". New sessions then carry a new harness stamp, and Overview › Sessions by harness version compares before and after.",
+          "A " + c("CLAUDE.md") + ", permissions or a hook: the stamp does not cover them, so compare the sessions by date on the Sessions page."
+        ]) +
+        p(goto("recipes", "See the tuning recipes"));
+    }
+  };
+
+  var TOOLS = [
+    ["Claude Code", 16, 0, "./scripts/setup.sh --claude-code", "~/.claude/, ~/.local/bin/, ~/.cct/"],
+    ["Pi", 8, 7, "./scripts/setup.sh --pi", "~/.cct/pi/ and pi-code"],
+    ["Codex", 6, 9, "./scripts/setup.sh --codex", "~/.codex/"],
+    ["Cursor", 0, 9, "./scripts/setup.sh --cursor <project>", "<project>/.cursor/rules/"],
+    ["GitHub Copilot", 0, 9, "./scripts/setup.sh --github-copilot <project>", "<project>/.github/"],
+    ["Windsurf", 0, 5, "./scripts/setup.sh --windsurf <project>", "<project>/.windsurf/rules/"],
+    ["Aider", 0, 5, "./scripts/setup.sh --aider <project>", "<project>/CONVENTIONS.md"]
+  ];
+
+  function renderMap() {
+    var html = '<div class="view-head"><h2>How CCT fits together</h2>' +
+      '<p class="note">Read it top to bottom. One checkout installs a harness on your machine, a template seeds each project, ' + c("cct start") + ' opens a session under that harness, and every session leaves evidence you can read in Harness Studio.</p></div>';
+    html += '<div class="stack">';
+    BANDS.forEach(function (b) {
+      html += '<div class="band' + (b.cls ? ' ' + b.cls : '') + '"><div class="band-head"><span class="k">' + esc(b.key) + '</span><span class="n">' + esc(b.name) + '</span><span class="w">' + esc(b.where) + '</span></div><div class="band-boxes">';
+      b.boxes.forEach(function (x) {
+        html += '<button class="box" ' + boxAttrs(x.id) + '>' +
+          (x.tag === "block" ? '<span class="tag block">can block</span>' : maturity(x.tag)) +
+          '<span class="t' + (x.path ? ' path' : '') + '">' + esc(x.t) + '</span><span class="s">' + esc(x.s) + '</span></button>';
+      });
+      html += '</div></div>';
+      if (b.via) {
+        html += '<div class="link"><span class="ar" aria-hidden="true">' + (b.via.side ? '&#8597;' : '&#8595;') + '</span>' +
+          (b.via.side ? '<span>' + esc(b.via.code) + ' ' + esc(b.via.text) + '</span>' : '<span class="via">' + esc(b.via.code) + '</span><span>' + esc(b.via.text) + '</span>') + '</div>';
+      }
+    });
+    html += '<div class="link"><span class="ar" aria-hidden="true">&#8634;</span><span>and back to the top, when you change the harness</span></div>';
+    html += '<button class="box loop-box" ' + boxAttrs("loop") + '><span class="t">What you learn goes back into the harness</span><span class="s">Change rules, CLAUDE.md, permissions or hooks, re-sync, and compare the sessions before and after.</span></button>';
+    html += '</div>';
+
+    html += '<div class="group"><h3>Which tool gets what</h3><p class="note">Counts of features each tool delivers, from the feature catalog. "Can block" means a runtime gate; "as rules" means text the tool reads. Some features, such as Session Analytics, run as scripts and need nothing from the tool.</p>' +
+      '<div class="scroll"><table><thead><tr><th>Tool</th><th>Can block</th><th>As rules</th><th>Install</th><th>Writes to</th></tr></thead><tbody>' +
+      TOOLS.map(function (r) {
+        return '<tr><td>' + esc(r[0]) + '</td><td class="num' + (r[1] ? ' hi' : ' zero') + '">' + r[1] + '</td><td class="num' + (r[2] ? '' : ' zero') + '">' + r[2] + '</td><td>' + c(r[3]) + '</td><td>' + c(r[4]) + '</td></tr>';
+      }).join("") + '</tbody></table></div></div>';
+    return html;
+  }
+
+  /* ── First session to unattended ─────────────────────────────── */
+  var RUNGS = [
+    { stage: "Day one", stageNote: "about five minutes" },
+    { id: "r1", n: 1, t: "Install and open a session", s: "Rules load in every session; hooks refuse risky edits and ask before commit or push.", k: "cct start ~/projects/my-app",
+      body: function () {
+        return sec("You get", ul(["The global manifest and four rules in every session, without asking for them.", "Hooks that refuse edits to " + c(".env") + " and lock files, and stop the first commit or push until you agree.", "Type checks after edits and the test suite when the agent stops."])) +
+          sec("Do this", cmd("git clone https://github.com/gosha70/code-copilot-team.git\ncd code-copilot-team\n./scripts/setup.sh --claude-code\ncct start ~/projects/my-app") +
+            p("Once the " + c("v2.1.0") + " tag is published, add " + c("--branch v2.1.0") + " to the clone to pin the release.")) +
+          sec("Expect", p("A session opens with your git branch in the status line, and the rules load without being asked for.")) +
+          sec("Verify", p("Ask the agent \"which rules are loaded?\". It names the four global rules. Ask it to edit " + c(".env") + " and protect-files refuses.")) +
+          sec("If not", cmd("cct doctor\n./scripts/setup.sh --sync --claude-code") + p(c("cct doctor") + " names what is missing: a tool, the provider profile, or an adapter.")) +
+          more([doc("README.md", "README: Quick Start"), doc("docs/codespace-tour.md", "Codespace tour: try it with nothing installed")]);
+      } },
+    { id: "r2", n: 2, t: "Start a project from a template", s: "A stack CLAUDE.md with an agent team, commands and a CI workflow.", k: "cct init ml-rag ~/projects/my-rag-app",
+      body: function () {
+        return sec("Do this", cmd("cct templates                                     # the eleven templates\ncct init ml-rag ~/projects/my-rag-app\ncct init web-dynamic ./my-app --permissions balanced\ncct start ~/projects/my-rag-app")) +
+          sec("Expect", p("The project gets a " + c("CLAUDE.md") + " with the stack's agent team, slash commands, and a CI workflow that skips cleanly until you add a toolchain file. Its Next steps line reads " + c("Run: cct start <dir>") + ".")) +
+          sec("Later", cmd("cct sync ~/projects/my-rag-app --dry-run\ncct sync ~/projects/my-rag-app") + p("Sync never overwrites your " + c("CLAUDE.md") + ".")) +
+          sec("Templates", p("ml-rag, ml-langchain, ml-app, ml-utils, ml-n8n, java-enterprise, java-tooling, gradle-plugin, web-static, web-dynamic, domain-pack. The " + c("ui-harness") + " bundle adds a design harness to any web project.")) +
+          more([doc("docs/project-templates.md", "Project templates")]);
+      } },
+    { stage: "Everyday work", stageNote: "add these as you need them" },
+    { id: "r3", n: 3, t: "Work in four phases, with a spec", s: "Research, plan, build, review. The build follows an approved plan.", k: "/phase-complete",
+      body: function () {
+        return sec("The phases", kv([
+            ["Research", "One agent explores the code and docs. No changes."],
+            ["Plan", "One agent asks questions and writes " + c("specs/<feature-id>/") + ". You approve it."],
+            ["Build", "A team lead splits the approved plan across sub-agents. The only phase that writes code."],
+            ["Review", "One agent runs the tests and checks the whole change."]
+          ])) +
+          sec("The gates", ul([
+            c("plan.md") + " declares how much spec the change needs (" + c("full") + ", " + c("lightweight") + " or " + c("none") + "). The build agent will not start a " + c("full") + " task without a complete " + c("spec.md") + ".",
+            c("/origin-check <feature-id>") + " confirms the plan still matches what you asked for.",
+            c("/phase-complete") + " closes a phase once verification passes, and the review if you turned one on."
+          ])) +
+          sec("Smaller work", p(c("/ralph-start") + " runs one agent in a loop until the verification command passes or it reaches the iteration cap.")) +
+          more([doc("docs/spec-driven-development.md", "Spec-driven development"), doc("shared/docs/ralph-loop-guide.md", "Ralph Loop guide")]);
+      } },
+    { id: "r4", n: 4, t: "Pick the LLM for one session", s: "Named targets in llms.toml; nothing exported in your shell.", k: "cct start --llm deepseek .", m: "experimental",
+      body: function () {
+        return sec("Do this", cmd("cct llm validate\ncct llm list                      # the targets, and whether each can launch\ncct start --llm deepseek .        # this session only\ncct start --llm opus .") +
+          p("Targets are declared once in " + c("~/.cct/llms.toml") + ": a provider, an endpoint, a model and a binding.")) +
+          sec("Why", p("Because the target is chosen per launch, no provider, credential or model variable sits in your shell where the next session would inherit it.")) +
+          sec("Watch out", p("Resume with the same target: " + c("cct start --llm deepseek --resume") + ". The launcher does not record a session's target yet.")) +
+          more([doc("docs/llm-catalog.md", "The LLM catalog and --llm")]);
+      } },
+    { id: "r5", n: 5, t: "Get a second opinion", s: "A second model reviews each phase; a FAIL blocks it.", k: "cct start --peer-review <name> .",
+      body: function () {
+        return sec("Do this", cmd("# declare a reviewer in ~/.cct/providers.toml, then prove it answers:\nscripts/review-round-runner.sh . --probe --peer <name> --subject claude --out /tmp/probe.json\njq '{provider, verdict, duration_sec, error}' /tmp/probe.json\n\ncct start --peer-review <name> ~/projects/my-app") +
+          p("At the end of a phase, run " + c("/review-submit") + ".")) +
+          sec("Expect", p("The probe exits 0 with a verdict of PASS, FAIL or INCONCLUSIVE.")) +
+          sec("If not", kv([["exit 2", "No provider in the chain passed its healthcheck."], ["exit 3", "The provider ran but returned no verdict the parser could read; the answer's tail is in the file."]])) +
+          sec("When the loop stops", p("After 5 rounds, 15 minutes, a finding the reviewer rejects twice running, or no reviewer available, the loop stops and waits for you: " + c("/review-decide approve") + ", " + c("reject") + " or " + c("retry") + ".")) +
+          more([doc("docs/auto-code-review-setup.md", "Auto code review cookbook"), doc("docs/peer-review.md", "Peer review")]);
+      } },
+    { stage: "Scale up", stageNote: "for bigger bets and work you hand off" },
+    { id: "r6", n: 6, t: "Shape bigger work", s: "Pitches with an appetite and a circuit breaker; bets run on a hill chart.", k: "/shape",
+      body: function () {
+        return sec("The cycle", kv([
+            ["/shape", "A rough idea becomes a pitch: appetite, scopes, rabbit holes, no-gos, a circuit breaker."],
+            ["/bet", "Locks a shaped pitch as the next cycle's bet."],
+            ["/cycle-start", "Starts the hill chart for the bet."],
+            ["/hill", "Moves a scope along the hill."],
+            ["/cooldown, /retro", "Close the cycle with a cooldown report and a retrospective."]
+          ])) +
+          p("Pitches are written to " + c("specs/pitches/<id>/") + ".") +
+          more([doc("docs/shape-up-workflow.md", "Shape-Up workflow")]);
+      } },
+    { id: "r7", n: 7, t: "Build unattended", s: "An approved feature built phase by phase under cost and time caps.", k: "cct build my-feature --profile unattended", m: "beta",
+      body: function () {
+        return sec("Before you start", ul(["An approved SDD bundle: " + c("spec.md") + ", " + c("plan.md") + ", " + c("tasks.md") + " and a finalized " + c("verification.yaml") + ".", "A reviewer that answers its probe (rung 5).", c("gh") + " authenticated, for the pull request."])) +
+          sec("Do this", cmd("/auto-build my-feature     # in a session: writes specs/my-feature/automation.json\n\n# then, in the project directory:\nCCT_REVIEW_DIFF_MAX_LINES=4000 cct build my-feature --profile unattended")) +
+          sec("Profiles", kv([
+            ["advisory", "What /auto-build writes. Builds and reports; publishes nothing."],
+            ["pr", "Pushes the branch and opens a PR."],
+            ["merge", "Also arms gated auto-merge, which still waits for the " + c("reviewed") + " label."],
+            ["unattended", "Runs without you. Must be declared in automation.json and pass admission."]
+          ])) +
+          sec("If it stops", p("The ledger under " + c(".cct/auto-build/<feature>/") + " says why: " + c("termination.json") + " names the reason and " + c("triage-report.md") + " says whether it can resume.")) +
+          sec("Verify", p("Harness Studio › Runs, or " + c("./scripts/session-analytics runs") + ": the run, its cost against the cap, and each phase's verdict.")) +
+          more([doc("docs/auto-build.md", "Unattended auto-build")]);
+      } },
+    { stage: "Measure", stageNote: "start this at any rung" },
+    { id: "r8", n: 8, t: "Watch and tune in Harness Studio", s: "Every session leaves a transcript. Load them and see what to change.", k: "./scripts/session-analytics start",
+      body: function () {
+        return p("This works from your first session. Every Claude Code, Pi and Aider session leaves a transcript, and Session Analytics reads them into a local store.") +
+          cmd("./scripts/session-analytics start   # first time: venv, Studio packages, .env, ingest, opens the browser") +
+          p(goto("studio", "Open the Harness Studio tab")) +
+          more([doc("docs/session-analytics-cookbook.md", "Session Analytics cookbook")]);
+      } }
+  ];
+  RUNGS.forEach(function (r) { if (r.id) panelFor[r.id] = { chip: chip("Rung " + r.n), title: r.t, body: r.body }; });
+
+  function renderLadder() {
+    var html = '<div class="view-head"><h2>From your first session to unattended builds</h2>' +
+      '<p class="note">Each rung adds one capability. Every rung works without the ones after it, so stop at the one that fits your work.</p></div>';
+    var open = false;
+    RUNGS.forEach(function (r) {
+      if (r.stage) {
+        if (open) html += '</div></div>';
+        html += '<div class="group"><div class="stage"><h3>' + esc(r.stage) + '</h3><span class="k">' + esc(r.stageNote) + '</span></div><div class="rungs">';
+        open = true;
+        return;
+      }
+      html += '<button class="box rung" ' + boxAttrs(r.id) + '><span class="n">' + r.n + '</span>' +
+        '<span class="head"><span class="t">' + esc(r.t) + '</span>' + maturity(r.m) + '</span>' +
+        '<span class="s">' + esc(r.s) + '</span><code class="inline">' + esc(r.k) + '</code></button>';
+    });
+    if (open) html += '</div></div>';
+    return html;
+  }
+
+  /* ── Harness Studio ──────────────────────────────────────────── */
+  var STUDIO_TOP = [
+    { id: "get-running", t: "Get it running", s: "One command the first time; serve after that.",
+      body: function () {
+        return sec("First time", cmd("./scripts/session-analytics start") + p("Creates the Python environment, installs the Studio's packages, writes " + c(".env") + " with local defaults (SQLite and an Ollama judge), ingests your sessions and opens the browser.")) +
+          sec("After that", cmd("./scripts/session-analytics serve                 # API on 127.0.0.1:8765, Studio on http://localhost:3000\n./scripts/session-analytics ingest                # new or changed transcripts only\n./scripts/session-analytics watch --interval 15   # keep ingesting")) +
+          sec("Needs", ul(["Python 3.11 or later and Node 20.9 or later.", "Optional: Ollama, for the local judge and for embeddings.", "Run from the CCT checkout's root."])) +
+          sec("If a port is taken", cmd("lsof -nP -iTCP:8765 -iTCP:3000 -sTCP:LISTEN\n./scripts/session-analytics serve --api-port 8766 --ui-port 3001")) +
+          more([doc("docs/session-analytics-cookbook.md", "Session Analytics cookbook, sections 2 to 5")]);
+      } },
+    { id: "pipeline-intro", t: "What turns transcripts into answers", s: "Load, graph, judge, KPIs: the Analysis pipeline's steps.",
+      body: function () {
+        return kv([
+            ["Load sessions", "Reads transcripts into the store. Pick by date, count or one by one."],
+            ["Build knowledge graph", "Sessions, tools, files, models and developers, for the Graph page."],
+            ["LLM judge", "Labels each turn. Free with the local Ollama default."],
+            ["KPIs", "Rolls the labels up per session."],
+            ["Embed, find similar", "Needs an embedding model; feeds the Similar tab."],
+            ["Link benchmark runs", "Attaches benchmark results to the sessions they produced."]
+          ]) +
+          p("Analysis pipeline › Run all steps runs them in order and shows a funnel of counts.") +
+          cmd("./scripts/session-analytics analyze --limit 200\n./scripts/session-analytics kpis\n./scripts/session-analytics graph --rebuild");
+      } },
+    { id: "privacy", t: "What stays on your machine", s: "Redaction first, a local judge, an API on 127.0.0.1.",
+      body: function () {
+        return ul([
+            "Redaction runs before anything is written or sent. The default, " + c("code") + ", strips code blocks and tool inputs.",
+            "The packaged judge and embeddings are local Ollama. Session text reaches a cloud model only if you choose the " + c("claude-code") + " or an " + c("openai") + " judge, and the pipeline warns before a batch run.",
+            "The API binds to 127.0.0.1 and rejects cross-origin writes.",
+            "Per project, in " + c("~/.cct/session-analytics.json") + ": " + c("\"ingest\": \"off\"") + " never ingests it, a stricter redaction tightens it, " + c("\"trace_archive\": true") + " keeps full text for Ask and the analyses."
+          ]) +
+          '<div class="warnbox">Until ' + iss(487) + ' is fixed, ' + c("session-analytics export") + ' still writes the stored rows of a project you opted out or tightened after its sessions were ingested.</div>' +
+          more([doc("docs/session-analytics-cookbook.md", "Session Analytics cookbook, section 11")]);
+      } }
+  ];
+
+  var LOOP = [
+    { id: "l-observe", n: 1, t: "Observe", s: "Overview: cost, errors, labels, response time",
+      body: function () {
+        return p("Start on Overview. The stats row gives sessions, turns, tool calls, errors, average duration and the median agent response. Then the cards:") +
+          ul(["Cost by outcome: where the money went.", "Label distribution: how often each judge label fired. Click a label for every turn where it fired.", "Recent tool errors, tool usage, sentiment, sessions by day.", "Sessions by harness version: the comparison you use in step 4."]) +
+          p("Probe runs and two-turn smoke tests are hidden as noise everywhere, and every page says how many.");
+      } },
+    { id: "l-diagnose", n: 2, t: "Diagnose", s: "One session's timeline and three analyses; Graph, Ask, Search",
+      body: function () {
+        return p("Open a session from Sessions. The Timeline shows every turn, the seconds since the one before, the tools called and the judge's labels.") +
+          kv([
+            ["Agent Tuning", "What to change in your CLAUDE.md, permissions, hooks or skills, with the diff."],
+            ["Prompt Coaching", "Which of your prompts were vague, and what to send instead."],
+            ["Efficiency", "Where the turns went, and the script, hook, skill or rule that would remove each detour."]
+          ]) +
+          p("Every finding cites its turns. For patterns across sessions, use Graph's question catalogue, Ask, or Search.");
+      } },
+    { id: "l-change", n: 3, t: "Change the harness", s: "Apply the diff: rules, skills, CLAUDE.md, permissions, hooks",
+      body: function () {
+        return kv([
+            ["Your conventions, every project", c("~/.claude/CLAUDE.md") + ". Setup never overwrites it."],
+            ["One project's conventions", "That project's " + c("CLAUDE.md") + ", or " + c("CLAUDE.local.md") + " for yourself."],
+            ["A rule, skill, agent or command", "Edit it in the checkout's " + c("shared/") + " or " + c("adapters/claude-code/.claude/") + ", then " + c("./scripts/setup.sh --sync --claude-code") + ". Sync replaces the installed copies, so an edit made directly in " + c("~/.claude/rules/") + " does not last."],
+            ["What the agent may run", c("cct permissions balanced <dir>") + " or " + c("relaxed") + ", or the per-stack lists in the permissions guide."],
+            ["A recurring detour", "The Efficiency tab's starter file for a script, hook or skill."]
+          ]) +
+          p("Each Agent Tuning finding links to the guide in Guides that explains the fix.");
+      } },
+    { id: "l-compare", n: 4, t: "Compare", s: "Sessions by harness version, before and after",
+      body: function () {
+        return p("Overview › Sessions by harness version groups sessions by the stamp they started under: instructions, CCT commit, CCT release, CLI version or providers. Each row gives sessions, median turns, median tool calls, errors per 100 turns, priced cost, interaction quality, rework rate and correction rate, and links to exactly its sessions.") +
+          '<div class="warnbox">The instructions digest covers the rules, skills, agents and commands in ' + c("~/.claude") + '. It does not cover any ' + c("CLAUDE.md") + ', hooks or permissions. Compare those changes by date on the Sessions page instead.</div>' +
+          p("These are observational groups, not an experiment: the sessions also differ in what they were asked to do. Treat a difference as a lead to read, not a verdict.");
+      } },
+    { id: "l-trust", n: 5, t: "Check the judge", s: "Judge quality: human labels against the judge's",
+      body: function () {
+        return p("Every label-based number rests on the judge, so measure it. Label a sample yourself and compare.") +
+          cmd("./scripts/session-analytics labels sample --n 50 --out sample.csv\n#   fill the yes/no columns, sentiment and quality\n./scripts/session-analytics labels import sample.csv --labeler you\n./scripts/session-analytics analyze --only-labelled-by human:you\n./scripts/session-analytics labels agreement human:you heuristic-v1") +
+          p("Cohen's κ sits beside raw agreement, because a label that is almost always \"no\" agrees by chance. Under 20 pairs a figure is shown but is not evidence. The Analysis pipeline's Judge quality card shows the same.");
+      } }
+  ];
+
+  var STUDIO_LANES = [
+    { name: "Mission Control", pages: [
+      { id: "s-overview", t: "Overview", s: "How much, what it cost, where errors and money went",
+        body: function () {
+          return sec("Answers", p("How much have I done, what did it cost, how fast does the agent answer, where did the errors and money go?")) +
+            sec("On the page", p("Stats: sessions, turns, tool calls, errors, average duration, median agent response. Cards: sessions by copilot, tool usage, sentiment, cost by outcome, label distribution, recent tool errors, Pi workflow phases, sessions by day, sessions by harness version, developers.")) +
+            sec("Tune with it", p("Click a label in Label distribution to see every turn where it fired. Use Sessions by harness version after you change the rules, skills, agents or commands in " + c("~/.claude") + ".")) +
+            sec("Empty?", p("Nothing is loaded yet: Analysis pipeline › Load sessions, or " + c("./scripts/session-analytics ingest") + "."));
+        } },
+      { id: "s-sessions", t: "Sessions", s: "Which sessions are real work, filtered",
+        body: function () {
+          return p("Every session, with filters for developer, model, tool, judge label, tag, date range, priced cost and harness version. Filters live in the URL, so a filtered list can be shared.") +
+            p("Probe runs and very short sessions are hidden; " + c("Show excluded (n)") + " brings them back. What counts as noise is set by " + c("CCT_SA_NOISE_*") + " and needs no re-ingest.");
+        } },
+      { id: "s-session", t: "Session page", s: "Timeline, Agent Tuning, Prompt Coaching, Efficiency, Similar", sub: true,
+        body: function () {
+          return kv([
+              ["Timeline", "Every turn with its text, the gap since the last one, tool calls nested under the turn that made them, and the judge's labels. A card lists the slowest turns."],
+              ["Agent Tuning", "What to change in CLAUDE.md, permissions, hooks or skills, with a diff and a Copy button."],
+              ["Prompt Coaching", "Which prompts were vague, and what to send instead."],
+              ["Efficiency", "Where the turns went, with a starter file for the fix."],
+              ["Similar", "Sessions closest in meaning, with the reason in words. Needs an embedding model."]
+            ]) +
+            p("The header shows the harness stamp the session ran under. You can leave feedback on the session, any turn or any tool call, and the page shows which session it was resumed from.") +
+            sec("Weigh the analyses", p("The footer names the judge and model, and whether it read the full text or previews. A small local model over previews gives thin advice; opt the project into the archive and use a stronger judge for useful advice."));
+        } },
+      { id: "s-search", t: "Search", s: "Exact words in archived turns; no model involved",
+        body: function () {
+          return p("Ranked, deterministic matching over archived turn text, each hit linked to its turn. Only projects opted into the archive are searchable, and the page reports that coverage so \"no match\" and \"nothing archived\" read differently.") +
+            cmd("./scripts/session-analytics search \"pricing config\" --limit 20");
+        } },
+      { id: "s-ask", t: "Ask", s: "A question in words, answered through lookups you can check",
+        body: function () {
+          return p("The judge LLM answers questions about your store using nine read-only lookups: sessions, turns, analyses, full-text search, tool and error patterns, similar sessions, graph questions and totals. Each lookup is shown with exactly what the model was given.") +
+            p("A session id the model names that no lookup returned is marked unverified. Nothing is written.") +
+            sec("Try", ul(["Which sessions had the most tool errors, and what went wrong in the worst one?", "What did I work on last week, project by project?"]));
+        } },
+      { id: "s-graph", t: "Graph", s: "One session or project and everything it touches",
+        body: function () {
+          return p("A session in the middle with its workspace, model, copilot and developer; the tools it called, ringed red when they errored; the files it touched; the sessions most like it. Click a tool for every call, a file for the sessions that touched it.") +
+            p("Below the picture, a catalogue of questions: which tools fail most and where, tools that precede an error, files touched by the most sessions, which model runs the longest sessions.") +
+            sec("Needs", p("Analysis pipeline › Build knowledge graph, or " + c("./scripts/session-analytics graph --rebuild") + "."));
+        } }
+    ] },
+    { name: "Development", pages: [
+      { id: "s-runs", t: "Runs", s: "Every auto-build attempt, from its ledger", tag: "beta",
+        body: function () {
+          return ul([
+              "The outcome in the driver's own words: landed, terminated_policy, or no outcome yet. Never collapsed to pass or fail.",
+              "Why it stopped, phases and review rounds with each verdict, fix sessions and commits.",
+              "Cost against the cap, with the metered part and the estimate for an unmetered reviewer shown apart, and wall clock against its cap.",
+              "How many requirements had a verifier, and how many went green.",
+              "The PR, and your verdict on it: merged unmodified, merged with fixes, or rejected."
+            ]) +
+            cmd("./scripts/session-analytics runs\n./scripts/session-analytics runs label <attempt-id> merged_with_fixes --note \"FR-3 fixed by hand\"");
+        } },
+      { id: "s-team", t: "Team", s: "Who is active, cost per person and project, alerts",
+        body: function () {
+          return p("Developers with a heartbeat in the last five minutes, what each is on, and cost and sessions for today, 7 days and 30 days, per developer and per project.") +
+            sec("Alerts", kv([
+              ["Budgets", "Team, developer or project, per day or 30 days, in Settings › Team. A warning at 80%, a breach at 100%."],
+              ["Runaway sessions", "Always on: a live session with more than 300 turns or $20 in the last hour, or errors in more than half of its last 50 turns."],
+              ["Auto-build caps", "A running build at 80% and 100% of its cost or wall-clock cap."]
+            ])) +
+            cmd("./scripts/session-analytics team alerts --fail-on warning   # exit code for cron") +
+            sec("Needs", p("A shared Postgres store for more than one developer. On a local SQLite store it shows you alone."));
+        } },
+      { id: "s-routing", t: "Routing", s: "The evidence routing decisions are calibrated on", tag: "experimental",
+        body: function () {
+          return p("The routing configuration, and the evidence sets behind it. Each set shows quality and cost per task for each arm, the Pareto frontier, and the recommendations a shadow recommender would have made.") +
+            more([doc("docs/llm-routing.md", "LLM routing")]);
+        } },
+      { id: "s-benchmark", t: "Benchmark", s: "What the benchmark harness found", tag: "beta",
+        body: function () {
+          return p("Attempts by result with the cost and duration of the sessions they produced, and the predicted pass rate per project. Empty until you run the harness and link its runs.") +
+            sec("Needs", p("Settings › Benchmarks names the runs folder; then press Link benchmark runs.")) +
+            more([doc("benchmarks/README.md", "Benchmark harness")]);
+        } },
+      { id: "s-pipeline", t: "Analysis pipeline", s: "Load, graph, judge, KPIs, with a funnel and Judge quality",
+        body: function () {
+          return p("The steps that turn transcripts into the numbers on every other page, each with a button, progress and the reason for any failure. Run all steps runs them in order.") +
+            p("Load sessions can take a selection: a date, a count, or sessions ticked one by one, with the size to read beside the button.") +
+            p("The Judge quality card compares the judge with your own labels (step 5 of the loop).");
+        } }
+    ] },
+    { name: "Library and Settings", pages: [
+      { id: "s-guides", t: "Guides", s: "The project's docs, skills, agents and wiki, in the app",
+        body: function () {
+          return p("The same guides as the repository and the documentation site, served in the Studio. Each Agent Tuning finding links to the guide that explains its fix.");
+        } },
+      { id: "s-settings", t: "Settings", s: "The .env every tool reads, with tests for each connection",
+        body: function () {
+          return kv([
+              ["Database", "The store, with Test database."],
+              ["LLM-as-Judge", "Backend, model, base URL, key, workers, with Test judge LLM."],
+              ["Embeddings", "The embedding model, with Test embedding."],
+              ["Redaction, developer id", "How much is stripped, and your name on a shared store."],
+              ["Team, Benchmarks, Auto-build runs", "Budgets, the benchmark runs folder, the ledger root."]
+            ]) +
+            p("A banner says when the running server uses a different database from the saved form.");
+        } }
+    ] }
+  ];
+
+  STUDIO_TOP.forEach(function (x) { panelFor[x.id] = { chip: chip("Harness Studio"), title: x.t, body: x.body }; });
+  LOOP.forEach(function (x) { panelFor[x.id] = { chip: chip("Tuning loop · step " + x.n), title: x.t, body: x.body }; });
+  STUDIO_LANES.forEach(function (lane) {
+    lane.pages.forEach(function (x) { panelFor[x.id] = { chip: chip(lane.name), title: x.t, body: x.body }; });
+  });
+
+  function renderStudio() {
+    var html = '<div class="view-head"><h2>Watch and tune in Harness Studio</h2>' +
+      '<p class="note">Harness Studio is the web app over Session Analytics. It shows what happened in your sessions, finds what to change in your harness, and tells you whether the change helped. It runs on your machine.</p></div>';
+    html += '<div class="grid-3">' + STUDIO_TOP.map(function (x) {
+      return '<button class="box" ' + boxAttrs(x.id) + '><span class="t">' + esc(x.t) + '</span><span class="s">' + esc(x.s) + '</span></button>';
+    }).join("") + '</div>';
+
+    html += '<div class="group"><h3>The tuning loop</h3><div class="cycle"><div class="flow">';
+    LOOP.forEach(function (x, i) {
+      if (i) html += '<span class="arrow" aria-hidden="true">&#8594;</span>';
+      html += '<button class="box" ' + boxAttrs(x.id) + '><span class="step">' + x.n + '</span><span class="t">' + esc(x.t) + '</span><span class="s">' + esc(x.s) + '</span></button>';
+    });
+    html += '</div><p class="back"><b>&#8634;</b> then back to step 1 with the next sessions.</p></div></div>';
+
+    html += '<div class="group"><h3>Page by page</h3>' +
+      '<div class="navbar" aria-hidden="true"><div class="bar1"><span class="word">Harness Studio</span><span class="sect on">Mission Control</span><span class="sect">Development</span><span class="sect">Library</span><span class="set">Settings</span></div>' +
+      '<div class="bar2"><span class="on">Overview</span><span>Sessions</span><span>Search</span><span>Ask</span><span>Graph</span></div></div>' +
+      '<p class="note">The Studio\'s top bar has three sections and Settings; the bar below lists the open section\'s pages. Click a page for what it answers and what it needs.</p>' +
+      '<div class="lanes">';
+    STUDIO_LANES.forEach(function (lane) {
+      html += '<div class="lane"><div class="lane-head">' + esc(lane.name) + '</div>';
+      lane.pages.forEach(function (x) {
+        html += '<button class="box' + (x.sub ? ' sub' : '') + '" ' + boxAttrs(x.id) + '>' + maturity(x.tag) + '<span class="t">' + esc(x.t) + '</span><span class="s">' + esc(x.s) + '</span></button>';
+      });
+      html += '</div>';
+    });
+    html += '</div></div>';
+    return html;
+  }
+
+  /* ── Tuning recipes ──────────────────────────────────────────── */
+  var RECIPES = [
+    { id: "x-corrections", t: "I keep correcting the agent", w: "Overview › Label distribution",
+      look: "Label distribution, then click corrections or rework to see every turn where it fired. Open the worst session's Agent Tuning tab.",
+      change: "Apply its diff: usually a rule, a skill, or the project's CLAUDE.md.",
+      confirm: "For a rule or skill in ~/.claude: Sessions by harness version, grouped by instructions, comparing rework and correction rates. For a CLAUDE.md: the same project's sessions filtered by date, before and after." },
+    { id: "x-prompts", t: "My requests get misread", w: "Session › Prompt Coaching",
+      look: "Prompt Coaching on a session where it went wrong. It quotes the vague prompts and what to send instead.",
+      change: "Your own habit, or a project command that asks the questions for you.",
+      confirm: "Fewer misunderstanding and correction labels in later sessions (Sessions › filter by label)." },
+    { id: "x-turns", t: "Sessions take too many turns", w: "Session › Efficiency",
+      look: "Efficiency names where the turns went, for example the same search repeated or a test run by hand each time.",
+      change: "Its starter file: a script, a hook, a skill or a rule that removes the detour.",
+      confirm: "Median turns and median tool calls in Sessions by harness version." },
+    { id: "x-tools", t: "A tool keeps failing", w: "Overview › Recent tool errors · Graph",
+      look: "Recent tool errors, then Graph's catalogue: which tools fail most and where, and tools that precede an error. Or Ask which sessions had the most tool errors.",
+      change: "The cause: a missing permission (cct permissions), a missing dependency, a wrong command in CLAUDE.md.",
+      confirm: "Errors per 100 turns in Sessions by harness version, or the tool's ring in Graph." },
+    { id: "x-cost", t: "It costs more than I expected", w: "Overview › Cost by outcome · Team",
+      look: "Cost by outcome on Overview, and cost per developer and project on Team.",
+      change: "Set budgets in Settings › Team, and start routine sessions on a cheaper target with cct start --llm.",
+      confirm: "Team's 7- and 30-day costs. Sessions filtered by model shows what each target costs." },
+    { id: "x-runaway", t: "A session is running away", w: "Team › Alerts",
+      look: "The Alerts card flags a live session with more than 300 turns in an hour, more than $20, or mostly errors in its last 50 turns, and links to it.",
+      change: "Stop it yourself; nothing is stopped automatically. For a cron job, team alerts exits 1 on a breach.",
+      confirm: "Alerts are computed on every read, so it disappears once the session no longer meets the rule." },
+    { id: "x-helped", t: "Did my change help?", w: "Overview › Sessions by harness version",
+      look: "Group by instructions, CCT commit, CCT release, CLI version or providers. Each row links to exactly its sessions.",
+      change: "Nothing yet: read the sessions in the row that looks different before you trust it.",
+      confirm: "Rows are observational, not an experiment. CLAUDE.md, hooks and permissions are not in the stamp; compare those by date." },
+    { id: "x-judge", t: "Can I trust these numbers?", w: "Analysis pipeline › Judge quality",
+      look: "The Judge quality card: the judge against itself and against your labels.",
+      change: "Label 50 turns yourself, and switch to a stronger judge if agreement is poor.",
+      confirm: "Cohen's κ beside raw agreement, with at least 20 pairs." },
+    { id: "x-build", t: "Was the unattended build any good?", w: "Development › Runs",
+      look: "The run's outcome, cost against its cap, verifiers that went green, and the policy decisions the driver took.",
+      change: "Record your verdict on its PR: merged unmodified, merged with fixes, or rejected.",
+      confirm: "Over several runs, the verdicts tell you whether to move from the pr profile to merge or unattended." },
+    { id: "x-before", t: "Have I solved this before?", w: "Session › Similar · Search · Ask",
+      look: "Similar lists the closest sessions with the reason. Search finds exact words in archived projects. Ask summarises across sessions.",
+      change: "Reuse what worked: promote the lesson to the project wiki with /promote-lesson.",
+      confirm: "The next similar session takes fewer turns." }
+  ];
+  RECIPES.forEach(function (r) {
+    panelFor[r.id] = { chip: chip("Recipe"), title: r.t, body: function () {
+      return sec("Look", p(esc(r.look))) + sec("Change", p(esc(r.change))) + sec("Confirm", p(esc(r.confirm))) +
+        p(goto("studio", "Where these pages are: the Harness Studio tab"));
+    } };
+  });
+
+  function renderRecipes() {
+    return '<div class="view-head"><h2>Tuning recipes</h2>' +
+      '<p class="note">Start from what you notice. Each recipe says where to look in Harness Studio, what to change, and how to tell whether it helped.</p></div>' +
+      '<div class="recipes">' + RECIPES.map(function (r) {
+        return '<button class="box" ' + boxAttrs(r.id) + '><span class="t">' + esc(r.t) + '</span><span class="where">' + esc(r.w) + '</span></button>';
+      }).join("") + '</div>';
+  }
+
+  /* ── tabs and panel ──────────────────────────────────────────── */
+  var TABS = [
+    { id: "map", label: "How it fits together" },
+    { id: "ladder", label: "First session to unattended" },
+    { id: "studio", label: "Harness Studio" },
+    { id: "recipes", label: "Tuning recipes" }
+  ];
+  var RENDER = { map: renderMap, ladder: renderLadder, studio: renderStudio, recipes: renderRecipes };
+  var DEFAULT_SELECTION = { ladder: "r1", studio: "get-running", recipes: "x-corrections" };
+  var PANEL_DEFAULT = {
+    map: { chip: chip("How to read this"), title: "Six layers, top to bottom", body: function () {
+      return ol([
+        ["shared", "The checkout", "one source for every tool"],
+        ["claude-home", "Your machine", "installed once by setup.sh"],
+        ["project-claude", "Your project", "seeded by cct init"],
+        ["launcher", "The session", "opened by cct start"],
+        ["reviewer", "Beside it", "reviewer, driver, LLM targets, routing"],
+        ["studio-box", "The evidence", "read in Harness Studio"]
+      ]) + p("Click any box for what it holds, the commands that touch it, and the guide to read next.");
+    } }
+  };
+  function ol(rows) {
+    return '<ol>' + rows.map(function (r) { return '<li><button type="button" class="linkbtn" data-select="' + r[0] + '">' + esc(r[1]) + '</button>: ' + esc(r[2]) + '</li>'; }).join("") + '</ol>';
+  }
+
+  var tablist = document.getElementById("tablist");
+  var views = document.getElementById("views");
+  var panel = document.getElementById("panel");
+  var current = "map";
+
+  tablist.innerHTML = TABS.map(function (t) {
+    return '<button class="tab" role="tab" type="button" id="tab-' + t.id + '" data-tab="' + t.id + '" aria-controls="view-' + t.id + '" aria-selected="false" tabindex="-1">' + esc(t.label) + '</button>';
+  }).join("");
+  views.innerHTML = TABS.map(function (t) {
+    return '<section class="view" role="tabpanel" id="view-' + t.id + '" aria-labelledby="tab-' + t.id + '" hidden>' + RENDER[t.id]() + '</section>';
+  }).join("");
+
+  function showPanel(entry) {
+    if (!entry) { panel.innerHTML = '<p class="note">Click a box to see its details.</p>'; return; }
+    panel.innerHTML = '<div class="sec">' + entry.chip + '<h3>' + esc(entry.title) + '</h3></div>' + entry.body();
+  }
+
+  function select(id, scroll) {
+    var view = document.getElementById("view-" + current);
+    if (!view) return;
+    view.querySelectorAll("[data-select]").forEach(function (el) {
+      el.setAttribute("aria-pressed", el.getAttribute("data-select") === id ? "true" : "false");
+    });
+    showPanel(panelFor[id]);
+    if (scroll && window.matchMedia("(max-width: 979px)").matches) {
+      var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      panel.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+    }
+  }
+
+  function showTab(id) {
+    if (!RENDER[id]) id = "map";
+    current = id;
+    TABS.forEach(function (t) {
+      var tab = document.getElementById("tab-" + t.id);
+      tab.setAttribute("aria-selected", t.id === id ? "true" : "false");
+      tab.tabIndex = t.id === id ? 0 : -1;
+      document.getElementById("view-" + t.id).hidden = t.id !== id;
+    });
+    var def = DEFAULT_SELECTION[id];
+    if (def) select(def, false);
+    else {
+      document.getElementById("view-" + id).querySelectorAll("[data-select]").forEach(function (el) { el.setAttribute("aria-pressed", "false"); });
+      showPanel(PANEL_DEFAULT[id]);
+    }
+  }
+
+  function setHash(id) {
+    if (location.hash !== "#" + id) { try { history.replaceState(null, "", "#" + id); } catch (err) { /* hash routing is a convenience */ } }
+  }
+
+  tablist.addEventListener("click", function (e) {
+    var b = e.target.closest("[data-tab]");
+    if (!b) return;
+    var id = b.getAttribute("data-tab");
+    setHash(id);
+    showTab(id);
+  });
+  tablist.addEventListener("keydown", function (e) {
+    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+    var i = TABS.findIndex(function (t) { return t.id === current; });
+    var next = TABS[(i + (e.key === "ArrowRight" ? 1 : TABS.length - 1)) % TABS.length].id;
+    document.getElementById("tab-" + next).focus();
+    setHash(next);
+    showTab(next);
+  });
+
+  function onSelect(el) {
+    var id = el.getAttribute("data-select");
+    if (!panelFor[id]) return;
+    if (!document.getElementById("view-" + current).querySelector('[data-select="' + id + '"]')) {
+      var owner = TABS.find(function (t) { return document.getElementById("view-" + t.id).querySelector('[data-select="' + id + '"]'); });
+      if (owner && owner.id !== current) { setHash(owner.id); showTab(owner.id); }
+    }
+    select(id, true);
+  }
+  views.addEventListener("click", function (e) {
+    var el = e.target.closest("[data-select]");
+    if (el) onSelect(el);
+  });
+  panel.addEventListener("click", function (e) {
+    if (e.target.closest(".copy")) return;
+    var g = e.target.closest("[data-goto]");
+    if (g) {
+      var target = g.getAttribute("data-goto");
+      if (RENDER[target]) { setHash(target); showTab(target); window.scrollTo({ top: 0 }); return; }
+      var owner = TABS.find(function (t) { return document.getElementById("view-" + t.id).querySelector('[data-select="' + target + '"]'); });
+      if (owner) { setHash(owner.id); showTab(owner.id); select(target, true); }
+      return;
+    }
+    var s = e.target.closest("[data-select]");
+    if (s) onSelect(s);
+  });
+
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest(".copy");
+    if (!btn) return;
+    var code = btn.parentElement.querySelector("code");
+    var text = code ? code.textContent : "";
+    function selectText() {
+      var r = document.createRange(); r.selectNodeContents(code);
+      var s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+      btn.textContent = "Selected";
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { btn.textContent = "Copied"; }, selectText);
+    } else { selectText(); }
+    setTimeout(function () { btn.textContent = "Copy"; }, 1600);
+  });
+
+  function fromHash() { showTab((location.hash || "").replace("#", "") || "map"); }
+  window.addEventListener("hashchange", fromHash);
+  fromHash();
+})();
+</script>
+</body>
+</html>
