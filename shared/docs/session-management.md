@@ -11,8 +11,8 @@ Daily reference for managing Claude Code sessions effectively.
 | Resume named session | `claude --resume "name"` or `claude -r "name"` | Pick up by name or ID |
 | Interactive resume | `/resume` (inside Claude) | Shows session picker |
 | Fork (try alternative) | `claude -c --fork-session` | Branches off, original preserved |
-| Use the launcher | `claude-code ~/projects/my-app` | Uses `cmux` on macOS, `tmux` elsewhere |
-| Sync project to latest template | `claude-code sync [path] [--dry-run]` | Updates commands and `.claude/` files from template |
+| Use the launcher | `cct start ~/projects/my-app` | Uses `cmux` on macOS, `tmux` elsewhere |
+| Sync project to latest template | `cct sync [path] [--dry-run]` | Updates commands and `.claude/` files from template |
 
 You do **not** need to run `/init` every time. `/init` is a one-time command to scaffold a project-level CLAUDE.md for a new repo. Global rules already cover everything generic.
 
@@ -112,7 +112,7 @@ Git worktrees let you work on multiple branches simultaneously without stashing 
 git worktree add ../my-feature feature/my-feature
 
 # Start a Claude session in the worktree
-claude-code ../my-feature
+cct start ../my-feature
 
 # When done, clean up
 git worktree remove ../my-feature

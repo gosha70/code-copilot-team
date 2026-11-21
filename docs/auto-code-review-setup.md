@@ -166,9 +166,9 @@ if its output budget is spent on reasoning (why `disable_thinking` and
 ### 5.1 Per interactive session
 
 ```bash
-claude-code --peer-review deepseek ~/dev/repo/my-app   # explicit
-claude-code --peer-review ~/dev/repo/my-app            # the profile's default peer
-claude-code --peer-review-off ~/dev/repo/my-app        # off for this session
+cct start --peer-review deepseek ~/dev/repo/my-app     # explicit
+cct start --peer-review ~/dev/repo/my-app              # the profile's default peer
+cct start --peer-review-off ~/dev/repo/my-app          # off for this session
 ```
 
 The launcher exports `CCT_PEER_REVIEW_ENABLED=true` and the peer into

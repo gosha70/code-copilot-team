@@ -31,7 +31,7 @@ code-copilot-team/
 │   ├── aider/                           CONVENTIONS.md, setup.sh
 │   └── pi/                              bin/pi-code, runtime/, resources/, docs/, setup.sh
 ├── scripts/
-│   ├── cct                              The `cct` CLI: start, features, list, routing, doctor, config, home, llm
+│   ├── cct                              The `cct` CLI: start, init, templates, sync, build, permissions, playwright, features, list, routing, doctor, config, home, llm
 │   ├── generate.sh                      Builds adapter configs from shared/
 │   ├── session-analytics                Session Analytics launcher (CLI, Studio, MCP); code in session_analytics/
 │   ├── bench                            Terse benchmark comparison driver (wraps benchmark)

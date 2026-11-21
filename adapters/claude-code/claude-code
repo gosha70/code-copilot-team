@@ -653,7 +653,7 @@ list_templates() {
             fi
         done
     else
-        echo "  No templates found. Run claude-setup.sh first."
+        echo "  No templates found. Run ./scripts/setup.sh --claude-code from your checkout first."
     fi
     echo ""
 }
@@ -1032,7 +1032,7 @@ TMPLEOF
     echo ""
     echo "Next steps:"
     echo "  1. Edit $target/CLAUDE.md to customize for your project"
-    echo "  2. Run: claude-code $target"
+    echo "  2. Run: cct start $target"
     echo ""
 }
 
@@ -1090,7 +1090,7 @@ sync_project() {
     # 2. Validate template exists
     if [[ ! -d "$TEMPLATES_DIR/$template_name" ]]; then
         echo "Error: Template '$template_name' not found in $TEMPLATES_DIR"
-        echo "Run 'claude-setup.sh --sync' to update templates first."
+        echo "Run './scripts/setup.sh --sync --claude-code' from your checkout to update templates first."
         exit 1
     fi
 
@@ -1113,14 +1113,14 @@ sync_project() {
             local prof="$PERMISSIONS_DIR/$rec_tier.json"
             local settings="$target/.claude/settings.json"
             if [[ ! -f "$settings" ]]; then
-                echo "  [drift] recorded permission tier '$rec_tier' but no .claude/settings.json — run 'claude-code permissions $rec_tier'"
+                echo "  [drift] recorded permission tier '$rec_tier' but no .claude/settings.json — run 'cct permissions $rec_tier'"
                 echo ""
             elif [[ -f "$prof" ]] && ! jq -e -n --slurpfile p "$prof" --slurpfile s "$settings" '
                     ($p[0].permissions.defaultMode == $s[0].permissions.defaultMode)
                     and ((($p[0].permissions.allow // []) - ($s[0].permissions.allow // [])) | length == 0)
                     and ((($p[0].permissions.deny  // []) - ($s[0].permissions.deny  // [])) | length == 0)
                 ' >/dev/null 2>&1; then
-                echo "  [drift] permission profile '$rec_tier' differs from .claude/settings.json — run 'claude-code permissions $rec_tier' to re-apply (sync never auto-applies)"
+                echo "  [drift] permission profile '$rec_tier' differs from .claude/settings.json — run 'cct permissions $rec_tier' to re-apply (sync never auto-applies)"
                 echo ""
             fi
         fi
@@ -1371,7 +1371,7 @@ start_tmux_session() {
     # Resolve to absolute path
     if [[ ! -d "$project_dir" ]]; then
         echo "Error: Directory '$project_dir' does not exist."
-        echo "To create a new project, use: claude-code init <type> $project_dir"
+        echo "To create a new project, use: cct init <type> $project_dir"
         exit 1
     fi
     project_dir=$(cd "$project_dir" && pwd)
@@ -1391,7 +1391,7 @@ start_tmux_session() {
         echo "  Latest:  $last_commit"
         [[ "$dirty" -gt 0 ]] && echo "  Status:  $dirty uncommitted change(s)"
     fi
-    [[ -f "$project_dir/CLAUDE.md" ]] && echo "  Config:  CLAUDE.md found" || echo "  Config:  No CLAUDE.md (run 'claude-code init <type>')"
+    [[ -f "$project_dir/CLAUDE.md" ]] && echo "  Config:  CLAUDE.md found" || echo "  Config:  No CLAUDE.md (run 'cct init <type>')"
     if [[ "$PEER_REVIEW_ENABLED" == "true" ]]; then
         echo "  Peer:    ${PEER_PROVIDER:-profile default} (scope: $PEER_SCOPE)"
     fi
@@ -1460,7 +1460,7 @@ start_cmux_session() {
 
     if [[ ! -d "$project_dir" ]]; then
         echo "Error: Directory '$project_dir' does not exist."
-        echo "To create a new project, use: claude-code init <type> $project_dir"
+        echo "To create a new project, use: cct init <type> $project_dir"
         exit 1
     fi
     project_dir=$(cd "$project_dir" && pwd)
@@ -1478,7 +1478,7 @@ start_cmux_session() {
         echo "  Latest:  $last_commit"
         [[ "$dirty" -gt 0 ]] && echo "  Status:  $dirty uncommitted change(s)"
     fi
-    [[ -f "$project_dir/CLAUDE.md" ]] && echo "  Config:  CLAUDE.md found" || echo "  Config:  No CLAUDE.md (run 'claude-code init <type>')"
+    [[ -f "$project_dir/CLAUDE.md" ]] && echo "  Config:  CLAUDE.md found" || echo "  Config:  No CLAUDE.md (run 'cct init <type>')"
     if [[ "$PEER_REVIEW_ENABLED" == "true" ]]; then
         echo "  Peer:    ${PEER_PROVIDER:-profile default} (scope: $PEER_SCOPE)"
     fi
@@ -2004,7 +2004,7 @@ case "${1:-}" in
         done
         if [[ ${#ARGS[@]} -eq 0 ]]; then
             echo "Error: Missing project type."
-            echo "Usage: claude-code init <type> [path] [--permissions <tier>] [--yes-dangerous] [--playwright] [--license <type>]"
+            echo "Usage: cct init <type> [path] [--permissions <tier>] [--yes-dangerous] [--playwright] [--license <type>]"
             echo ""
             list_templates
             exit 1
@@ -2073,7 +2073,7 @@ case "${1:-}" in
         perm_tier="${PERM_ARGS[0]:-}"
         perm_target="${PERM_ARGS[1]:-.}"
         if [[ -z "$perm_tier" ]]; then
-            echo "Usage: claude-code permissions <default|balanced|relaxed> [dir] [--yes-dangerous]"
+            echo "Usage: cct permissions <default|balanced|relaxed> [dir] [--yes-dangerous]"
             exit 1
         fi
         if [[ ! -d "$perm_target" ]]; then

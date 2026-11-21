@@ -13,9 +13,9 @@
 #   ~/.claude/templates/<type>/commands/   Custom slash commands per type
 #   Installs claude-code launcher to ~/.local/bin/
 #
-# Run once, then use 'claude-code init <type> [path]' to scaffold projects.
+# Run once, then use 'cct init <type> [path]' to scaffold projects.
 # Run with --sync to re-copy rules, skills, agents, hooks, templates, and launcher from repo.
-# Then use 'claude-code sync [path]' to update individual projects against their template.
+# Then use 'cct sync [path]' to update individual projects against their template.
 set -e
 
 CLAUDE_DIR="$HOME/.claude"
@@ -1735,9 +1735,9 @@ for dir in "$TEMPLATES_DIR"/*/; do
 done
 echo ""
 echo "Quick start:"
-echo "  claude-code list                              # see all templates"
-echo "  claude-code init java-enterprise ~/projects/my-app"
-echo "  claude-code ~/projects/my-app                 # start Claude session"
+echo "  cct templates                                 # see all templates"
+echo "  cct init java-enterprise ~/projects/my-app"
+echo "  cct start ~/projects/my-app                   # start Claude session"
 echo ""
 echo "Status line installed:"
 echo "  - statusline.sh       — model, agent, git, context%, cost, lines, duration"
