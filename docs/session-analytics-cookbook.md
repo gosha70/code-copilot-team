@@ -78,7 +78,10 @@ touching `.env`. The exceptions are `list` and `calibrate`, which never open a
 store, and `start`, which configures one: point `start` at a different store
 with `setup --db <dsn>` first, or by setting `CCT_SA_DB`.
 Precedence, lowest to highest: packaged defaults → `~/.cct/session-analytics.json`
-→ `.env` → real environment variables → command-line flags.
+→ `.env` → real environment variables → command-line flags. `~/.cct` is the
+harness home: with `CCT_HOME` set, the file is read from that directory
+instead ([cct-home.md](cct-home.md)), here and wherever this page writes
+`~/.cct/…`.
 
 ### 3.2 The other keys
 
@@ -733,7 +736,11 @@ docker compose -f scripts/session_analytics/docker-compose.yml up -d
 
 | You see | Cause | Do |
 |---|---|---|
-| `error: no database configured` | No `.env`, no `--db`. | `setup`, or `--db sqlite:////abs/path.db` (four slashes). |
+| `error: not configured. Run … setup first, or pass --db.` | No `.env` and no `--db`, in a run without a terminal. In a terminal the guided setup starts instead. | `setup`, or `--db sqlite:////abs/path.db` (four slashes). |
+| `error: no database configured` | There is a `.env`, but it names no database. | `setup`, `--db …`, or set `CCT_SA_DB`. |
+| `error: cannot open the store: …` (exit 3) | The database file's directory does not exist, the file cannot be read, or the server is unreachable or refuses. | Fix what the message names. `doctor` reports the same under `store.error` and still exits 0. |
+| `error: …` naming a setting (exit 2) | A configuration value is invalid: a redaction mode that does not exist, a `similarity.top_k` that is not a positive integer, a malformed `projects` entry. | Correct the value the message names. |
+| Session analysis: "this session's project is opted out (ingest: off)" | The session's project has `ingest: "off"` in `projects`, so nothing from it is sent to a judge. | Expected. Remove the opt-out to analyze it. |
 | Settings says the server uses a different database than the form | `serve` was started with `--db`. | Either is fine; the banner tells you which store every number comes from. |
 | Graph tab: "the graph store … could not be opened" | The store file at `CCT_SA_KUZU_PATH` is corrupt or locked by a running build. | Delete the corrupt file (`~/.cct/session-analytics-graph` by default), then run **Build knowledge graph**. |
 | Graph tab: "has not been built yet" | Never built. | Analysis pipeline → Build knowledge graph. |
@@ -757,4 +764,7 @@ session text reaches a cloud model only if you set `claude-code` or an
 `openai` endpoint as the judge, and the Analysis pipeline page warns before a
 batch run. The API binds to 127.0.0.1 and rejects cross-origin writes.
 `.env` may hold an API key and is gitignored. Per project you can turn
-ingest off entirely or tighten redaction beyond the global mode.
+ingest off entirely or tighten redaction beyond the global mode. Either
+change applies at once to everything sent off the machine (the judges,
+session analysis, Ask, embeddings and MCP), with no re-ingest; the store
+itself is not rewritten (§3.2).
