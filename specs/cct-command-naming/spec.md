@@ -7,13 +7,18 @@ origin:
   issue: 410
   transcripts:
     - specs/cct-command-naming/origin/2026-11-07-owner-direction.md
+    - specs/cct-command-naming/origin/2026-11-21-owner-launcher-commands.md
   origin_claim: |
     Starting a harness session should be a visibly CCT action, and every
     CCT command the user types should be spelled `cct`, not
     `code-copilot-team` (owner, 2026-11-07, #410). The provider-profile
     directory move proposed as the issue's third task is a directory,
     not a command, and planning found it is the Pi adapter's whole home;
-    it is deferred to its own decision in #410.
+    it is deferred to its own decision in #410. Follow-up (owner,
+    2026-11-21): "README must be updated and old commands must be
+    replaced with their new alternatives": the launcher's other commands
+    gain `cct` names, and the docs stop telling users to type
+    `claude-code <command>`.
 ---
 
 # Spec: `cct` as the single user-facing command name
@@ -90,3 +95,46 @@ the plugin is named `code-copilot-team` in
   Claude Code; other harnesses keep their launchers.
 - Renaming the GitHub repository, the marketplace, the `CCT_*`
   environment prefix, or the `code-copilot-team-pi` package.
+
+## Follow-up: the launcher's other commands (2026-11-21)
+
+FR-1 put one launcher command under `cct`. The README went on telling
+users to type `claude-code init` and `claude-code sync` beside
+`cct start`, and the owner ruled that the old commands be replaced with
+their `cct` forms (origin transcript of 2026-11-21).
+
+- **FR-6 the launcher's commands under `cct`.** `cct init`, `cct sync`,
+  `cct build`, `cct permissions` and `cct playwright` exec the installed
+  launcher (found as in FR-1) with the command name first and every
+  other argument unchanged, and return its exit code. `cct templates`
+  execs the launcher's `list`, because `cct list` is already the feature
+  index. With no launcher installed each exits 2 naming itself and the
+  install command. `cct help` documents each; the unknown-command hint
+  lists them.
+- **FR-7 users are told to type `cct`.** Wherever the README, the guides
+  under `docs/` and `adapters/claude-code/docs/`, CONTRIBUTING, the
+  summary `setup.sh --claude-code` prints, or a launcher message tells a
+  user which launcher command to type, it names the `cct` form: `cct start`
+  for a session (flags included), `cct init`, `cct sync`, `cct build`,
+  `cct permissions`, `cct templates`. The two launcher messages that
+  `cct templates` and `cct sync` can print and that send the user to the
+  legacy `claude-setup.sh` name `./scripts/setup.sh --claude-code`
+  instead. The feature catalog's `cct-cli` entry lists the new commands,
+  and its generated pages follow.
+- **FR-8 tests.** `tests/test-cct-cli.sh` asserts, with the mock launcher,
+  the argv each new command hands over, the exit code passing back, the
+  refusal without a launcher, and the help and hint entries.
+
+Constraints for the follow-up:
+
+- The launcher keeps its name and its own help text: `claude-code
+  <command>` still works, as FR-1's constraint already requires.
+- No command reaches a checkout's launcher copy; the same lookup as FR-1.
+- Text that describes the launcher, rather than telling a user what to
+  type, keeps its name: the `docs/llm-catalog.md` sentence saying that
+  `cct start` hands its arguments to `claude-code`, the test-suite entry in
+  `docs/repo-structure.md`, and the manual test case in
+  `adapters/claude-code/docs/hooks-test-cases.md` that runs the launcher
+  file directly.
+- The README's two `(master)` notes are left to the 2.1.0 release PR,
+  which removes them.

@@ -118,7 +118,7 @@ jq '{provider, verdict, duration_sec, error}' /tmp/probe.json
 ```
 
 **Expect:** exit 0 and a verdict of PASS, FAIL or INCONCLUSIVE.
-**Verify:** `claude-code --peer-review <name> ~/projects/my-app` then
+**Verify:** `cct start --peer-review <name> ~/projects/my-app` then
 `/review-submit` at the end of a phase.
 **If not:** exit 2 means nothing in the chain passed its healthcheck; exit 3
 means the provider ran and returned no parseable verdict — the answer's tail is
@@ -176,14 +176,14 @@ Each phase has a dedicated agent (`~/.claude/agents/`) that loads the relevant r
 ## Working in a project
 
 ```bash
-claude-code init ml-rag ~/projects/my-rag-app   # start from a template
-claude-code ~/projects/existing-api             # or just point at an existing project
+cct init ml-rag ~/projects/my-rag-app              # start from a template
+cct start ~/projects/existing-api                  # or just point at an existing project
 cct start --llm <target> ~/projects/existing-api   # this one session on another LLM (docs/llm-catalog.md)
 
 git pull && ./scripts/setup.sh --sync --claude-code   # after pulling repo updates
 cct home migrate --dry-run && cct home migrate        # once, if you installed before 2.1 (docs/cct-home.md)
-claude-code sync ~/projects/my-rag-app --dry-run      # preview what would change
-claude-code sync ~/projects/my-rag-app                # apply
+cct sync ~/projects/my-rag-app --dry-run              # preview what would change
+cct sync ~/projects/my-rag-app                        # apply
 ```
 
 Sync updates commands and `.claude/` contents but never overwrites your
@@ -224,7 +224,7 @@ per feature is [docs/features.md](docs/features.md), or ask the CLI:
 - **[Studio web UI](docs/session-analytics-cookbook.md)** _(beta)_ — The analytics, benchmarks, auto-build runs, team alerts and the project's own documentation are browsed in one local web app with a settings page for the judge and embedding providers.
 - **[LLM routing profiles](docs/llm-routing.md)** _(experimental)_ — Auto-build tasks are routed to a backend by route class and role under an execution profile, with validate, status and explain commands and a scheduled tick.
 - **[MemKernel persistent memory](shared/skills/memkernel-memory/SKILL.md)** _(experimental)_ — Session context is recalled at start, checkpointed before compaction and recovered after it by hooks that activate only when MemKernel is installed.
-- **[cct command-line front door](docs/features.md)** _(experimental)_ — One provider-neutral command starts a session with start, lists every slash command, skill and capability, drives routing, reports environment health with doctor, explains or validates configuration with config, shows or migrates the harness home with home, and lists or checks the LLM targets with llm.
+- **[cct command-line front door](docs/features.md)** _(experimental)_ — One provider-neutral command starts a session with start, runs the launcher's project commands (init, templates, sync, build, permissions, playwright) under the same name, lists every slash command, skill and capability, drives routing, reports environment health with doctor, explains or validates configuration with config, shows or migrates the harness home with home, and lists or checks the LLM targets with llm.
 - **[LLM catalog and per-launch --llm](docs/llm-catalog.md)** _(experimental)_ — Named LLM targets are configured once and one is picked when a session starts, so a provider, credential or model is never exported in a shell and cannot leak into another session.
 <!-- generated:end feature-summary -->
 

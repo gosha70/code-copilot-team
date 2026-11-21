@@ -91,7 +91,7 @@ commit** is on record. The mechanics (`.github/workflows/review-gate.yml`):
 ## Guidelines
 
 - Keep rules concise. AI copilots have limited context; every word costs tokens.
-- Test templates by actually running `claude-code init <type>` and verifying the generated files.
+- Test templates by actually running `cct init <type>` and verifying the generated files.
 - Maintain tool-agnostic language in `shared/skills/` SKILL.md files.
 - Always run `./scripts/generate.sh` after changing `shared/` content. CI will fail if generated outputs are stale.
 - One PR per concern. Don't mix a new template with a rule change.

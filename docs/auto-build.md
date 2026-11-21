@@ -4,7 +4,7 @@ The driver that builds an approved feature phase by phase outside a session, the
 
 ## Cost & Safety Caps
 
-An autonomous build (`auto-build-loop.sh`, `claude-code build …`) runs under
+An autonomous build (`auto-build-loop.sh`, `cct build …`) runs under
 spend and time caps declared in `specs/<feature-id>/automation.json`,
 scaffolded from `shared/templates/sdd/automation-template.json`:
 

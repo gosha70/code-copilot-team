@@ -31,7 +31,7 @@ code-copilot-team/
 │   ├── aider/                           CONVENTIONS.md, setup.sh
 │   └── pi/                              bin/pi-code, runtime/, resources/, docs/, setup.sh
 ├── scripts/
-│   ├── cct                              The `cct` CLI: start, features, list, routing, doctor, config, home, llm
+│   ├── cct                              The `cct` CLI: start, init, templates, sync, build, permissions, playwright, features, list, routing, doctor, config, home, llm
 │   ├── generate.sh                      Builds adapter configs from shared/
 │   ├── session-analytics                Session Analytics launcher (CLI, Studio, MCP); code in session_analytics/
 │   ├── bench                            Terse benchmark comparison driver (wraps benchmark)
@@ -59,7 +59,7 @@ code-copilot-team/
 │   ├── test-hooks.sh                    196 hook tests
 │   ├── test-generate.sh                 341 generation + adapter tests
 │   ├── test-shared-structure.sh         940 structure + content tests
-│   ├── test-sync.sh                     138 sync + init metadata tests
+│   ├── test-sync.sh                     147 sync + init metadata tests
 │   ├── test-litellm-proxy-deps.sh       13 benchmark proxy pin tests (+11 with --online)
 │   ├── test-coverage-parse.sh           46 coverage parser + safety tests
 │   ├── test-verification-spec.sh      146 verification-spec tests

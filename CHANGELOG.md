@@ -111,6 +111,15 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   shim next to the launcher, with the checkout path baked in and
   `CCT_REPO_DIR` as the override. A shim whose checkout has moved exits 2
   and names the remedy, and `cct doctor` checks the shim's target (#410).
+- **Every launcher command has a `cct` name.** `cct init <type> [path]`,
+  `cct sync [path]`, `cct build <feature-id>`, `cct permissions <tier>
+  [dir]` and `cct playwright [dir]` run the installed `claude-code`
+  launcher's command of the same name, passing every argument through as
+  `cct start` does, and `cct templates` lists the templates `cct init`
+  accepts (the launcher's `list`; `cct list` stays the feature index).
+  The README, the guides, the summary `setup.sh --claude-code` prints
+  and the launcher's own hints now show the `cct` forms. `claude-code
+  <command>` keeps working.
 - **A configured Claude Code gateway is diagnosed, not guessed.** When
   `ANTHROPIC_BASE_URL` is set and neither `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`
   nor `ENABLE_TOOL_SEARCH` is, the `claude-code` launcher prints a notice
@@ -192,6 +201,14 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Fixed
 
+- **A fresh install has the permission profiles.** `setup.sh --claude-code`
+  copied the `balanced` and `relaxed` profiles and the per-stack deny
+  extras into `~/.claude/permissions/` only on `--sync`. On a fresh install
+  `cct permissions balanced` therefore failed as an "unknown permission
+  tier", and `cct init --permissions balanced` failed because the profile
+  was not found, until the next `--sync`. Both paths now copy them, and a
+  missing profile file is reported as missing, with the command that
+  installs it (#493).
 - **The Analysis funnel's zero counts clear the contrast floor.** A stage
   with nothing in it was drawn in amber at 3.19:1 on white, below the
   4.5:1 the release gate enforces. It is now 5.02:1.

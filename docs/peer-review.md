@@ -106,10 +106,10 @@ Code Copilot Team supports **dual-copilot peer review** — a second AI provider
 
 ```bash
 # 1. Init project from template
-claude-code init ml-rag ~/projects/my-app
+cct init ml-rag ~/projects/my-app
 
 # 2. Start session with peer review
-claude-code --peer-review codex ~/projects/my-app
+cct start --peer-review codex ~/projects/my-app
 ```
 
 ### Setup — Existing Projects
@@ -118,20 +118,20 @@ No project-level changes required. Peer review is driven entirely by session fla
 
 ```bash
 # Just add --peer-review to your usual launch command
-claude-code --peer-review codex ~/projects/existing-app
+cct start --peer-review codex ~/projects/existing-app
 
 # Or use the default peer from your provider profile
-cd ~/projects/existing-app && claude-code --peer-review
+cd ~/projects/existing-app && cct start --peer-review
 ```
 
 ### How It Works
 
 1. **Start a session with peer review enabled:**
    ```bash
-   claude-code --peer-review codex ~/projects/my-app   # explicit peer provider
-   claude-code --peer-review ~/projects/my-app          # default peer from profile
-   claude-code --peer-review-off ~/projects/my-app      # disable for this session
-   claude-code --peer-review-scope code ~/projects/my-app  # scope: code|design|both
+   cct start --peer-review codex ~/projects/my-app     # explicit peer provider
+   cct start --peer-review ~/projects/my-app            # default peer from profile
+   cct start --peer-review-off ~/projects/my-app        # disable for this session
+   cct start --peer-review-scope code ~/projects/my-app    # scope: code|design|both
    ```
 
 2. **Work normally** through the Plan → Build phases. Claude detects `CCT_PEER_REVIEW_ENABLED=true` in the environment and sets `collaboration_mode: dual` in the SDD plan.

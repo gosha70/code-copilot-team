@@ -5,6 +5,12 @@
 # harness offers. Add it to PATH (or call scripts/cct) and run `cct help`.
 #
 #   cct start [path] [...] start a harness session (the claude-code launcher)
+#   cct init <type> [path] create a project from a template
+#   cct templates          the templates init accepts
+#   cct sync [path]        update a project from its template
+#   cct build <id> [...]   build an approved feature unattended
+#   cct permissions <tier> set a project's permission tier
+#   cct playwright [path]  install the Playwright CLI skills into a project
 #   cct features [...]     what the harness offers: maturity, adapters, guides
 #   cct list [--write]     browse every feature, slash command, skill, and capability
 #   cct doctor [...]       is this machine ready? tools, providers, adapters
@@ -31,6 +37,22 @@ COMMANDS
                     cct start ~/projects/my-app      that project
                     cct start --peer-review <name> ~/projects/my-app
                     cct start --llm <target> ~/projects/my-app   on that LLM, this session only
+  init            Create a project from a template. init and the five commands
+                  below run the installed launcher's own commands, passing
+                  every argument through.
+                    cct init ml-rag ~/projects/my-rag-app
+                    cct init web-dynamic ./my-app --permissions balanced
+  templates       List the templates init accepts (the launcher's `list`;
+                  `cct list` is the feature index).
+  sync            Update a project from its template. Never overwrites CLAUDE.md.
+                    cct sync ~/projects/my-rag-app --dry-run   preview
+                    cct sync ~/projects/my-rag-app             apply
+  build           Build an approved feature unattended (auto-build):
+                    cct build <feature-id> [driver args]
+  permissions     Set a project's permission tier:
+                    cct permissions balanced ./my-app
+  playwright      Install the Playwright CLI skills into a project:
+                    cct playwright ./my-app
   features        What the harness offers, from shared/features/catalog.yaml:
                   maturity, release, which adapters enforce it, and its guide.
                     cct features                     one line per feature
@@ -79,6 +101,8 @@ COMMANDS
 EXAMPLES
   cct start ~/projects/my-app  # open a harness session there
   cct start --llm deepseek .   # …on a catalog LLM, for this session only
+  cct init ml-rag ~/projects/my-rag-app       # a new project from a template
+  cct sync ~/projects/my-rag-app --dry-run    # what a template update would change
   cct features                 # what can this thing do?
   cct features --adapter pi    # …and what does my tool actually enforce?
   cct list                     # every command, skill and capability
@@ -98,23 +122,39 @@ EOF
 cmd="${1:-help}"
 [[ $# -gt 0 ]] && shift || true
 
+# installed_launcher <cct-command> — print the installed claude-code
+# launcher's path, or exit 2 naming the install command. The installed
+# launcher does the work; cct is the name the user types. Only an INSTALLED
+# launcher qualifies: running this checkout's copy would act without the
+# rules and templates setup.sh installs.
+installed_launcher() {
+  if command -v claude-code 2>/dev/null; then
+    return 0
+  elif [[ -x "$HOME/.local/bin/claude-code" ]]; then
+    echo "$HOME/.local/bin/claude-code"
+    return 0
+  fi
+  echo "cct $1: the claude-code launcher is not installed." >&2
+  echo "cct $1 runs the INSTALLED launcher (~/.local/bin/claude-code), never a checkout's copy:" >&2
+  echo "run from the checkout, it would act without the installed rules and templates." >&2
+  echo "Run ./scripts/setup.sh --claude-code from your checkout, then retry." >&2
+  return 2
+}
+
 case "$cmd" in
   start)
-    # The installed launcher does the work; cct is the name the user types.
-    # Only an INSTALLED launcher qualifies: running this checkout's copy
-    # would open a session without the rules setup.sh installs.
-    if launcher="$(command -v claude-code 2>/dev/null)"; then
-      :
-    elif [[ -x "$HOME/.local/bin/claude-code" ]]; then
-      launcher="$HOME/.local/bin/claude-code"
-    else
-      echo "cct start: the claude-code launcher is not installed." >&2
-      echo "cct start runs the INSTALLED launcher (~/.local/bin/claude-code), never a checkout's copy:" >&2
-      echo "a session started from the checkout would run without the installed rules." >&2
-      echo "Run ./scripts/setup.sh --claude-code from your checkout, then retry." >&2
-      exit 2
-    fi
+    launcher="$(installed_launcher start)" || exit $?
     exec "$launcher" "$@"
+    ;;
+  init|sync|build|permissions|playwright)
+    # The launcher's own commands, under the name the user types.
+    launcher="$(installed_launcher "$cmd")" || exit $?
+    exec "$launcher" "$cmd" "$@"
+    ;;
+  templates)
+    # The launcher calls this `list`; `cct list` is the feature index.
+    launcher="$(installed_launcher templates)" || exit $?
+    exec "$launcher" list "$@"
     ;;
   features)
     exec python3 "$SCRIPT_DIR/lib/cct_features.py" "$@"
@@ -143,5 +183,5 @@ case "$cmd" in
     exec bash "$SCRIPT_DIR/llm-cli.sh" "$@"
     ;;
   help|-h|--help) usage ;;
-  *) echo "cct: unknown command '$cmd'" >&2; echo "Did you mean: features, list, routing, doctor, config, home, llm, start, help?" >&2; usage >&2; exit 2 ;;
+  *) echo "cct: unknown command '$cmd'" >&2; echo "Did you mean: features, list, routing, doctor, config, home, llm, start, init, templates, sync, build, permissions, playwright, help?" >&2; usage >&2; exit 2 ;;
 esac
