@@ -892,10 +892,12 @@ export default function SettingsPage() {
           })}
         </div>
 
-      <Card title="Effective per-project redaction">
+      <Card title="Recorded per-project redaction">
         <p className="text-xs text-slate-600 mb-3">
           Read-only — the redaction mode each project’s already-ingested sessions were recorded
-          with. To change redaction for future ingests, edit the per-project config file.
+          with. Tightening a project’s mode or opting it out in the per-project config file
+          applies at once to everything sent off the machine. Stored previews change only on a
+          full re-ingest, and an opted-out project’s stay in the store until you start a new one.
         </p>
         {projectsError ? (
           <ErrorNote error={projectsError} />
@@ -909,7 +911,7 @@ export default function SettingsPage() {
               <tr className="text-left text-slate-600 border-b border-slate-200">
                 <th className="py-1 font-medium">Project</th>
                 <th className="py-1 font-medium text-right">Sessions</th>
-                <th className="py-1 font-medium">Effective redaction</th>
+                <th className="py-1 font-medium">Recorded redaction</th>
               </tr>
             </thead>
             <tbody>

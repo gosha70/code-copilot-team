@@ -191,7 +191,7 @@ project from ingestion, add a `projects` block to `config_data/defaults.json`
 - **No `projects` block configured** (the default): every session ingests
   with the global `redaction_mode`, exactly as before this feature existed —
   fully additive, no migration required.
-- The Studio **Settings** page's "Effective per-project redaction" card
+- The Studio **Settings** page's "Recorded per-project redaction" card
   shows the mode each project's stored sessions were **recorded** under
   (read-only, from `copilot_session.redaction_mode` grouped by project). It
   is not the current configuration: what leaves the machine uses the
