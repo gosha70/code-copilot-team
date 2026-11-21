@@ -10,6 +10,124 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ## [Unreleased]
 
+## [2.1.0]
+
+The harness now has one name on the command line and one home on disk, and the
+model is a per-session choice. `cct start` opens a session, `~/.cct` holds
+everything CCT keeps for a user, and `--llm` runs one session on a configured
+target with nothing exported in a shell. Session Analytics applies a project's
+privacy settings on every path that sends stored text off the machine. The
+wiki engine is the `wiki-studio` package instead of a copy carried here, and a
+pull request to this repository merges only after its head is reviewed.
+
+### Highlights
+
+- **The LLM is picked per session.** `cct start --llm <target>` runs that one
+  session on a target from `${CCT_HOME:-~/.cct}/llms.toml`. The endpoint,
+  credential and model are set in the process that becomes `claude` and
+  nowhere else, and a launch that cannot honour the target is refused with
+  the reason before Claude Code starts. Claude Code only in this release
+  (#479, the first slice of #400).
+- **One home and one project file.** User files live under `~/.cct`, and a Pi
+  project's committed configuration is `.cct.toml`. Both legacy locations are
+  read through the 2.1.x line; `cct home migrate` and `pi-code migrate` bring
+  over what is left in them (#411, #460).
+- **`cct` is the command.** `cct start` opens a session, `cct init` and
+  `cct sync` create and update a project from a template, and every other
+  launcher command has a `cct` name too. `setup.sh --claude-code` puts
+  `cct` on `PATH`, and the Claude Code plugin is named `cct` (#410).
+- **Session Analytics privacy holds after ingest.** A project tightened or
+  opted out is honoured at once by the judge, session analysis, Ask,
+  embeddings and the MCP server. Every ingest entry point reads the same
+  configuration, and a project's settings apply under both its `project_ids`
+  id and its repo path, the stricter one holding. Canary secrets in a fixture
+  session fail the build when one of those paths sends what the mode removes
+  (#457, #473, #477).
+- **Active time is stored per session.** Schema 13 adds one table in place,
+  and `session-analytics gaps` shows where an idle cutoff falls on your own
+  store (#422).
+- **wiki-studio is the wiki engine.** The in-repo copy is deleted, and the
+  five wiki verbs run the `wiki-studio==0.9.0` wheel pinned by hash (#384).
+- **Auto-build is stricter about what it lands.** A run lands only when
+  `test.command` passes on the final head, never writes onto a closed PR,
+  reports a review bypass as a bypass, and moves the pitch's hill chart as
+  phases land (#403, #427, #404, #405).
+- **Reviewed before merged.** The owner's `reviewed` label becomes a required
+  status on a pull request's head, and CodeQL runs on pull requests from
+  forks.
+
+### Upgrade notes
+
+Nothing has to be recreated. The Session Analytics store moves from schema 12
+to 13 in place, and both legacy locations are still read.
+
+- **Refresh the install after pulling:**
+  `./scripts/setup.sh --sync --claude-code`, adding `--pi` if you use
+  `pi-code`. The Claude Code refresh installs the launcher that knows
+  `--llm` and the `cct` shim in `~/.local/bin`, and removes the peer-review
+  defaults an earlier setup wrote into `~/.claude/settings.json`, which
+  overrode the `--peer-review` flag (#410, #479, #481).
+- **Refresh the Studio's dependencies:** `cd studio && npm install`. They
+  are installed on first run only, so an existing install keeps Next.js
+  15.5.28, which three advisories affect, until you do (see Security).
+- **Move the user home when convenient.** `~/.code-copilot-team` is read
+  through the 2.1.x line, and 2.2 removes the fallback. First refresh every
+  adapter you installed (`./scripts/setup.sh --sync --claude-code`, adding
+  `--pi` if you use `pi-code`) and close running `pi-code` sessions: an
+  older `pi-code` points `CCT_HOME` at the legacy home and would recreate
+  it after the move. `cct doctor` lists what is still served from the
+  legacy home, and `cct home migrate --dry-run` previews the move. On the
+  same filesystem `cct home migrate` moves each entry. With `CCT_HOME` on
+  another filesystem it copies each entry into the home, keeps the legacy
+  one, exits 1, and names what to check and remove by hand (#411).
+- **Move a Pi project's configuration.** `.code-copilot-team/config.toml` is
+  read through the 2.1.x line as well. `pi-code migrate [dir] --dry-run`
+  previews the move to `.cct.toml`. 2.2 removes this fallback together with
+  the user-home one (#460).
+- **Re-ingest where a stricter setting should have applied.** Before this
+  release the Studio's ingest step and the quickstart ignored the configured
+  redaction mode and opt-outs, and a `projects` entry keyed by a
+  `project_ids` id was ignored for a checked-out repo.
+  `session_analytics ingest --full` rewrites each stored session's previews
+  under your configuration. It skips an opted-out project and does not delete
+  what is already stored for it: to drop those sessions, point Session
+  Analytics at a new, empty store and run `ingest --full` there (#473, #477).
+- **`export` still writes what the store holds.** A project opted out or
+  tightened after its sessions were ingested is honoured at once on every
+  path that leaves the machine, but `session-analytics export` writes the
+  stored rows as they were recorded. Until #487 changes that, a full
+  re-ingest rewrites a tightened project's stored previews before you
+  export, and only a new store leaves an opted-out project out.
+- **Declare where aider sessions live.** They are no longer discovered under
+  `~`. Set `sources.aider` in `~/.cct/session-analytics.json`, or
+  `CCT_SA_SOURCE_AIDER`, to the directory that holds your aider projects
+  (#402).
+- **The Claude Code plugin is `cct`.** Install it with
+  `/plugin install cct@code-copilot-team`; its components are `/cct:shape`
+  and `cct:build`. A copy installed under the earlier `code-copilot-team`
+  name keeps working until uninstalled (#410).
+- **Use a documented permission tier.** `cct permissions` now accepts only
+  `default`, `balanced`, and `relaxed`, matching `cct init --permissions`. A
+  tier created by adding another JSON file under `~/.claude/permissions/` is
+  refused. Choose one of the three tiers and keep project-specific additions
+  in `.claude/settings.local.json`; if the old custom tier was shared across
+  projects, those additions must now be managed separately for each project
+  (#493).
+- **The wiki verbs need the `wiki-studio` wheel.** `scripts/setup.sh`
+  installs it into the checkout's `.venv` for an adapter installed from a
+  checkout (Python 3.11–3.13), and `./scripts/wiki` names the remedy when it
+  is missing. `WIKI_INGEST_BACKEND` is deprecated in favour of
+  `WIKI_STUDIO_BACKEND` and is still honoured, with a warning (#384).
+- **With `--llm`, take the provider variables out of your shell profile:**
+  `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` and the model variables.
+  Without `--llm` a launch is unchanged (#479).
+- **`CCT_HARNESS_STAMPS` must be a path the hook and the analytics read the
+  same way.** A value with `~`, a relative path and, on Windows, a path
+  without a drive are refused with the form to use (#434).
+- **Regenerate routing evidence published from Windows.** Sets published
+  before this release may carry the OS username in path spellings the scrub
+  missed.
+
 ### Added
 
 - **Pick the LLM per session: `--llm`.** `cct start --llm <target>` (and
@@ -57,9 +175,8 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   when it moves one, makes no git change, and refuses (exit 1) when an
   ignore rule would hide `.cct.toml` or `.cct-init.json`.
   `pi-code doctor` names legacy files and ignore problems. The legacy
-  files are still read while the fallback lasts: **if this ships in 2.1.0,
-  2.2 removes the fallback**, together with the user-home one; if it ships
-  later, the fallback lasts through the minor release after it (#460).
+  files are still read through the 2.1.x line: **2.2 removes the
+  fallback**, together with the user-home one (#460).
 - **One harness home: `~/.cct`.** Every reader in bash, Python and
   TypeScript resolves a user file through one rule,
   `${CCT_HOME:-~/.cct}/<entry>`, with `CCT_HOME` as the one override.
@@ -208,7 +325,9 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   tier", and `cct init --permissions balanced` failed because the profile
   was not found, until the next `--sync`. Both paths now copy them, and a
   missing profile file is reported as missing, with the command that
-  installs it (#493).
+  installs it. `cct permissions` now accepts only the three documented
+  tiers, as `init` already did; a `.json` file of another name placed in
+  `~/.claude/permissions/` no longer works as a tier (#493).
 - **The Analysis funnel's zero counts clear the contrast floor.** A stage
   with nothing in it was drawn in amber at 3.19:1 on white, below the
   4.5:1 the release gate enforces. It is now 5.02:1.
@@ -346,18 +465,42 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   open decision with a default (`## Open decisions` in the pitch,
   `### Open decisions` in the plan), and `/shape` asks them in the main
   session and records the answers before reporting (#407).
-
-### Security
-
-- **The benchmark's LiteLLM proxy pin moves to a patched release.**
-  `scripts/requirements-litellm-proxy.txt` pinned `litellm[proxy]==1.95.0`,
-  which two advisories affect: privilege escalation to proxy admin through
-  cross-domain reuse of the salt key (GHSA-7hp6-4w63-5g45, high), and an
-  authenticated SSRF that can exfiltrate provider credentials
-  (GHSA-3cv6-jpf6-8222, medium). The pin is now 1.100.4, the first release
-  patched for the first and past the fix for the second; `fastapi` stays
-  at 0.139.2. The proxy is started only by the Anthropic-vs-vLLM
-  benchmark, in an ephemeral venv, bound to 127.0.0.1.
+- **Session Analytics reports a bad configuration value as one line.**
+  `CCT_SA_REDACTION=bogus`, a non-numeric `CCT_SA_JUDGE_WORKERS` or
+  `CCT_SA_EMBED_WORKERS`, or a malformed `~/.cct/session-analytics.json`
+  reached the user as a Python traceback from inside the configuration
+  loader. Each now prints one `error:` line that names the value, the
+  variable, or the file with its line and column, and the command exits 2
+  (#450).
+- **Session Analytics reports a store it cannot open as one line.**
+  `team status` and `runs` printed the database driver's traceback and
+  exited 1. A command that cannot open its store now prints
+  `error: cannot open the store: <where>: <reason>` and exits 3, and
+  `doctor` puts the same text in its report. A PostgreSQL connection
+  string is shown as `user@host:port/dbname` only, and one that cannot be
+  parsed is not echoed at all, so a password in it never reaches the
+  terminal (#452).
+- **A PR opened by auto-build closes its issues.** The `pr` profile put
+  `(Closes #N)` in the PR title only, and GitHub reads closing keywords
+  from the body and commit messages, never the title, so the PR was opened
+  with no linked issue. The body now carries one `Closes #N` line per
+  close target. After creating or adopting the PR the driver reads the
+  issues GitHub linked to it and parks with `pr_error` unless they are
+  exactly the close targets; into a base that is not the default branch,
+  where GitHub links nothing, it warns instead. `scripts/pre-pr-check.sh`
+  fails when a `--closes` issue has no close keyword in the body (#471).
+- **The feature index no longer claims adapter support that is not
+  delivered.** `memkernel-memory`, `ralph-loop`, `project-templates` and
+  `ui-design-harness` are `unsupported` on Windsurf and Aider, whose
+  generated rules carry only the always-on skills, and `memkernel-memory`
+  is `advisory` on Pi. The feature-catalog suite now requires every
+  `advisory` or `enforced` claim on a skill-backed feature to find one of
+  its skills in what that adapter delivers.
+- **The routing-eval replay delivers each event once on any `mkdir`.** The
+  generated replay script claimed an event index with `mkdir`. The uutils
+  `mkdir` on Ubuntu 26.04 reports success for a directory that already
+  exists, so two concurrent runs could replay the same event. The claim is
+  now bash's exclusive create (#459).
 
 ### Changed
 
@@ -401,8 +544,8 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   the noise-threshold documentation say the figure is wall clock, first
   entry to last, with no idle cutoff. The Overview's "Median agent
   response" card prints the basis sentence the API already returned. An
-  active-time figure with a stated idle cutoff needs a schema bump and is
-  deferred to 2.1 (#414).
+  active-time figure with a stated idle cutoff is stored per session in
+  this release (#422, under Added); no page shows it yet (#414).
 - **The Claude Code plugin is named `cct`.** Plugin components are now
   `/cct:shape` and `cct:build`; install with `/plugin install
   cct@code-copilot-team`. Copies installed under the earlier
@@ -421,6 +564,15 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   by 6.1.6. `npm audit` in `studio/` now reports no advisory, runtime or
   build-time. An existing Studio install keeps the old versions until
   `npm install` is run in `studio/` again.
+- **The benchmark's LiteLLM proxy pin moves to a patched release.**
+  `scripts/requirements-litellm-proxy.txt` pinned `litellm[proxy]==1.95.0`,
+  which two advisories affect: privilege escalation to proxy admin through
+  cross-domain reuse of the salt key (GHSA-7hp6-4w63-5g45, high), and an
+  authenticated SSRF that can exfiltrate provider credentials
+  (GHSA-3cv6-jpf6-8222, medium). The pin is now 1.100.4, the first release
+  patched for the first and past the fix for the second; `fastapi` stays
+  at 0.139.2. The proxy is started only by the Anthropic-vs-vLLM
+  benchmark, in an ephemeral venv, bound to 127.0.0.1.
 
 ## [2.0.0]
  The harness learned to run unattended, to route work across models, and to
