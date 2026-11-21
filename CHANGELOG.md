@@ -32,9 +32,10 @@ pull request to this repository merges only after its head is reviewed.
   project's committed configuration is `.cct.toml`. Both legacy locations are
   read through the 2.1.x line; `cct home migrate` and `pi-code migrate` move
   what is left in them (#411, #460).
-- **`cct` is the command.** `cct start` opens a session,
-  `setup.sh --claude-code` puts `cct` on `PATH`, and the Claude Code plugin
-  is named `cct` (#410).
+- **`cct` is the command.** `cct start` opens a session, `cct init` and
+  `cct sync` create and update a project from a template, and every other
+  launcher command has a `cct` name too. `setup.sh --claude-code` puts
+  `cct` on `PATH`, and the Claude Code plugin is named `cct` (#410).
 - **Session Analytics privacy holds after ingest.** A project tightened or
   opted out is honoured at once by the judge, session analysis, Ask,
   embeddings and the MCP server. Every ingest entry point reads the same
@@ -310,7 +311,9 @@ to 13 in place, and both legacy locations are still read.
   tier", and `cct init --permissions balanced` failed because the profile
   was not found, until the next `--sync`. Both paths now copy them, and a
   missing profile file is reported as missing, with the command that
-  installs it (#493).
+  installs it. `cct permissions` now accepts only the three documented
+  tiers, as `init` already did; a `.json` file of another name placed in
+  `~/.claude/permissions/` no longer works as a tier (#493).
 - **The Analysis funnel's zero counts clear the contrast floor.** A stage
   with nothing in it was drawn in amber at 3.19:1 on white, below the
   4.5:1 the release gate enforces. It is now 5.02:1.
