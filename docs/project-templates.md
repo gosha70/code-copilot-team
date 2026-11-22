@@ -18,7 +18,7 @@ The eleven stack templates, what each one's agent team looks like, and the CI wo
 | `gradle-plugin` | Kotlin · Gradle 8 · `Plugin<Project>` · TestKit matrix · Plugin Portal | Team Lead, Plugin Eng, Functional Test Eng, Build & Release |
 | `domain-pack` | Versioned content (TBX/JSON-LD/CSV) · Maven Central + PyPI dual publish | Team Lead, Content Curator, JVM Wrapper Eng, Python Wrapper Eng, Release & CI |
 
-> **`ui-harness`** — an add-on bundle (not a stack) that layers the [UI design harness](../shared/templates/ui-harness/DESIGN.md) onto any web project: `DESIGN.md` + DTCG tokens + the `harness/` visual-review runner.
+> **`ui-harness`** — an add-on bundle (not a stack) that layers the [UI design harness](../shared/templates/ui-harness/DESIGN.md) onto any web project: `DESIGN.md` + DTCG tokens + the `harness/` visual-review runner. Every install puts it in `~/.claude/templates/ui-harness/`, and `cct templates` lists it under *Available add-ons*, apart from the stacks. Copy it into an existing project as its [PROJECT.md](../shared/templates/ui-harness/PROJECT.md) shows; `cct init ui-harness` refuses and prints those copy steps.
 
 ### Bundled CI Workflows
 

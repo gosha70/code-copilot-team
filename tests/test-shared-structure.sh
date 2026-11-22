@@ -469,11 +469,14 @@ assert_ok "unknown-option guard present" "$rc"
 rc=0; grep -q 'command -v jq' "$SETUP_SCRIPT" || rc=1
 assert_ok "jq dependency check present" "$rc"
 
-# All 7 template sections exist
-for t in "${TEMPLATE_TYPES[@]}"; do
-  rc=0; grep -q "TEMPLATE: $t" "$SETUP_SCRIPT" || rc=1
-  assert_ok "template section '$t' present in setup.sh" "$rc"
-done
+# One template installer for both paths (#498): every template folder with a
+# PROJECT.md is installed by install_project_templates, which the fresh
+# install and --sync both call. tests/test-sync.sh checks that the two leave
+# the same template tree.
+rc=0; grep -q '^install_project_templates() {' "$SETUP_SCRIPT" || rc=1
+assert_ok "setup.sh defines install_project_templates" "$rc"
+rc=0; [[ "$(grep -c -E '^[[:space:]]*install_project_templates (Installed|Synced)$' "$SETUP_SCRIPT")" == 2 ]] || rc=1
+assert_ok "setup.sh calls it from the fresh install and from --sync" "$rc"
 
 # Wrapper delegates to adapter
 WRAPPER="$CLAUDE_CODE_DIR/claude-setup.sh"
@@ -757,7 +760,7 @@ done
 echo ""
 echo "=== setup.sh: .claude/ directory copy ==="
 
-rc=0; grep -q 'SHARED_DIR/templates/.*/\.claude' "$SETUP_SCRIPT" || rc=1
+rc=0; grep -q 'cp -r "\$tmpl_dir/\.claude/"' "$SETUP_SCRIPT" || rc=1
 assert_ok "setup.sh copies .claude/ from templates" "$rc"
 
 # ══════════════════════════════════════════════════════════════

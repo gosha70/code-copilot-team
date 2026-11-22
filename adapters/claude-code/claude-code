@@ -640,22 +640,58 @@ SETUP:
 HELP
 }
 
+# A template folder holding this file is an add-on (ui-harness): installed
+# beside the project templates, listed apart from them, refused by init.
+# Defined here, among the functions, so suites that load only the function
+# region (tests/test-sync.sh) see it too.
+ADDON_MARKER=".cct-addon"
+
 list_templates() {
     echo "Available project templates:"
     echo ""
+    local addons=""
     if [[ -d "$TEMPLATES_DIR" ]]; then
         for dir in "$TEMPLATES_DIR"/*/; do
             if [[ -f "$dir/CLAUDE.md" ]]; then
                 type_name=$(basename "$dir")
                 # Extract first line after "# " as description
                 desc=$(head -1 "$dir/CLAUDE.md" | sed 's/^# //')
+                if [[ -f "$dir/$ADDON_MARKER" ]]; then
+                    addons+="$(printf "  %-20s %s" "$type_name" "$desc")"$'\n'
+                    continue
+                fi
                 printf "  %-20s %s\n" "$type_name" "$desc"
             fi
         done
+        if [[ -n "$addons" ]]; then
+            echo ""
+            echo "Available add-ons (copy one into an existing project; init does not take them):"
+            echo ""
+            printf "%s" "$addons"
+        fi
     else
         echo "  No templates found. Run ./scripts/setup.sh --claude-code from your checkout first."
     fi
     echo ""
+}
+
+# print_addon_refusal <name> — why init will not start a project from an
+# add-on, with the copy steps its own instructions give (the first code block
+# under "Scaffold it into a project" in its installed CLAUDE.md), so the steps
+# are never restated here.
+print_addon_refusal() {
+    local name="$1" doc="$TEMPLATES_DIR/$1/CLAUDE.md" steps
+    echo "Error: '$name' is an add-on, not a project type; init does not start a project from it."
+    steps=$(awk '/^## Scaffold it into a project/ { s = 1; next }
+                 s && /^```/ { if (b) exit; b = 1; next }
+                 s && b { print "  " $0 }' "$doc" 2>/dev/null || true)
+    if [[ -n "$steps" ]]; then
+        echo "Copy it into an existing project instead. From that project's root:"
+        echo ""
+        printf '%s\n' "$steps"
+    fi
+    echo ""
+    echo "Its instructions: $doc"
 }
 
 print_relaxed_warning() {
@@ -842,6 +878,14 @@ init_project() {
         echo "Error: Unknown project type '$type'"
         echo ""
         list_templates
+        exit 1
+    fi
+
+    # An add-on is installed beside the templates for the copy its own
+    # instructions describe, but it is not a project type: refuse it before
+    # anything is created (#498).
+    if [[ -f "$TEMPLATES_DIR/$type/$ADDON_MARKER" ]]; then
+        print_addon_refusal "$type"
         exit 1
     fi
 
