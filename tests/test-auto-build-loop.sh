@@ -2991,6 +2991,9 @@ command = "printf '### Summary\nOne thing is wrong and the rest I cannot judge.\
 timeout_sec = 10
 healthcheck = "true"
 TOML
+# From here on the diff limit's source is asserted (#504); an inherited
+# CCT_REVIEW_DIFF_MAX_LINES would change it.
+unset CCT_REVIEW_DIFF_MAX_LINES
 # Unattended: stops as review_inconclusive, no fix session, the round debited.
 P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
 cfg_set "$P" '.pr={closes:[99],title:""}'
@@ -3004,6 +3007,8 @@ assert_eq "run 6: …as review_inconclusive" "review_inconclusive" "$(jq -r '.re
 assert_contains "run 6: …naming the reviewer and the count" "$(jq -r '.detail' "$LEDGER/termination.json")" \
     "reviewer 'mock' could not judge phase 1 round 1 (INCONCLUSIVE, 2 finding(s), none blocking)"
 assert_contains "run 6: …and the existing diff-limit control" "$(jq -r '.detail' "$LEDGER/termination.json")" "CCT_REVIEW_DIFF_MAX_LINES"
+assert_contains "run 6: …and the diff's size against the default limit (#504)" "$(jq -r '.detail' "$LEDGER/termination.json")" \
+    "against a limit of 500 (the default), so the reviewer saw all of it"
 assert_eq "run 6: no fix session was run" "0" "$(ls "$LEDGER"/phase-1/fix-prompt-*.md 2>/dev/null | wc -l | tr -d ' ')"
 assert_eq "run 6: the status never reached addressing-findings" "0" "$(grep -c '"detail":"addressing-findings"' "$LEDGER/events.jsonl" | tr -d ' ')"
 assert_eq "run 6: the review invocation is still debited (probe + round)" "4" "$(jq -r '.totals.cost_estimated_usd' "$LEDGER/state.json")"
@@ -3030,6 +3035,87 @@ REVIEW_PROFILE="$PASS_PROFILE" run_driver "$P" --resume
 assert_exit "run 6: attended --resume re-runs the review and completes (exit 0)" 0 "$RC"
 assert_contains "run 6: …the inconclusive round's state was set aside" "$(cat "$P/.cct/auto-build/demo-feat/events.jsonl")" "review state of the inconclusive round set aside"
 rm -rf "$P" "$INCONCLUSIVE_PROFILE" "$INCONCLUSIVE_BLOCKING_PROFILE"
+
+echo "=== #504: review.diff_max_lines is run config, frozen for --resume ==="
+# ══════════════════════════════════════════════════════════════
+# The limit on the diff a reviewer is shown was set only by
+# CCT_REVIEW_DIFF_MAX_LINES (default 500), which has to be set again on every
+# resume, and a data-heavy phase parked review_inconclusive (the
+# wiki-studio-patterns-54 run, a 4,041-line diff). review.diff_max_lines sets
+# it in automation.json, frozen with the run's config; the variable still
+# wins; the stop gives the diff's line count against the limit and where the
+# limit came from. The mock reviewers keep the request they were sent, so
+# each case reads where the runner cut the diff.
+DIFF_LIMIT_PROFILE=$(mktemp)
+cat > "$DIFF_LIMIT_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "cp {review_request} $GATING_REQ_CAPTURE && printf '### Summary\nThe diff is truncated; I cannot judge.\n\n### Findings\nFINDING|note|documentation|demo.sh|top|Diff truncated|Show the full diff\n\n### Verdict\nINCONCLUSIVE\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+DIFF_LIMIT_PASS_PROFILE=$(mktemp)
+cat > "$DIFF_LIMIT_PASS_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "cp {review_request} $GATING_REQ_CAPTURE && printf '### Summary\nFine.\n\n### Findings\n\n### Verdict\nPASS\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+phase1_diff_lines() {  # the phase-1 diff, counted the way the runner counts it
+    git -C "$1" diff "$(jq -r '.phases["1"].phase_base_ref' "$1/.cct/auto-build/demo-feat/state.json")" | wc -l | tr -d ' '
+}
+# The config value applies, an invalid variable is ignored, and a resume
+# keeps the value the run started with even after the live config changes.
+P=$(setup_project); single_phase "$P"
+cfg_set "$P" '.review.diff_max_lines=3'
+: > "$GATING_REQ_CAPTURE"
+CCT_REVIEW_DIFF_MAX_LINES=abc REVIEW_PROFILE="$DIFF_LIMIT_PROFILE" run_driver "$P"
+assert_exit "#504: an inconclusive review under review.diff_max_lines parks (exit 4)" 4 "$RC"
+ESC=$(ls "$P"/.cct/auto-build/demo-feat/escalations/esc-*.json 2>/dev/null | head -1)
+assert_contains "#504: …the stop names the limit and its source" "$(jq -r '.detail' "$ESC")" \
+    "against a limit of 3 (from review.diff_max_lines in automation.json), so the reviewer saw only the first 3"
+assert_contains "#504: …and the diff's line count" "$(jq -r '.detail' "$ESC")" "The diff had $(phase1_diff_lines "$P") lines"
+assert_contains "#504: …the runner cut the request at the configured limit" "$(cat "$GATING_REQ_CAPTURE")" "Diff truncated at 3 lines"
+assert_contains "#504: …an invalid CCT_REVIEW_DIFF_MAX_LINES is ignored, with a warning" "$OUTPUT" \
+    "CCT_REVIEW_DIFF_MAX_LINES 'abc' is not a positive integer"
+cfg_set "$P" '.review.diff_max_lines=4'
+: > "$GATING_REQ_CAPTURE"
+REVIEW_PROFILE="$DIFF_LIMIT_PASS_PROFILE" run_driver "$P" --resume
+assert_exit "#504: --resume reruns the review and completes (exit 0)" 0 "$RC"
+assert_contains "#504: …with the limit frozen at launch, not the live edit" "$(cat "$P/.cct/auto-build/demo-feat/events.jsonl")" \
+    "diff limit: 3 lines, from review.diff_max_lines in automation.json"
+assert_contains "#504: …and the rerun review was cut at 3" "$(cat "$GATING_REQ_CAPTURE")" "Diff truncated at 3 lines"
+rm -rf "$P"
+# The variable wins over the config value, at launch and on resume.
+P=$(setup_project); single_phase "$P"
+cfg_set "$P" '.review.diff_max_lines=3'
+: > "$GATING_REQ_CAPTURE"
+CCT_REVIEW_DIFF_MAX_LINES=2 REVIEW_PROFILE="$DIFF_LIMIT_PROFILE" run_driver "$P"
+assert_exit "#504: under CCT_REVIEW_DIFF_MAX_LINES and a config value, the inconclusive review parks (exit 4)" 4 "$RC"
+ESC=$(ls "$P"/.cct/auto-build/demo-feat/escalations/esc-*.json 2>/dev/null | head -1)
+assert_contains "#504: …the stop names the variable as the source" "$(jq -r '.detail' "$ESC")" \
+    "against a limit of 2 (from CCT_REVIEW_DIFF_MAX_LINES), so the reviewer saw only the first 2"
+assert_contains "#504: …the runner cut the request at the variable's limit" "$(cat "$GATING_REQ_CAPTURE")" "Diff truncated at 2 lines"
+: > "$GATING_REQ_CAPTURE"
+CCT_REVIEW_DIFF_MAX_LINES=5 REVIEW_PROFILE="$DIFF_LIMIT_PASS_PROFILE" run_driver "$P" --resume
+assert_exit "#504: --resume with the variable raised completes (exit 0)" 0 "$RC"
+assert_contains "#504: …the resume names the raised limit and its source" "$(cat "$P/.cct/auto-build/demo-feat/events.jsonl")" \
+    "diff limit: 5 lines, from CCT_REVIEW_DIFF_MAX_LINES"
+assert_contains "#504: …and the rerun review was cut at 5" "$(cat "$GATING_REQ_CAPTURE")" "Diff truncated at 5 lines"
+rm -rf "$P"
+# The advisory pass reviews the same diff under the same limit.
+P=$(setup_project); single_phase "$P"
+cfg_set "$P" '.review.reviewers += [{"provider":"mock-adv","specialization":"security","scope":"both","gating":false}] | .review.diff_max_lines = 2'
+: > "$GATING_REQ_CAPTURE"; : > "$ADV_REQ_CAPTURE"
+REVIEW_PROFILE="$PANEL_CAPTURE_PROFILE" run_driver "$P"
+assert_exit "#504: a panel run under review.diff_max_lines completes" 0 "$RC"
+assert_contains "#504: …the advisory request was cut at the same limit" "$(cat "$ADV_REQ_CAPTURE")" "Diff truncated at 2 lines"
+rm -rf "$P" "$DIFF_LIMIT_PROFILE" "$DIFF_LIMIT_PASS_PROFILE"
 
 # ══════════════════════════════════════════════════════════════
 echo "=== #190 D2: a terminated run resumes at the review step ==="

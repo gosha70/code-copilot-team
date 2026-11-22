@@ -217,9 +217,9 @@ if [[ "$caps_is_object" == "true" ]]; then
 fi
 
 # ── review block ─────────────────────────────────────────────────
-# max_rounds and loop_timeout_sec are counts — the runtime
-# (auto-build-loop.sh) accepts only positive integers and silently
-# falls back to its default for anything else.  The validator
+# max_rounds, loop_timeout_sec and diff_max_lines are counts — the runtime
+# (auto-build-loop.sh) accepts only positive integers and falls back to
+# its default, with a warning, for anything else.  The validator
 # enforces the shape only when the value IS numeric (integer > 0);
 # non-numeric values such as bare strings are left for the driver's
 # runtime fallback — the driver is resilient to garbage config and
@@ -237,6 +237,11 @@ if [[ "$(q 'has("review")')" == "true" ]]; then
            && jq -e '.review.loop_timeout_sec | type == "number"' "$CONFIG" >/dev/null 2>&1 \
            && ! jq -e '.review.loop_timeout_sec | type == "number" and . == (. | floor) and . > 0' "$CONFIG" >/dev/null 2>&1; then
             violation "review.loop_timeout_sec must be a positive integer (got '$(q '.review.loop_timeout_sec')')"
+        fi
+        if [[ "$(q '.review | has("diff_max_lines")')" == "true" ]] \
+           && jq -e '.review.diff_max_lines | type == "number"' "$CONFIG" >/dev/null 2>&1 \
+           && ! jq -e '.review.diff_max_lines | type == "number" and . == (. | floor) and . > 0' "$CONFIG" >/dev/null 2>&1; then
+            violation "review.diff_max_lines must be a positive integer (got '$(q '.review.diff_max_lines')')"
         fi
     fi
 fi

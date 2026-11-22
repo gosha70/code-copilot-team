@@ -50,10 +50,14 @@ INCONCLUSIVE with no blocking finding could not judge — it was shown a
 truncated diff, or could not read it — and that is not review feedback.
 The round stops for review recovery (`review_inconclusive`: a park under
 attended profiles, a termination under `unattended`); no fix session is
-run on a verdict that judged nothing, and it never becomes a PASS. Fix the
-cause — the diff the reviewer is shown is capped by
-`CCT_REVIEW_DIFF_MAX_LINES` (default 500 lines), the existing control —
-and `--resume` runs the review again over the same build commit.
+run on a verdict that judged nothing, and it never becomes a PASS. The stop
+gives the diff's line count against the limit on what the reviewer is shown,
+and where that limit came from: `CCT_REVIEW_DIFF_MAX_LINES` if set, else
+`review.diff_max_lines` in `automation.json`, else the default of 500 lines
+(#504). Fix the cause and `--resume` runs the review again over the same
+build commit. The run keeps the `review.diff_max_lines` it started with, so
+to raise the limit for it, set `CCT_REVIEW_DIFF_MAX_LINES` on the
+`--resume` command.
 INCONCLUSIVE with a blocking finding still has something to fix and keeps
 the fix session.
 

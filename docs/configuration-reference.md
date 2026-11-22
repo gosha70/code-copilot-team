@@ -78,6 +78,7 @@ accepted.
 | `review` | object |  |  |
 | `review.max_rounds` | integer |  | Rounds allowed PER ATTEMPT in the gating review loop (default 5). Read by the driver and passed to the runner; CCT_REVIEW_MAX_ROUNDS still overrides. The budget is per attempt so /review-decide retry can actually run another round — a cumulative ceiling made retry a no-op (#227). |
 | `review.loop_timeout_sec` | integer |  | Wall-clock budget for the WHOLE review loop across rounds (default 900). Restarts when a parked run resumes, so time spent waiting for a human is not counted against it (#205). Bounds the loop, not one round: the per-provider timeout_sec in providers.toml bounds a SINGLE reviewer invocation. `review.round_timeout_sec` is not a review knob: it was never declared here and never read. |
+| `review.diff_max_lines` | integer |  | Lines of the phase diff the review runner shows each reviewer, gating and advisory (default 500); a longer diff is cut there and the reviewer is told so. Read when the run starts and frozen with its config, so it holds across --resume; CCT_REVIEW_DIFF_MAX_LINES still overrides. A review_inconclusive stop gives the diff's line count against this limit and where the limit came from (#504). |
 | `caps` | object |  |  |
 | `caps.wall_clock_sec` | number |  |  |
 | `caps.cost_usd` | number |  |  |

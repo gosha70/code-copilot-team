@@ -32,6 +32,15 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   $150 cap ended at $157.63. Spend is now also checked before every review
   round and at every phase gate, so the run parks `cap_exceeded` right after
   the invocation that crosses the cap (#503).
+- **The review diff limit can be set per run in `automation.json`.** The
+  limit on the diff a reviewer is shown, 500 lines by default, could be
+  raised only with `CCT_REVIEW_DIFF_MAX_LINES`, which has to be set again on
+  every resume, and a data-heavy phase the reviewer could not judge parked
+  as `review_inconclusive` without saying how far over the limit its diff
+  was. `review.diff_max_lines` now sets the limit, frozen with the run's
+  config so `--resume` keeps it; the variable still wins and the default
+  stays 500. The inconclusive stop gives the diff's line count against the
+  limit and where the limit came from (#504).
 
 ## [2.1.0]
 
