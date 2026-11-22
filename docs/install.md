@@ -7,7 +7,7 @@ install more than one adapter.
 
 ```bash
 # 1. Clone the latest stable release (drop --branch for unreleased master)
-git clone --branch v2.0.0 https://github.com/gosha70/code-copilot-team.git
+git clone --branch v2.1.0 https://github.com/gosha70/code-copilot-team.git
 cd code-copilot-team
 
 # 2. Install for your tool(s)
@@ -22,8 +22,10 @@ cd code-copilot-team
 # Or install everything at once
 ./scripts/setup.sh --all ~/my-project
 
-# Re-sync after pulling repo updates
-git pull && ./scripts/setup.sh --sync --claude-code
+# Update an older release clone to this one, then re-sync. A release clone is
+# on a tag, where git pull fails; a clone of master updates with git pull --ff-only.
+git fetch origin tag v2.1.0 && git switch --detach v2.1.0
+./scripts/setup.sh --sync --claude-code
 
 # Once, if you installed before 2.1: move your files into the one harness home
 cct home migrate --dry-run && cct home migrate
@@ -68,7 +70,7 @@ from the feature catalog.
 
 The legacy `./claude_code/claude-setup.sh` path still works — it delegates to the adapter.
 
-After `git pull`, run `--sync` to regenerate configs and re-install.
+After you update the checkout, run `--sync` to regenerate configs and re-install.
 
 ### Alternative: Install as a Claude Code Plugin
 

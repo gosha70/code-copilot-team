@@ -112,6 +112,15 @@ if [[ -z "$PINNED_CLONE" ]]; then
 else
     check "install guide clone pin" "$PINNED_CLONE" "$REPO_VERSION"
 fi
+# The update line names the release too (`git fetch origin tag vX.Y.Z`, then
+# `git switch --detach vX.Y.Z`). Left at an old tag, it would move a checkout
+# to the previous release instead of this one.
+PINNED_UPDATE=$(grep -oE '(fetch origin tag|switch --detach) v[0-9]+\.[0-9]+\.[0-9]+' docs/install.md | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' || true)
+if [[ -z "$PINNED_UPDATE" ]]; then
+    fail "install guide: no 'git fetch origin tag vX.Y.Z' update line found to check"
+else
+    while IFS= read -r pin; do check "install guide update pin" "$pin" "$REPO_VERSION"; done <<< "$PINNED_UPDATE"
+fi
 
 # ── Documentation index completeness ──
 # lychee proves every link resolves; nothing proved the reverse, so a guide

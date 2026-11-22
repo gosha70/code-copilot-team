@@ -82,7 +82,7 @@ two homes (if anything lands in the claim meanwhile, the rename fails and the
 legacy directory is untouched). Moving a directory needs `python3` on PATH.
 When the home is on another volume, the tree is copied into a staging
 directory beside the target (`.cct-migrate.*`) and published by the same
-rename; the legacy copy is removed only after that. `migrate` withdraws its
+rename; the legacy copy is kept, as described below. `migrate` withdraws its
 own staging directory and unpublished claim on exit or a signal, and only
 while the object at that path is still the one it created (same device and
 inode), never a directory that has since been published there; a

@@ -40,23 +40,22 @@ About five minutes from clone to a first session.
 
 ```bash
 # 1. Clone the latest stable release (master is unreleased, in development)
-git clone --branch v2.0.0 https://github.com/gosha70/code-copilot-team.git
+git clone --branch v2.1.0 https://github.com/gosha70/code-copilot-team.git
 cd code-copilot-team
 
 # 2. Install for your tool — see "Choose your tool" below
 ./scripts/setup.sh --claude-code    # Claude Code → ~/.claude/
 
 # 3. Open a project — global rules load automatically
-cct start ~/projects/my-app         # (master) on v2.0.0: claude-code ~/projects/my-app
+cct start ~/projects/my-app
 ```
 
 Every other install path — Pi, Codex, Cursor, Copilot, Windsurf, Aider, the
 Claude Code plugin — is in [Install options](docs/install.md).
 
-> **Released as v2.0.0.** Everything this page describes is in the latest
-> release and what the Quick Start installs, except lines marked **(master)**:
-> those landed after it. `master` continues as active development; read it as
-> in-development.
+> **Released as v2.1.0.** Everything this page describes is in the latest
+> release and what the Quick Start installs. `master` continues as active
+> development; read it as in-development.
 
 ```bash
 ./scripts/cct list                  # every feature, command, skill and capability
@@ -95,7 +94,7 @@ what to do when it does not happen.
 ### Your first session
 
 ```bash
-cct start ~/projects/my-app         # (master) on v2.0.0: claude-code ~/projects/my-app
+cct start ~/projects/my-app
 ```
 
 **Expect:** `cct start` runs the `claude-code` launcher, which opens a session
@@ -180,7 +179,7 @@ cct init ml-rag ~/projects/my-rag-app              # start from a template
 cct start ~/projects/existing-api                  # or just point at an existing project
 cct start --llm <target> ~/projects/existing-api   # this one session on another LLM (docs/llm-catalog.md)
 
-git pull && ./scripts/setup.sh --sync --claude-code   # after pulling repo updates
+./scripts/setup.sh --sync --claude-code               # after updating the checkout (docs/install.md)
 cct home migrate --dry-run && cct home migrate        # once, if you installed before 2.1 (docs/cct-home.md)
 cct sync ~/projects/my-rag-app --dry-run              # preview what would change
 cct sync ~/projects/my-rag-app                        # apply
