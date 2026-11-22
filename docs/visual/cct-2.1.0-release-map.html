@@ -1,0 +1,965 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- CCT 2.1.0 release map: how the 2.1.0 release was made (PR #492, tag v2.1.0), what is new, how to upgrade, and what comes after. Open this file in a browser: no build, no server. Fonts come from
+     Google Fonts and fall back to system fonts offline. The logo is cct-logo.png beside it. -->
+<style>body { margin: 0; } img { max-width: 100%; } [hidden] { display: none !important; }</style>
+<title>CCT 2.1.0 Release Map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: a release control board. A header that carries the verdict, a sticky tab rail,
+   then a work area with a detail panel on the right (it drops below the work area on phones). */
+:root {
+  /* SAIL palette, sampled from the reference: foam #ebf6f2, mist #c5dee3, sea #5d9cad,
+     deep sea #305f71, navy #254550, sail coral #e19573. */
+  --bg: #ebf6f2;
+  --surface: #ffffff;
+  --surface-2: #f4faf8;
+  --ink: #254550;
+  --muted: #4b6b78;
+  --line: #c5dee3;
+  --accent: #305f71;
+  --accent-soft: #dcecef;
+  --sea: #5d9cad;
+  --sail: #e19573;
+  --sail-line: #d27a55;
+  --sea-ink: #3d7c8e;
+  --ok: #305f71;
+  --ok-soft: #dcecef;
+  --you: #a4532e;
+  --you-soft: #fbeae2;
+  --warn: #a4532e;
+  --warn-soft: #fbeae2;
+  --next: #4b6b78;
+  --next-soft: #e3eef1;
+  --code-bg: #e6f2f1;
+  --navy: #254550;
+  --navy-2: #2d5361;
+  --navy-line: #46707e;
+  --navy-ink: #ebf6f2;
+  --navy-muted: #b9d3da;
+  --shadow: 0 1px 2px rgba(37, 69, 80, 0.07), 0 4px 14px rgba(37, 69, 80, 0.06);
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --radius: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #10222a; --surface: #172e38; --surface-2: #1c3743; --ink: #ebf6f2; --muted: #9dbac3;
+    --line: #2a4854; --accent: #8fc7d6; --accent-soft: #1d3e4a; --sea: #6faebf; --sail: #e8a282; --sail-line: #e8a282; --sea-ink: #6faebf;
+    --ok: #8fc7d6; --ok-soft: #1b3b46; --you: #f2b596; --you-soft: #3b2b25; --warn: #f2b596; --warn-soft: #3b2b25;
+    --next: #93aeb8; --next-soft: #20363f; --code-bg: #0e1e25; --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 14px rgba(0, 0, 0, 0.25);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #10222a; --surface: #172e38; --surface-2: #1c3743; --ink: #ebf6f2; --muted: #9dbac3;
+  --line: #2a4854; --accent: #8fc7d6; --accent-soft: #1d3e4a; --sea: #6faebf; --sail: #e8a282; --sail-line: #e8a282; --sea-ink: #6faebf;
+  --ok: #8fc7d6; --ok-soft: #1b3b46; --you: #f2b596; --you-soft: #3b2b25; --warn: #f2b596; --warn-soft: #3b2b25;
+  --next: #93aeb8; --next-soft: #20363f; --code-bg: #0e1e25; --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 14px rgba(0, 0, 0, 0.25);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.55;
+}
+body::before {
+  content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px);
+  z-index: 10; background: var(--navy);
+}
+a { color: var(--accent); }
+a:hover { text-decoration-thickness: 2px; }
+code, pre, kbd { font-family: var(--font-mono); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.wrap {
+  max-width: 1240px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+
+/* ── header ─────────────────────────────── */
+/* the navy hull: the husky at the helm, a ship's wheel turning behind it */
+.top { position: relative; overflow: hidden; background: var(--navy); color: var(--navy-ink); }
+.top .wrap { position: relative; z-index: 1; padding-block: 22px 18px; display: grid; gap: 14px; }
+.brand { display: flex; align-items: center; gap: 16px; min-width: 0; }
+.brand .logo { width: 68px; height: 68px; flex: none; }
+.brand-text { display: grid; gap: 4px; min-width: 0; }
+.wheel-mark {
+  position: absolute; z-index: 0; right: -90px; top: 50%; width: 420px; height: 420px;
+  color: var(--sea); opacity: 0.2; pointer-events: none;
+  transform: translateY(-50%) rotate(8deg);
+  animation: helm 1.8s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+@keyframes helm { from { transform: translateY(-50%) rotate(-40deg); } to { transform: translateY(-50%) rotate(8deg); } }
+@media (max-width: 640px) {
+  .wheel-mark { width: 280px; height: 280px; right: -120px; top: 34%; }
+  .brand { gap: 12px; }
+  .brand .logo { width: 52px; height: 52px; }
+}
+.top .eyebrow, .top .lede, .top .foot { color: var(--navy-muted); }
+.top h1 { color: var(--navy-ink); }
+.top .pill { background: var(--navy-2); border-color: var(--navy-line); color: var(--navy-ink); }
+.top .pill .dot { background: var(--navy-muted); }
+.top .pill .dot.you { background: var(--sail); }
+.eyebrow {
+  font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--muted); margin: 0;
+}
+h1 {
+  font-family: var(--font-display); font-weight: 700; font-size: clamp(28px, 4.6vw, 44px);
+  line-height: 1.05; letter-spacing: -0.01em; margin: 0; text-wrap: balance;
+}
+h1 .ver { color: var(--sail); }
+.lede { margin: 0; max-width: 70ch; color: var(--muted); }
+.verdict { display: flex; flex-wrap: wrap; gap: 8px; }
+.pill {
+  display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line);
+  background: var(--surface-2); border-radius: 999px; padding: 4px 11px; font-size: 13px;
+  white-space: nowrap;
+}
+.pill b { font-weight: 600; }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--next); }
+.dot.done { background: var(--ok); }
+.dot.you { background: var(--sail); }
+.dot.next { background: var(--next); }
+.dot.later { background: transparent; border: 1.5px solid var(--next); }
+.mono { font-family: var(--font-mono); font-size: 0.92em; }
+
+/* ── tabs ───────────────────────────────── */
+.tabs {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5;
+  background: var(--surface); border-bottom: 1px solid var(--line);
+}
+.tablist { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: thin; }
+.tab {
+  appearance: none; border: 0; background: none; color: var(--muted); cursor: pointer;
+  font-family: var(--font-display); font-weight: 600; font-size: 15px; letter-spacing: 0.01em;
+  padding: 12px 14px 11px; border-bottom: 3px solid transparent; white-space: nowrap;
+}
+.tab:hover { color: var(--ink); }
+.tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--sail-line); }
+
+/* ── board ──────────────────────────────── */
+.board .wrap {
+  padding-block: 22px 48px;
+  display: grid; gap: 22px; grid-template-columns: minmax(0, 1fr);
+}
+@media (min-width: 980px) {
+  .board .wrap { grid-template-columns: minmax(0, 1fr) 380px; align-items: start; }
+  .panel { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 66px); max-height: calc(100vh - 90px); overflow: auto; }
+}
+.view { min-width: 0; display: grid; gap: 22px; }
+.view-head { display: grid; gap: 6px; }
+h2 {
+  font-family: var(--font-display); font-weight: 600; font-size: 24px; line-height: 1.15; margin: 0;
+  text-wrap: balance;
+}
+h3 {
+  font-family: var(--font-display); font-weight: 600; font-size: 17px; margin: 0; letter-spacing: 0.01em;
+}
+.note { color: var(--muted); margin: 0; max-width: 72ch; }
+
+/* clickable boxes share one look */
+.box {
+  appearance: none; text-align: left; font: inherit; color: inherit; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 12px 14px; display: grid; gap: 4px; min-width: 0;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.box:hover { border-color: var(--sea); }
+.box[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft), var(--shadow); }
+.box .t { font-weight: 600; line-height: 1.3; }
+.box .s { color: var(--muted); font-size: 13.5px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 11.5px;
+  letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); width: max-content;
+}
+.chip.done { color: var(--ok); }
+.chip.you { color: var(--you); }
+.chip.next, .chip.later { color: var(--next); }
+.tag {
+  display: inline-block; font-family: var(--font-mono); font-size: 11.5px; border: 1px solid var(--line);
+  border-radius: 4px; padding: 0 6px; color: var(--muted); background: var(--surface-2);
+}
+.tag.new { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+
+/* status pipeline */
+.rows { display: grid; gap: 16px; container-type: inline-size; }
+.row { display: grid; gap: 10px; }
+.row-label { display: flex; align-items: center; gap: 10px; }
+.row-label .count { color: var(--muted); font-size: 13px; }
+.flow { display: flex; flex-wrap: nowrap; align-items: stretch; gap: 8px; }
+.flow .box { flex: 1 1 0; }
+.arrow { flex: none; align-self: center; color: var(--muted); font-family: var(--font-mono); font-size: 14px; }
+@container (max-width: 720px) {
+  .flow { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+  .arrow { display: none; }
+}
+@media (max-width: 560px) { .flow { flex-wrap: wrap; } .arrow { display: none; } .flow .box { flex-basis: 100%; } }
+.box.state-done { background: var(--surface); }
+.box.state-you { background: var(--you-soft); border-color: color-mix(in srgb, var(--you) 45%, var(--line)); }
+.box.state-next, .box.state-later { background: var(--surface-2); }
+.big { font-family: var(--font-display); font-weight: 700; font-size: 22px; line-height: 1.1; }
+
+/* what's new */
+.grid-2 { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.list { display: grid; gap: 6px; }
+.list .box { grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 12px; }
+.list .box .s { grid-column: 1 / -1; }
+.counts { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* parts diagram */
+.lanes { display: grid; gap: 12px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 900px) { .lanes { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 520px) { .lanes { grid-template-columns: minmax(0, 1fr); } }
+.lane { display: grid; gap: 8px; align-content: start; min-width: 0; }
+.lane-head {
+  font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.05em; text-transform: uppercase;
+  color: var(--muted); display: flex; justify-content: space-between; gap: 8px; padding-bottom: 4px;
+  border-bottom: 1px dashed var(--line);
+}
+.lane-head .to { color: var(--accent); }
+.box .where { font-family: var(--font-mono); font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+
+/* steps */
+.steps { display: grid; gap: 8px; counter-reset: step; }
+.step { grid-template-columns: 34px minmax(0, 1fr); align-items: start; gap: 4px 12px; }
+.step .n {
+  grid-row: span 3; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
+  font-family: var(--font-display); font-weight: 700; background: var(--accent-soft); color: var(--accent);
+}
+.step.optional .n { background: var(--next-soft); color: var(--next); }
+.step code.inline { font-size: 13px; color: var(--ink); background: var(--code-bg); padding: 2px 6px; border-radius: 4px; overflow-wrap: anywhere; }
+
+/* upgrade filters */
+.filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.filter {
+  appearance: none; font: inherit; font-size: 13.5px; cursor: pointer; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink); padding: 5px 12px;
+}
+.filter[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); }
+.filter[disabled] { cursor: default; opacity: 0.8; }
+
+/* tables */
+.scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); font-weight: 500; background: var(--surface-2); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+td code { font-size: 13px; white-space: nowrap; }
+td.old code { color: var(--muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent); }
+td.new code { color: var(--ink); }
+.matrix td, .matrix th { text-align: center; white-space: nowrap; }
+.matrix td:first-child, .matrix th:first-child { text-align: left; }
+.matrix tbody tr { cursor: pointer; }
+.matrix tbody tr:hover td { background: var(--surface-2); }
+.matrix tbody tr[aria-selected="true"] td { background: var(--accent-soft); }
+.matrix tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.sym { font-family: var(--font-mono); font-size: 15px; }
+.sym.enforced { color: var(--ok); }
+.sym.advisory { color: var(--sea-ink); }
+.sym.neutral { color: var(--muted); }
+.sym.unsupported { color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; color: var(--muted); }
+.adapter-sum { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.adapter-sum .cell { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; }
+.adapter-sum .cell .k { font-family: var(--font-mono); font-size: 12.5px; }
+.adapter-sum .cell .v { font-size: 13px; color: var(--muted); }
+.adapter-sum .cell .v b { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+/* panel */
+.panel {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 18px; display: grid; gap: 14px; min-width: 0;
+}
+.panel h3 { font-size: 20px; line-height: 1.2; text-wrap: balance; }
+.panel p, .panel li { margin: 0; }
+.panel ul, .panel ol { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+.panel .sec { display: grid; gap: 8px; }
+.panel .sec > .k {
+  font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+}
+.panel code:not(pre code) { font-size: 13px; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+.cmd { position: relative; background: var(--code-bg); border: 1px solid var(--line); border-radius: var(--radius); min-width: 0; }
+.cmd pre { margin: 0; padding: 10px 70px 10px 12px; overflow-x: auto; font-size: 13px; line-height: 1.5; }
+.copy {
+  position: absolute; top: 6px; right: 6px; appearance: none; cursor: pointer; font: inherit; font-size: 12px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 4px; padding: 2px 8px;
+}
+.verdict-block { background: var(--code-bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; font-family: var(--font-mono); font-size: 13px; overflow-x: auto; white-space: pre; }
+.verdict-block .ready { color: var(--ok); font-weight: 500; }
+.bars { display: grid; gap: 6px; }
+.bar { display: grid; grid-template-columns: minmax(0, 1fr) 42px; gap: 4px 10px; align-items: center; font-size: 13.5px; }
+.bar .track { grid-column: 1 / -1; height: 6px; background: var(--next-soft); border-radius: 3px; overflow: hidden; }
+.bar .fill { height: 100%; background: var(--ok); border-radius: 3px; }
+.bar .num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.bar.skip .fill { background: transparent; }
+.bar.skip .num { color: var(--muted); }
+.check { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 8px; align-items: start; cursor: pointer; }
+.check input { margin-top: 4px; accent-color: var(--accent); }
+.ba { display: grid; gap: 6px; }
+.ba .lbl { font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+.refs { display: flex; flex-wrap: wrap; gap: 6px; }
+.prgroup { display: grid; gap: 4px; }
+.prgroup .nums { display: flex; flex-wrap: wrap; gap: 4px 8px; font-family: var(--font-mono); font-size: 13px; }
+.foot { color: var(--muted); font-size: 13px; }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } .wheel-mark { animation: none; } }
+</style>
+</head>
+<body>
+<header class="top">
+  <svg class="wheel-mark" viewBox="-210 -210 420 420" aria-hidden="true" focusable="false">
+    <g fill="none" stroke="currentColor">
+      <circle r="148" stroke-width="12"/>
+      <circle r="124" stroke-width="4"/>
+      <circle r="40" stroke-width="10"/>
+      <g stroke-width="9">
+        <line y1="-192" y2="192"/>
+        <line y1="-192" y2="192" transform="rotate(45)"/>
+        <line y1="-192" y2="192" transform="rotate(90)"/>
+        <line y1="-192" y2="192" transform="rotate(135)"/>
+      </g>
+      <g stroke-width="22" stroke-linecap="round">
+        <line y1="-194" y2="-166"/><line y1="166" y2="194"/>
+        <line y1="-194" y2="-166" transform="rotate(45)"/><line y1="166" y2="194" transform="rotate(45)"/>
+        <line y1="-194" y2="-166" transform="rotate(90)"/><line y1="166" y2="194" transform="rotate(90)"/>
+        <line y1="-194" y2="-166" transform="rotate(135)"/><line y1="166" y2="194" transform="rotate(135)"/>
+      </g>
+    </g>
+    <circle r="16" fill="currentColor"/>
+  </svg>
+  <div class="wrap">
+    <div class="brand">
+      <img class="logo" src="cct-logo.png" alt="Code Copilot Team logo: a husky at a ship's wheel" width="68" height="68">
+      <div class="brand-text">
+        <p class="eyebrow">Code Copilot Team · released 21 Nov 2026</p>
+        <h1>CCT <span class="ver">2.1.0</span> release map</h1>
+      </div>
+    </div>
+    <p class="lede">What 2.1.0 changes for you, how a session goes on it, how to upgrade from 2.0, and how the release was made. Click any box for the details.</p>
+    <div class="verdict" aria-label="Release status at a glance">
+      <span class="pill"><span class="dot done"></span><span><b>v2.1.0</b> published · Latest</span></span>
+      <span class="pill"><span class="dot done"></span><span>Tag <span class="mono">v2.1.0 → 86b8384</span></span></span>
+      <span class="pill"><span class="dot done"></span><span>Readiness <b>READY</b> · 155 passed · 0 failed</span></span>
+      <span class="pill"><span class="dot done"></span><span>Release workflow <b>passed</b></span></span>
+    </div>
+    <p class="foot">Final state, 21 Nov 2026: v2.1.0 was published from 86b8384, the commit the readiness check and the review approved. It does not update by itself.</p>
+  </div>
+</header>
+
+<nav class="tabs" aria-label="Sections">
+  <div class="wrap">
+    <div class="tablist" role="tablist" id="tablist"></div>
+  </div>
+</nav>
+
+<main class="board">
+  <div class="wrap">
+    <div id="views"></div>
+    <aside class="panel" id="panel" aria-live="polite"></aside>
+  </div>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var REPO = "https://github.com/gosha70/code-copilot-team";
+  function pr(n) { return '<a href="' + REPO + '/pull/' + n + '" target="_blank" rel="noopener">#' + n + '</a>'; }
+  function iss(n) { return '<a href="' + REPO + '/issues/' + n + '" target="_blank" rel="noopener">#' + n + '</a>'; }
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+  function cmd(text) { return '<div class="cmd"><pre><code>' + esc(text) + '</code></pre><button class="copy" type="button">Copy</button></div>'; }
+  function sec(k, html) { return '<div class="sec"><div class="k">' + k + '</div>' + html + '</div>'; }
+  function ul(items) { return '<ul>' + items.map(function (i) { return '<li>' + i + '</li>'; }).join("") + '</ul>'; }
+  function stateChip(state) {
+    var label = { done: "Done", you: "Your step", next: "Starts with the tag", later: "After the release" }[state];
+    return '<span class="chip ' + state + '"><span class="dot ' + state + '"></span>' + label + '</span>';
+  }
+
+  /* ── Release status ───────────────────────────────────────── */
+  var PR_GROUPS = [
+    ["cct, the launcher and the LLM catalog", [412, 425, 444, 480, 483, 484, 494]],
+    ["One home and the Pi project file", [456, 458, 462, 465, 466, 468, 469]],
+    ["Session Analytics and the Studio", [416, 423, 424, 426, 432, 435, 439, 451, 453, 474, 475, 476, 478, 486, 489, 491]],
+    ["Auto-build and review", [417, 418, 419, 430, 446, 449, 472]],
+    ["Rules and skills", [421, 428, 440, 445, 461, 470]],
+    ["Wiki", [443]],
+    ["Windows, and the home path in published evidence", [436, 438, 442, 447, 448]],
+    ["CI, security and the repository", [413, 431, 433, 454, 455, 467, 485, 490]]
+  ];
+  var LAYERS = [
+    ["Toolchain", 3], ["Version carriers agree", 9], ["Dependency advisories", 1],
+    ["Generated files are current", 6], ["Repository gates", 6], ["Suites release.yml runs", 2],
+    ["cct front door", 7], ["pi-code", 7], ["Release artifacts", 4],
+    ["Live stack: API contract", 70], ["Live stack: Studio in a browser", 32], ["Live stack: synthesize, ingest, serve", 8]
+  ];
+  var CI_CHECKS = ["Analyze (actions)", "Analyze (java-kotlin)", "Analyze (javascript-typescript)", "Analyze (python)",
+    "build", "CodeQL (two checks of that name)", "doc-accuracy", "pi-tests", "render", "sync-check", "Wiki contract",
+    "Wiki contract (py3.11)", "Wiki contract (py3.12)", "Wiki contract (py3.13)"];
+  var MANUAL = [
+    "Install the Claude Code plugin and start a session.",
+    "Read the [2.1.0] CHANGELOG section. Accuracy and voice are yours.",
+    "Run one judge analysis against your own model, and judge whether the advice is worth reading.",
+    "Open the Codespace tour once.",
+    "Decide the open questions: the studio/package.json version, release.yml gate coverage, and whether the deferred reflow gaps hold the tag."
+  ];
+
+  var STAGES = [
+    { row: "done", id: "merged", title: "57 pull requests", sub: "merged since v2.0.0", detail: function () {
+        return '<p>Everything merged into master since v2.0.0 (6 Nov) ships in 2.1.0. Grouped by area:</p>' +
+          PR_GROUPS.map(function (g) {
+            return '<div class="prgroup"><b>' + g[0] + ' · ' + g[1].length + '</b><div class="nums">' + g[1].map(pr).join(" ") + '</div></div>';
+          }).join("");
+      } },
+    { row: "done", id: "pr", title: "Release PR #492", sub: "version 2.0.0 → 2.1.0 and the CHANGELOG · merged", detail: function () {
+        return '<p>Against master it changes 12 files, and nothing else: the version, the files generated from it, and the release notes.</p>' +
+          sec("Version 2.0.0 → 2.1.0 in five carriers", ul(["<code>package.json</code> and <code>package-lock.json</code>", "<code>adapters/pi/package.json</code>, which the release scripts treat as the authority", "<code>adapters/pi/bin/pi-code</code>", "the Claude Code plugin manifest"])) +
+          sec("Follows from the version", ul(["The SBOM and <code>docs/features.md</code> are regenerated", "The LLM catalog feature is marked <code>since: v2.1.0</code>", "The README, the install guide and the Codespace tour name v2.1.0"])) +
+          sec("CHANGELOG [2.1.0]", '<p>A summary, 8 highlights and 13 upgrade notes, then 18 Added, 21 Fixed, 6 Changed and 2 Security entries.</p>') +
+          sec("Commits", ul(['<code>25a76c3</code> release: 2.1.0', '<code>1144c1a</code> merge of master, bringing in ' + pr(494), '<code>32ccd31</code> the 2.1.0 notes name the new cct commands', '<code>7bee4b6</code> the 2.1.0 upgrade notes say what migrate and permissions do', '<code>86b8384</code> merge of master, bringing in ' + pr(495)])) +
+          '<p><a href="' + REPO + '/pull/492" target="_blank" rel="noopener">Open #492 on GitHub</a></p>';
+      } },
+    { row: "done", id: "fixes", title: "Review fixes", sub: "two upgrade notes and a guide · 7bee4b6, #495", detail: function () {
+        return '<p>Two external reviews of <code>32ccd31</code> found two upgrade notes that said less than ships. Both are corrected in <code>7bee4b6</code>:</p>' +
+          ul(['<b>Moving the user home.</b> On the same filesystem <code>cct home migrate</code> moves each entry; with <code>CCT_HOME</code> on another filesystem it copies each entry, keeps the legacy one and exits 1. The note also says to refresh every installed adapter (with <code>--pi</code> for <code>pi-code</code>) and to close running <code>pi-code</code> sessions first, because the 2.0 <code>pi-code</code> would recreate the old home.',
+              '<b>Permission tiers.</b> <code>cct permissions</code> accepts only <code>default</code>, <code>balanced</code> and <code>relaxed</code>. A new note says what to do with a custom tier instead.']) +
+          '<p>The guide paragraph that said the cross-filesystem copy is deleted is fixed in ' + pr(495) + ', merged as <code>4214e7c</code> and brought into this branch by the merge <code>86b8384</code>.</p>';
+      } },
+    { row: "done", id: "gate", title: "READY", sub: "readiness check: 155 passed, 0 failed, 0 warnings", big: true, detail: function () {
+        var max = 70;
+        var bars = LAYERS.map(function (l) {
+          var w = Math.max(4, Math.round(Math.min(l[1], max) / max * 100));
+          return '<div class="bar"><span>' + l[0] + '</span><span class="num">' + l[1] + '</span><div class="track"><div class="fill" style="width:' + w + '%"></div></div></div>';
+        }).join("") + '<div class="bar skip"><span>Routing (not configured in a throwaway home)</span><span class="num">skip</span><div class="track"></div></div>';
+        var checks = MANUAL.map(function (m, i) {
+          return '<label class="check"><input type="checkbox" id="manual-' + i + '" data-manual="' + i + '"><span>' + esc(m) + '</span></label>';
+        }).join("");
+        return '<p><code>tests/test-release-readiness.sh --version 2.1.0 --require-browser</code> on the committed tree, with its own API, Studio and store:</p>' +
+          '<div class="verdict-block">passed:   155\nfailed:   0\nwarnings: 0\ncommit:   86b8384600e98403b15c9435e0471fbe327cf22b\ntree:     clean\n\n<span class="ready">READY for the manual items above.</span></div>' +
+          '<p>Earlier verdicts, on <code>25a76c3</code> and <code>32ccd31</code>, were also READY with the same counts.</p>' +
+          sec("Passed checks by layer", '<div class="bars">' + bars + '</div>') +
+          sec("Recorded, not failed", '<p>The Sessions page scrolls sideways on narrow screens: by 89px at 768px and by 467px at 390px. Its layout is unchanged since v2.0.0.</p>') +
+          sec("Left for a person", checks + '<p class="foot">Ticks are kept in this browser only.</p>');
+      } },
+    { row: "done", id: "ci", title: "18 checks pass", sub: "CI on 86b8384, review gates included", detail: function () {
+        return '<p>Every check on <code>86b8384</code> passed: the 15 CI checks, the two review-gate checks once the label went on, and <code>release</code>, the release workflow run on the tagged commit.</p>' +
+          sec("Passing", ul(CI_CHECKS.concat(["Review gate", "External review on record", "release"]).map(function (c) { return '<code>' + esc(c) + '</code>'; })));
+      } },
+    { row: "you", state: "done", id: "review", title: "Labelled reviewed", sub: "on 86b8384, after the re-review", detail: function () {
+        return '<p>The reviewer re-reviewed <code>86b8384</code>, and the <code>reviewed</code> label went on that head. The review-gate workflow then set the commit status <code>External review on record</code> on it. A new commit would have dropped the label.</p>' +
+          sec("What master requires", ul(["<code>CodeQL</code>", "<code>External review on record</code>", "<code>pi-tests</code>", "<code>sync-check</code>"])) +
+          '<p class="foot">These are the required checks of the <code>master-protection</code> ruleset.</p>';
+      } },
+    { row: "you", state: "done", id: "merge", title: "Merged #492", sub: "2a60217 · 22:31 UTC", detail: function () {
+        return '<p>Merged at 22:31:03 UTC with a merge commit, <code>2a60217</code>, so <code>86b8384</code> stays in master\'s history. The README and the install guide on master now tell new users to clone <code>v2.1.0</code>.</p>';
+      } },
+    { row: "you", state: "done", id: "tag", title: "Tagged v2.1.0", sub: "86b8384 · lightweight", detail: function () {
+        return '<p>A lightweight tag on <code>86b8384</code>, the head the readiness check and the review approved, pushed right after the merge. Pushing it started the release workflow.</p>' +
+          sec("The steps, for the next release", cmd("git fetch origin pull/492/head\ngit tag v2.1.0 FETCH_HEAD\ngit rev-parse --short v2.1.0     # must print the approved head\ngit push origin v2.1.0")) +
+          '<p><code>prepare-release.sh</code> refuses a tag that disagrees with <code>adapters/pi/package.json</code>, and a tag that would move. For 2.0.0 the tag went on the release branch\'s head (<code>e1beb42</code>) before #388 merged.</p>';
+      } },
+    { row: "next", state: "done", id: "workflow", title: "Release workflow passed", sub: "run 44957184425 · 31 s", detail: function () {
+        return '<p>Started by the tag at 22:31:28 UTC on <code>86b8384</code>. Every step passed (<a href="' + REPO + '/actions/runs/44957184425" target="_blank" rel="noopener">run 44957184425</a>):</p>' +
+          '<ol><li>Checked out with full history and tags, then <code>npm ci</code>.</li>' +
+          '<li>Capability registry and generated docs: valid and current.</li>' +
+          '<li>The committed SBOM: up to date.</li>' +
+          '<li>The Pi runtime suite and the Pi adapter suite: passed.</li>' +
+          '<li><code>prepare-release.sh 2.1.0</code>: <code>SHA256SUMS</code> for 101 files, and 563 lines of release notes from the [2.1.0] section, the same as the local run.</li>' +
+          '<li><code>gh release create v2.1.0</code> with <code>SHA256SUMS</code> and <code>sbom.cdx.json</code>.</li></ol>' +
+          '<p>There is no registry push. The tag is the install path.</p>';
+      } },
+    { row: "next", state: "done", id: "published", title: "GitHub Release v2.1.0", sub: "published 22:31 UTC · Latest", detail: function () {
+        return '<p><a href="' + REPO + '/releases/tag/v2.1.0" target="_blank" rel="noopener">v2.1.0</a> is published and marked Latest. Its notes are the CHANGELOG section, identical to the local release notes, and it carries two assets, <code>SHA256SUMS</code> (10,990 bytes) and <code>sbom.cdx.json</code> (2,020 bytes), the same two that v2.0.0 has.</p>' +
+          '<p>The Quick Start\'s clone command now works:</p>' + cmd("git clone --branch v2.1.0 https://github.com/gosha70/code-copilot-team.git");
+      } },
+    { row: "later", id: "after", title: "Queued for after", sub: "#487 · #497 · the docs site's alerts", detail: function () {
+        return sec("Next", ul([
+          iss(487) + ': <code>export</code> honours a project\'s later opt-out or tightening, with a flag for a raw export. First deliverable: a lightweight plan.',
+          iss(497) + ': since the tag, a local run of the Pi adapter suite fails one assertion until the next version bump: it runs <code>prepare-release.sh</code> without a version, and the script refuses to move a released tag. CI and the release run pass. Minor.',
+          '29 open Dependabot alerts in <code>site/package-lock.json</code>, the docs site\'s build: 12 high, 13 medium, 4 low (as of 21 Nov).'
+        ]));
+      } }
+  ];
+  var ROWS = [
+    ["done", "Done", "Built, checked and green"],
+    ["you", "Your steps", "Labelled, merged and tagged", "done"],
+    ["next", "What the tag started", "The release workflow published it", "done"],
+    ["later", "After the release", "Deliberately held back"]
+  ];
+
+  /* ── What's new ───────────────────────────────────────────── */
+  var HIGHLIGHTS = [
+    { id: "llm", title: "Pick the LLM per session", sub: "cct start --llm <target> runs one session on a target from ~/.cct/llms.toml.", refs: [479, 480, 483], detail: function () {
+        return '<div class="ba"><span class="lbl">Before</span>' + cmd("export ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic\nexport ANTHROPIC_AUTH_TOKEN=...\nclaude-code ~/projects/app      # and every other session too") +
+          '<span class="lbl">Now</span>' + cmd("cct llm list\ncct start --llm deepseek ~/projects/app   # this session only") + '</div>' +
+          '<p>The endpoint, credential and model are set in the one process that becomes <code>claude</code>, and competing variables are removed from it: another credential, Claude Code\'s own credentials on a third-party endpoint, custom headers, provider and gateway switches, a subagent model, another model\'s tuning.</p>' +
+          sec("Refused before Claude Code starts when", ul(["the target is unknown", "its endpoint speaks another protocol", "its credential is not set", "a <code>settings.json</code> env block would override its endpoint, credential or model"])) +
+          sec("A target in ~/.cct/llms.toml", cmd('[llms.deepseek]\nprovider = "deepseek"\nmodel = "deepseek-chat"\n\n[bindings.deepseek-claude]\nharness = "claude-code"\nllm = "deepseek"\nendpoint = "deepseek"')) +
+          '<p class="foot">Claude Code only in this release, and the first slice of ' + iss(400) + '. A credential is named by its environment variable, never written in the catalog.</p>';
+      } },
+    { id: "new-home", title: "One home and one project file", sub: "User files live in ~/.cct. A Pi project's config is .cct.toml.", refs: [411, 460, 463], detail: function () {
+        return '<p>Every reader in bash, Python and TypeScript finds a user file the same way: <code>${CCT_HOME:-~/.cct}/&lt;entry&gt;</code>.</p>' +
+          sec("What lives in ~/.cct", ul(["<code>providers.toml</code>: peer reviewers and auto-build providers", "<code>llms.toml</code>: the targets <code>--llm</code> accepts", "<code>harness.json</code> and <code>harness-stamps.jsonl</code>: which harness ran a session", "the Session Analytics config, store and graph", "<code>pi/</code> and <code>config.toml</code> for the Pi adapter"])) +
+          sec("Moving off the old home", '<p>Refresh every adapter you installed first (add <code>--pi</code> for <code>pi-code</code>) and close running <code>pi-code</code> sessions; an older <code>pi-code</code> would recreate the old home.</p>' +
+            cmd("cct home                     # what is still read from ~/.code-copilot-team\ncct home migrate --dry-run\ncct home migrate             # move legacy entries in; never overwrites") +
+            '<p>On the same filesystem each entry moves; with <code>CCT_HOME</code> on another filesystem it is copied, the old one is kept, and <code>migrate</code> exits 1 so you remove it by hand. The old home is still read through the 2.1.x line. 2.2 removes that fallback.</p>') +
+          sec("A Pi project", '<p><code>.cct.toml</code> at the repo root (committed), <code>.cct.local.toml</code> (personal, never committed) and <code>.cct-init.json</code>. The old <code>.code-copilot-team/config.toml</code> is read through 2.1.x.</p>' + cmd("pi-code migrate ~/projects/app --dry-run"));
+      } },
+    { id: "new-cct", title: "cct is the command", sub: "Every launcher command now has a cct name, and the docs use it.", refs: [410, 494], detail: function () {
+        return '<p><code>setup.sh --claude-code</code> puts <code>cct</code> on your PATH in <code>~/.local/bin</code>. It hands launcher commands to the installed <code>claude-code</code> launcher with your arguments unchanged.</p>' +
+          sec("Launcher commands", ul(["<code>cct start [path]</code>: a session, with any launcher flag (<code>--llm</code>, <code>--peer-review</code>)", "<code>cct init &lt;template&gt; [path]</code> and <code>cct templates</code>", "<code>cct sync [path] [--dry-run]</code>", "<code>cct build &lt;feature-id&gt;</code>", "<code>cct permissions &lt;tier&gt; [dir]</code>", "<code>cct playwright [dir]</code>"])) +
+          sec("cct's own commands", ul(["<code>cct features</code> and <code>cct list</code>: what the harness offers", "<code>cct doctor</code>: is this machine ready", "<code>cct config</code>, <code>cct home</code>, <code>cct llm</code>, <code>cct routing</code>"])) +
+          '<p>The Claude Code plugin is named <code>cct</code> too: <code>/cct:shape</code>, <code>cct:build</code>. <code>claude-code &lt;command&gt;</code> keeps working.</p>';
+      } },
+    { id: "privacy", title: "Privacy holds after ingest", sub: "Tighten or opt out a project, and everything sent off the machine follows at once.", refs: [457, 473, 477], detail: function () {
+        return '<p>The per-turn judge, session analysis, Ask, embeddings and the MCP server read stored text under the stricter of two modes: the one it was ingested with and the project\'s current one.</p>' +
+          ul(["A tightened project sends a <code>metadata-only</code> marker in place of each stored text.", "An opted-out project (<code>ingest: \"off\"</code>) sends nothing: no text, marker, row or id, and no list names it.", "A project's settings apply under its <code>project_ids</code> id and under its repo path. When both have an entry, the stricter holds.", "The Studio and the quickstart ingest with the same configuration as the CLI.", "Canary secrets planted in a fixture fail the build if any of these paths sends what the mode removes."]) +
+          sec("Not covered yet", '<p><code>session-analytics export</code> still writes stored rows as they were recorded, for a project opted out or tightened after ingest. ' + iss(487) + ' changes that after the release.</p>');
+      } },
+    { id: "active", title: "Active time per session", sub: "Schema 13 stores active seconds at an idle cutoff, in place.", refs: [422, 414], detail: function () {
+        return '<p>A new <code>session_activity</code> table holds each session\'s active seconds at the idle cutoff, with the gaps it measured and the ones it skipped. The default cutoff is 900 seconds (<code>CCT_SA_SESSIONS_IDLE_CUTOFF_SECONDS</code>).</p>' +
+          '<p>A schema-12 store gains the table in place and fills it from stored turn timestamps when next opened. No recreate, no re-ingest.</p>' +
+          cmd("./scripts/session-analytics gaps --cutoff 15 --exclude-noise") +
+          '<p class="foot">Duration stays wall clock, first entry to last. No page shows active time yet.</p>';
+      } },
+    { id: "new-wiki", title: "wiki-studio runs the wiki", sub: "The in-repo engine is gone; a pinned wheel does the work.", refs: [384], detail: function () {
+        return '<p>The five wiki verbs (<code>ingest</code>, <code>promote</code>, <code>query</code>, <code>lint</code>, <code>audit-flush</code>) run the <code>wiki-studio==0.9.0</code> wheel, pinned by hash. CCT\'s own copy, 10,344 lines, is deleted.</p>' +
+          ul(["<code>scripts/setup.sh</code> installs it into the checkout's <code>.venv</code> (Python 3.11 to 3.13).", "<code>./scripts/wiki</code> refuses, naming the remedy, when it is missing or the wrong version.", "<code>cct doctor</code> reports it under Wiki.", "<code>WIKI_STUDIO_BACKEND</code> replaces <code>WIKI_INGEST_BACKEND</code>, which still works with a warning."]);
+      } },
+    { id: "new-autobuild", title: "Auto-build lands less, and says why", sub: "Stricter about what it lands and about the PR it opens.", refs: [403, 404, 405, 427, 471], detail: function () {
+        return ul([
+          "It lands only when <code>test.command</code> passes on the final head (" + iss(403) + ").",
+          "It never writes onto a closed PR, and adopts only an open one (" + iss(427) + ").",
+          "It keeps one review record per phase and reports a bypass as a bypass (" + iss(404) + ").",
+          "It moves the pitch's hill chart as phases land (" + iss(405) + ").",
+          "It writes <code>Closes #N</code> into the PR body and checks what GitHub linked (" + iss(471) + ").",
+          "The review runner runs a test that a blocking finding claims fails, before counting the finding (" + iss(406) + ")."
+        ]);
+      } },
+    { id: "gate2", title: "Reviewed before merged", sub: "A PR merges only after its head carries the reviewed label.", refs: [431, 433], detail: function () {
+        return '<p>The owner\'s <code>reviewed</code> label becomes the required status <code>External review on record</code> on the PR\'s head. A new commit drops it. CodeQL now runs on pull requests from forks through its own workflow.</p>' +
+          sec("Required on master", ul(["<code>CodeQL</code>", "<code>External review on record</code>", "<code>pi-tests</code>", "<code>sync-check</code>"]));
+      } }
+  ];
+  var FIXES = [
+    { id: "fx-perm", title: "Permission profiles on a fresh install", refs: [493], text: "Before, <code>cct permissions balanced</code> failed as an \"unknown permission tier\" until you ran <code>--sync</code>. A fresh install now copies the profiles. Only <code>default</code>, <code>balanced</code> and <code>relaxed</code> are accepted." },
+    { id: "fx-peer", title: "--peer-review turns peer review on", refs: [481], text: "Setup wrote peer-review defaults into <code>~/.claude/settings.json</code>, and Claude Code applied them over the launcher's flag. Setup no longer writes them, and <code>--sync</code> removes the old defaults." },
+    { id: "fx-errors", title: "One-line errors", refs: [450, 452], text: "A bad configuration value, or a store that cannot be opened, prints one <code>error:</code> line and exits 2 or 3. A password in a PostgreSQL connection string never reaches the terminal." },
+    { id: "fx-card", title: "The Studio's redaction card says what it shows", refs: [488], text: "It is now \"Recorded per-project redaction\": the mode each project's sessions were stored with. A tightened or opted-out project applies at once to everything sent off the machine." },
+    { id: "fx-win", title: "Windows", refs: [434], text: "The graph builds on Windows, <code>CCT_HARNESS_STAMPS</code> is read the same way by the hook and the analytics, and the home path is scrubbed from published evidence in every spelling." }
+  ];
+  var SECURITY = [
+    { id: "sec-studio", title: "Studio: Next.js 15.5.29", refs: [491], text: "Clears three runtime advisories in <code>next</code> up to 15.5.28, and a build-time one in <code>postcss-selector-parser</code>. An existing Studio keeps the old versions until you run <code>npm install</code> in <code>studio/</code>." },
+    { id: "sec-litellm", title: "Benchmark proxy: litellm 1.100.4", refs: [490], text: "The pin moves from 1.95.0, which a high-severity privilege-escalation advisory and a medium SSRF advisory affect." }
+  ];
+
+  /* ── Who does what ────────────────────────────────────────── */
+  var LANES = [
+    { name: "You", to: "type", parts: [
+      { id: "you", title: "You", where: "your terminal", text: "You start sessions, approve plans, add the reviewed label and push tags. Everything else on this page works for you or checks your work.", links: ["cct", "home"] },
+      { id: "home", title: "Your files", where: "~/.cct", isNew: true, text: "One home for everything CCT keeps for you: <code>providers.toml</code> (reviewers and providers), <code>llms.toml</code> (the targets <code>--llm</code> accepts), <code>harness.json</code>, and the Session Analytics config and store. New in 2.1: one home, with <code>cct home migrate</code> for the old one.", links: ["launcher", "reviewer", "analytics"] }
+    ] },
+    { name: "Front door", to: "hands off", parts: [
+      { id: "cct", title: "cct", where: "~/.local/bin/cct", isNew: true, text: "The one command you type. <code>cct start</code>, <code>init</code>, <code>templates</code>, <code>sync</code>, <code>build</code>, <code>permissions</code> and <code>playwright</code> hand off to the installed launcher. <code>features</code>, <code>list</code>, <code>doctor</code>, <code>config</code>, <code>home</code>, <code>llm</code> and <code>routing</code> are its own. New in 2.1: every launcher command has a cct name.", links: ["launcher", "project"] },
+      { id: "launcher", title: "claude-code launcher", where: "~/.local/bin/claude-code", isNew: true, text: "Opens one cmux or tmux session per project with a transcript log, applies <code>--peer-review</code> and, new in 2.1, <code>--llm</code>: it reads the target from <code>~/.cct/llms.toml</code> and sets only that process's endpoint, credential and model.", links: ["session", "home"] },
+      { id: "setup", title: "setup.sh", where: "./scripts/setup.sh", isNew: true, text: "Installs the adapter: rules, skills, agents, hooks, commands and permission profiles into <code>~/.claude</code>, the launcher and <code>cct</code> into <code>~/.local/bin</code>. <code>--sync</code> refreshes them after a pull. New in 2.1: a fresh install copies the permission profiles too.", links: ["harness", "launcher"] }
+    ] },
+    { name: "The session", to: "works", parts: [
+      { id: "session", title: "Agent session", where: "Claude Code, in your project", isNew: true, text: "Claude Code running with CCT's rules loaded. It follows Research, Plan, Build and Review, and talks to whichever model the session was started with. New in 2.1: a per-session model with <code>--llm</code>.", links: ["harness", "hooks", "project", "reviewer"] },
+      { id: "harness", title: "Rules, skills and agents", where: "~/.claude", text: "Four global rules load in every session. Skills load when relevant, and phase agents (research, plan, build, review) do the phase work. Installed by setup.sh from the repository's shared sources.", links: ["session"] },
+      { id: "hooks", title: "Hooks", where: "~/.claude/hooks", text: "Gates that can block, plus a few helpers: protect files and git, format and type-check after edits, run tests when the agent stops, re-inject context at session start, the peer-review stop hook, and desktop notifications.", links: ["session"] },
+      { id: "project", title: "Project and specs", where: "CLAUDE.md · .claude/ · specs/", isNew: true, text: "<code>cct init</code> creates the project from a template, and <code>cct sync</code> keeps it current without overwriting your CLAUDE.md. Specs live in <code>specs/&lt;feature&gt;/</code>, and the origin check holds a plan to what you asked for. New in 2.1: a Pi project keeps its config in <code>.cct.toml</code>.", links: ["session", "autobuild"] }
+    ] },
+    { name: "Around it", to: "checks and records", parts: [
+      { id: "reviewer", title: "Peer reviewer", where: "declared in ~/.cct/providers.toml", text: "A second model, such as a hosted API, a model on your own GPU or another CLI, reviews a phase's diff against a fixed verdict contract: PASS, FAIL or INCONCLUSIVE. Turned on per session with <code>cct start --peer-review &lt;name&gt;</code>.", links: ["session"] },
+      { id: "autobuild", title: "Auto-build driver", where: "cct build · scripts/auto-build-loop.sh", isNew: true, text: "Builds an approved feature phase by phase outside your session, under spend and time caps, and keeps a ledger in <code>.cct/auto-build/&lt;feature&gt;/</code>. Profiles: advisory, pr, merge, unattended. New in 2.1: it lands only on passing tests and checks the issues its PR closes.", links: ["project", "github"] },
+      { id: "github", title: "GitHub", where: "pull requests and rulesets", isNew: true, text: "Where work lands. New in 2.1: a PR to this repository merges only after its head carries the <code>reviewed</code> label, and CodeQL runs on fork PRs.", links: ["autobuild"] },
+      { id: "analytics", title: "Session Analytics and Studio", where: "~/.cct store · local web UI", isNew: true, text: "Sessions, costs and benchmark runs land in a local store, browsed in the Studio. New in 2.1: privacy settings hold after ingest on every off-machine path, and active time is stored per session.", links: ["home"] },
+      { id: "wiki", title: "Wiki", where: "knowledge/wiki · ./scripts/wiki", isNew: true, text: "The project's memory. Agents read it first. New in 2.1: the pinned <code>wiki-studio</code> package runs it.", links: ["session"] },
+      { id: "memkernel", title: "MemKernel", where: "optional MCP server", text: "Optional memory across sessions through the <code>memkernel-memory</code> skill. Without the MCP server configured, the skill does nothing.", links: ["session"] }
+    ] }
+  ];
+
+  /* ── First session ────────────────────────────────────────── */
+  var FIRST = [
+    { id: "f1", title: "Clone the release", show: "git clone --branch v2.1.0 …", cmd: "git clone --branch v2.1.0 https://github.com/gosha70/code-copilot-team.git\ncd code-copilot-team",
+      expect: "A checkout at the v2.1.0 tag.", verify: "<code>git describe --tags</code> prints <code>v2.1.0</code>.", ifnot: "Until the tag is pushed, there is nothing to clone at v2.1.0. Master already has the same content." },
+    { id: "f2", title: "Install for Claude Code", cmd: "./scripts/setup.sh --claude-code",
+      expect: "Rules, skills, agents, hooks, commands and the permission profiles in <code>~/.claude</code>; the launcher and <code>cct</code> in <code>~/.local/bin</code>; <code>~/.cct/harness.json</code> and a provider profile. Session Analytics gets a Python environment in the checkout.", verify: "The closing \"Quick start\" lines name <code>cct templates</code>, <code>cct init</code> and <code>cct start</code>.", ifnot: "Run it again with <code>--sync</code>. <code>cct doctor</code> names what is missing." },
+    { id: "f3", title: "Check the machine", cmd: "cct doctor --no-network",
+      expect: "One row per check (tools, the provider profile, each adapter, the CCT home, a gateway, the wiki), each ok, warning or failed.", verify: "The last line reports 0 failed.", ifnot: "Each failed row names its remedy. <code>--no-network</code> skips the provider healthchecks." },
+    { id: "f4", title: "Create a project from a template", show: "cct init ml-rag ~/projects/my-rag-app", cmd: "cct templates\ncct init ml-rag ~/projects/my-rag-app",
+      expect: "CLAUDE.md, <code>.claude/</code> and the template's commands in the new folder. In a terminal it asks for a permission tier: default, balanced or relaxed.", verify: "Its next steps end with <code>Run: cct start</code> and the new folder's path.", ifnot: "<code>cct templates</code> lists the template names <code>init</code> accepts." },
+    { id: "f5", title: "Start the session", cmd: "cct start ~/projects/my-rag-app",
+      expect: "A session with your git branch in the status line, and the global rules loaded without asking.", verify: "Ask the agent \"which rules are loaded?\" It should name the four global rules.", ifnot: "Run <code>cct doctor</code>, then <code>./scripts/setup.sh --sync --claude-code</code>." },
+    { id: "f6", optional: true, title: "Optional: run this session on another LLM", show: "cct start --llm deepseek ~/projects/my-rag-app", cmd: "cct llm list\ncct start --llm deepseek ~/projects/my-rag-app",
+      expect: "The session runs on that target; nothing is exported in your shell.", verify: "<code>cct llm list</code> says whether each target can launch.", ifnot: "A launch that cannot honour the target is refused before Claude Code starts, with the reason." },
+    { id: "f7", optional: true, title: "Optional: add a second opinion", show: "cct start --peer-review <name> ~/projects/my-rag-app", cmd: "scripts/review-round-runner.sh . --probe --peer <name> --subject claude --out /tmp/probe.json\ncct start --peer-review <name> ~/projects/my-rag-app",
+      expect: "The probe exits 0 with a verdict of PASS, FAIL or INCONCLUSIVE.", verify: "Run <code>/review-submit</code> at the end of a phase.", ifnot: "Exit 2: nothing in the chain passed its healthcheck. Exit 3: the provider answered without a verdict it could parse." },
+    { id: "f8", optional: true, title: "Later: keep the project current", cmd: "cct sync ~/projects/my-rag-app --dry-run\ncct sync ~/projects/my-rag-app",
+      expect: "Commands and <code>.claude/</code> are updated from the template. Your CLAUDE.md is never overwritten.", verify: "A permission-profile drift is reported, with the <code>cct permissions</code> command that re-applies it.", ifnot: "Sync never re-applies a permission tier on its own." }
+  ];
+
+  /* ── Upgrade from 2.0 ─────────────────────────────────────── */
+  var WHO = [
+    ["everyone", "Everyone"], ["legacy", "Installed before 2.1"], ["pi", "Pi"], ["studio", "Studio"],
+    ["analytics", "Session Analytics"], ["shell", "LLM variables in my shell"], ["plugin", "The plugin"], ["tiers", "A custom permission tier"],
+    ["wiki", "Wiki"], ["aider", "aider"], ["stamps", "CCT_HARNESS_STAMPS"], ["windows", "Windows evidence"]
+  ];
+  var UPGRADE = [
+    { who: "everyone", title: "Update the checkout and refresh the install", cmd: "git fetch origin tag v2.1.0\ngit switch --detach v2.1.0\n./scripts/setup.sh --sync --claude-code        # add --pi if you use pi-code",
+      text: "The 2.0 Quick Start cloned <code>--branch v2.0.0</code>, so the checkout is on no branch: <code>git pull</code> fails there and leaves it at 2.0, and a sync would reinstall 2.0. A checkout that follows <code>master</code> runs <code>git pull --ff-only</code> in place of the first two lines. The sync installs the launcher that knows <code>--llm</code>, the <code>cct</code> shim and the permission profiles. It also removes the peer-review defaults an earlier setup wrote into <code>~/.claude/settings.json</code>, which overrode <code>--peer-review</code>." },
+    { who: "legacy", title: "Move your user home", cmd: "cct home migrate --dry-run\ncct home migrate",
+      text: "First refresh every adapter you installed (add <code>--pi</code> for <code>pi-code</code>) and close running <code>pi-code</code> sessions: an older <code>pi-code</code> points <code>CCT_HOME</code> at the old home and would recreate it after the move. <code>~/.code-copilot-team</code> is still read through 2.1.x, and <code>cct doctor</code> lists what is served from it. On the same filesystem each entry moves; with <code>CCT_HOME</code> on another filesystem it is copied, the old one is kept, and <code>migrate</code> exits 1 and names what to check and remove by hand. 2.2 removes the fallback." },
+    { who: "pi", title: "Move a Pi project's configuration", cmd: "pi-code migrate ~/projects/app --dry-run\npi-code migrate ~/projects/app",
+      text: "<code>.code-copilot-team/config.toml</code> becomes <code>.cct.toml</code>. The old file is read through 2.1.x; 2.2 removes this fallback with the user-home one." },
+    { who: "studio", title: "Refresh the Studio's dependencies", cmd: "cd studio && npm install",
+      text: "They install on first run only, so an existing Studio keeps Next.js 15.5.28, which three advisories affect, until you do this." },
+    { who: "analytics", title: "Re-ingest where a stricter setting should have applied", cmd: "./scripts/session-analytics ingest --full",
+      text: "Before 2.1 the Studio's ingest step and the quickstart ignored the configured redaction and opt-outs. A full re-ingest rewrites stored previews under your configuration. It skips an opted-out project but does not delete what is stored; a new, empty store drops those sessions." },
+    { who: "analytics", title: "Know that export still writes what the store holds", cmd: null,
+      text: "For a project opted out or tightened after ingest, <code>session-analytics export</code> writes the stored rows as they were recorded, until " + iss(487) + " changes it. Re-ingest to rewrite a tightened project's previews before you export; only a new store leaves an opted-out project out." },
+    { who: "shell", title: "Take provider variables out of your shell profile", cmd: "cct start --llm <target> ~/projects/app",
+      text: "Remove <code>ANTHROPIC_BASE_URL</code>, <code>ANTHROPIC_AUTH_TOKEN</code> and the model variables. Without <code>--llm</code>, a launch is unchanged." },
+    { who: "plugin", title: "Install the plugin under its new name", cmd: "/plugin install cct@code-copilot-team",
+      text: "Its commands are <code>/cct:shape</code> and <code>cct:build</code>. A copy installed as <code>code-copilot-team</code> keeps working until you uninstall it." },
+    { who: "tiers", title: "Use a documented permission tier", cmd: "cct permissions balanced ~/projects/app",
+      text: "<code>cct permissions</code> accepts only <code>default</code>, <code>balanced</code> and <code>relaxed</code>, matching <code>cct init --permissions</code>. A tier made by adding another JSON file under <code>~/.claude/permissions/</code> is refused. Keep project-specific additions in <code>.claude/settings.local.json</code>; a custom tier shared across projects now has to be kept separately in each project." },
+    { who: "wiki", title: "Let setup install the wiki engine", cmd: null,
+      text: "Every <code>./scripts/setup.sh</code> run, <code>--sync</code> included, installs the <code>wiki-studio</code> wheel into the checkout's <code>.venv</code> and only warns if it cannot. Add <code>--wiki</code> to make that a failure. <code>WIKI_INGEST_BACKEND</code> is deprecated in favour of <code>WIKI_STUDIO_BACKEND</code>." },
+    { who: "aider", title: "Declare where aider sessions live", cmd: null,
+      text: "They are no longer discovered under <code>~</code>. Set <code>sources.aider</code> in <code>~/.cct/session-analytics.json</code>, or this variable." },
+    { who: "stamps", title: "Give CCT_HARNESS_STAMPS a path both sides read the same way", cmd: null,
+      text: "A value with <code>~</code>, a relative path, or on Windows a path without a drive is refused, with the form to use, such as <code>C:/Users/you/.cct/harness-stamps.jsonl</code>." },
+    { who: "windows", title: "Regenerate routing evidence published from Windows", cmd: null,
+      text: "Sets published before 2.1 may carry the OS username in path spellings the scrub missed." }
+  ];
+
+  /* ── Old → new ────────────────────────────────────────────── */
+  var COMMANDS = [
+    ["Start a session", "claude-code ~/projects/app", "cct start ~/projects/app"],
+    ["…on another LLM", "export ANTHROPIC_BASE_URL=… then claude-code", "cct start --llm deepseek ~/projects/app"],
+    ["…with a peer reviewer", "claude-code --peer-review deepseek ~/projects/app", "cct start --peer-review deepseek ~/projects/app"],
+    ["Create a project from a template", "claude-code init ml-rag ~/projects/app", "cct init ml-rag ~/projects/app"],
+    ["List the templates", "claude-code list", "cct templates"],
+    ["Update a project from its template", "claude-code sync ~/projects/app", "cct sync ~/projects/app"],
+    ["Build a feature unattended", "claude-code build my-feature", "cct build my-feature"],
+    ["Set a project's permission tier", "claude-code permissions balanced ./app", "cct permissions balanced ./app"],
+    ["Install the Playwright skills", "claude-code playwright ./app", "cct playwright ./app"],
+    ["Where your files live", "~/.code-copilot-team/", "~/.cct/   (cct home migrate)"],
+    ["A Pi project's config", ".code-copilot-team/config.toml", ".cct.toml   (pi-code migrate)"],
+    ["Plugin commands", "/code-copilot-team:shape", "/cct:shape"],
+    ["The wiki backend variable", "WIKI_INGEST_BACKEND", "WIKI_STUDIO_BACKEND"]
+  ];
+
+  /* ── Tool support (from shared/features/catalog.yaml) ─────── */
+  var CATALOG = [{"id": "sdd-workflow", "title": "Spec-driven development", "problem": "A feature is specified, planned and task-listed in `specs/<feature-id>/` before any code is written, with an origin-alignment gate that stops the build when the working spec drifts from what the user asked for.", "maturity": "stable", "since": "v1.1.0", "adapters": {"claude-code": "enforced", "pi": "enforced", "codex": "advisory", "cursor": "advisory", "github-copilot": "advisory", "windsurf": "advisory", "aider": "advisory"}, "guide": "docs/spec-driven-development.md"}, {"id": "four-phase-workflow", "title": "Four-phase agent workflow", "problem": "Work moves through Research, Plan, Build and Review with a single agent in every phase but Build, where a Team Lead delegates to sub-agents; phase transitions are gated on verification.", "maturity": "stable", "since": "v1.1.0", "adapters": {"claude-code": "enforced", "pi": "enforced", "codex": "advisory", "cursor": "advisory", "github-copilot": "advisory", "windsurf": "advisory", "aider": "advisory"}, "guide": "shared/skills/phase-workflow/SKILL.md"}, {"id": "shape-up", "title": "Shape-Up product bets", "problem": "Rough ideas become pitches with an appetite, scopes and a circuit breaker; bets run against a hill chart and end in a retrospective and a cooldown report.", "maturity": "stable", "since": "v1.1.0", "adapters": {"claude-code": "enforced", "pi": "advisory", "codex": "advisory", "cursor": "advisory", "github-copilot": "advisory", "windsurf": "advisory", "aider": "advisory"}, "guide": "docs/shape-up-workflow.md"}, {"id": "peer-review", "title": "Peer review by a second model", "problem": "A second provider reviews the diff in a read-only sandbox and returns a PASS, FAIL or INCONCLUSIVE verdict with findings; the phase cannot complete on a FAIL, and a failed reviewer falls back down a chain.", "maturity": "stable", "since": "v1.1.0", "adapters": {"claude-code": "enforced", "pi": "advisory", "codex": "advisory", "cursor": "advisory", "github-copilot": "advisory", "windsurf": "advisory", "aider": "advisory"}, "guide": "docs/auto-code-review-setup.md"}, {"id": "auto-build", "title": "Unattended auto-build runs", "problem": "An approved feature is built phase by phase by a driver outside the session, with a gating reviewer per phase, bounded fix sessions, a cost and wall-clock cap, a ledger, and a PR at the end.", "maturity": "beta", "since": "v2.0.0", "adapters": {"claude-code": "enforced", "pi": "enforced", "codex": "enforced", "cursor": "unsupported", "github-copilot": "unsupported", "windsurf": "unsupported", "aider": "unsupported"}, "guide": "docs/auto-build.md"}, {"id": "auto-build-caps", "title": "Cost and safety caps", "problem": "An unattended run stops on its own when spend, wall-clock, review rounds or session turns exceed the caps frozen at admission, and the Studio raises an alert at 80% and 100%.", "maturity": "beta", "since": "v2.0.0", "adapters": {"claude-code": "enforced", "pi": "enforced", "codex": "enforced", "cursor": "unsupported", "github-copilot": "unsupported", "windsurf": "unsupported", "aider": "unsupported"}, "guide": "docs/auto-build.md"}, {"id": "auto-build-coverage-contract", "title": "Coverage contract", "problem": "A run's verification.yaml binds each requirement to the test that proves it, and the driver refuses a phase whose coverage fell below the frozen contract.", "maturity": "beta", "since": "v2.0.0", "adapters": {"claude-code": "enforced", "pi": "enforced", "codex": "enforced", "cursor": "unsupported", "github-copilot": "unsupported", "windsurf": "unsupported", "aider": "unsupported"}, "guide": "docs/auto-build.md"}, {"id": "auto-build-conformance-evaluator", "title": "Runtime conformance evaluator", "problem": "The built application is started and probed against the contract's runtime criteria before the phase can land, so a green unit suite cannot hide a service that does not come up.", "maturity": "experimental", "since": "v2.0.0", "adapters": {"claude-code": "enforced", "pi": "enforced", "codex": "enforced", "cursor": "unsupported", "github-copilot": "unsupported", "windsurf": "unsupported", "aider": "unsupported"}, "guide": "docs/auto-build.md"}, {"id": "auto-build-visual-gate", "title": "Visual verification gate", "problem": "A UI feature's run captures screenshots against the contract's visual criteria and parks rather than passes when the capture cannot be made.", "maturity": "experimental", "since": "v2.0.0", "adapters": {"claude-code": "enforced", "pi": "enforced", "codex": "enforced", "cursor": "unsupported", "github-copilot": "unsupported", "windsurf": "unsupported", "aider": "unsupported"}, "guide": "docs/auto-build.md"}, {"id": "ralph-loop", "title": "Ralph Loop single-agent iteration", "problem": "One agent iterates on a task until the verification command passes or the iteration cap is reached, with no delegation.", "maturity": "stable", "since": "v1.1.0", "adapters": {"claude-code": "enforced", "pi": "advisory", "codex": "advisory", "cursor": "advisory", "github-copilot": "advisory", "windsurf": "unsupported", "aider": "unsupported"}, "guide": "shared/docs/ralph-loop-guide.md"}, {"id": "project-templates", "title": "Project templates and sync", "problem": "A new project starts from a stack-specific CLAUDE.md with an agent team, slash commands and CI workflows, and an existing project can be re-synced to the latest template.", "maturity": "stable", "since": "v1.1.0", "adapters": {"claude-code": "enforced", "pi": "advisory", "codex": "advisory", "cursor": "advisory", "github-copilot": "advisory", "windsurf": "unsupported", "aider": "unsupported"}, "guide": "docs/project-templates.md"}, {"id": "ui-design-harness", "title": "UI design harness", "problem": "Generated UI is steered by a committed DESIGN.md and design tokens and gated by a visual-review loop with an accessibility check and an anti-slop rubric.", "maturity": "stable", "since": "v1.1.0", "adapters": {"claude-code": "enforced", "pi": "advisory", "codex": "advisory", "cursor": "advisory", "github-copilot": "advisory", "windsurf": "unsupported", "aider": "unsupported"}, "guide": "shared/templates/ui-harness/DESIGN.md"}, {"id": "wiki-maintainer", "title": "LLM wiki maintainer", "problem": "Lessons and decisions are promoted into a curated project wiki that agents consult before re-reading raw sources, with an ingest pipeline and a lint.", "maturity": "stable", "since": "v1.1.0", "adapters": {"claude-code": "enforced", "pi": "advisory", "codex": "advisory", "cursor": "advisory", "github-copilot": "advisory", "windsurf": "advisory", "aider": "advisory"}, "guide": "knowledge/README.md"}, {"id": "benchmark-harness", "title": "Benchmark harness", "problem": "Coding agents are run against a task set through pluggable backends and scored with a judge, so a configuration change is measured rather than felt.", "maturity": "beta", "since": "v1.1.0", "adapters": {"claude-code": "neutral", "pi": "neutral", "codex": "neutral", "cursor": "neutral", "github-copilot": "neutral", "windsurf": "neutral", "aider": "neutral"}, "guide": "benchmarks/README.md"}, {"id": "session-analytics", "title": "Session analytics", "problem": "Claude Code, Pi and Aider sessions are ingested into a store and queried for cost, turns, tool use, phases, labels and struggle signals from a CLI or an MCP server.", "maturity": "stable", "since": "v1.1.0", "adapters": {"claude-code": "neutral", "pi": "neutral", "codex": "unsupported", "cursor": "unsupported", "github-copilot": "unsupported", "windsurf": "unsupported", "aider": "neutral"}, "guide": "docs/session-analytics-cookbook.md"}, {"id": "studio", "title": "Studio web UI", "problem": "The analytics, benchmarks, auto-build runs, team alerts and the project's own documentation are browsed in one local web app with a settings page for the judge and embedding providers.", "maturity": "beta", "since": "v2.0.0", "adapters": {"claude-code": "neutral", "pi": "neutral", "codex": "neutral", "cursor": "neutral", "github-copilot": "neutral", "windsurf": "neutral", "aider": "neutral"}, "guide": "docs/session-analytics-cookbook.md"}, {"id": "llm-routing", "title": "LLM routing profiles", "problem": "Auto-build tasks are routed to a backend by route class and role under an execution profile, with validate, status and explain commands and a scheduled tick.", "maturity": "experimental", "since": "v2.0.0", "adapters": {"claude-code": "enforced", "pi": "enforced", "codex": "enforced", "cursor": "unsupported", "github-copilot": "unsupported", "windsurf": "unsupported", "aider": "unsupported"}, "guide": "docs/llm-routing.md"}, {"id": "memkernel-memory", "title": "MemKernel persistent memory", "problem": "Session context is recalled at start, checkpointed before compaction and recovered after it by hooks that activate only when MemKernel is installed.", "maturity": "experimental", "since": "v1.1.0", "adapters": {"claude-code": "enforced", "pi": "advisory", "codex": "advisory", "cursor": "advisory", "github-copilot": "advisory", "windsurf": "unsupported", "aider": "unsupported"}, "guide": "shared/skills/memkernel-memory/SKILL.md"}, {"id": "cct-cli", "title": "cct command-line front door", "problem": "One provider-neutral command starts a session with start, runs the launcher's project commands (init, templates, sync, build, permissions, playwright) under the same name, lists every slash command, skill and capability, drives routing, reports environment health with doctor, explains or validates configuration with config, shows or migrates the harness home with home, and lists or checks the LLM targets with llm.", "maturity": "experimental", "since": "v2.0.0", "adapters": {"claude-code": "neutral", "pi": "neutral", "codex": "neutral", "cursor": "neutral", "github-copilot": "neutral", "windsurf": "neutral", "aider": "neutral"}, "guide": "docs/features.md"}, {"id": "llm-catalog", "title": "LLM catalog and per-launch --llm", "problem": "Named LLM targets are configured once and one is picked when a session starts, so a provider, credential or model is never exported in a shell and cannot leak into another session.", "maturity": "experimental", "since": "v2.1.0", "adapters": {"claude-code": "enforced", "pi": "unsupported", "codex": "unsupported", "cursor": "unsupported", "github-copilot": "unsupported", "windsurf": "unsupported", "aider": "unsupported"}, "guide": "docs/llm-catalog.md"}];
+  var ADAPTERS = ["claude-code", "pi", "codex", "cursor", "github-copilot", "windsurf", "aider"];
+  var SYM = { enforced: "●", advisory: "◐", neutral: "○", unsupported: "–" };
+
+  /* ── views ─────────────────────────────────────────────────── */
+  var TABS = [
+    { id: "status", label: "Release status" },
+    { id: "whats-new", label: "What's new" },
+    { id: "parts", label: "Who does what" },
+    { id: "first-session", label: "First session" },
+    { id: "upgrade", label: "Upgrade from 2.0" },
+    { id: "commands", label: "Old → new commands" },
+    { id: "tools", label: "Tool support" }
+  ];
+  var DEFAULT_SELECTION = { status: "published", "whats-new": "llm", parts: "cct", "first-session": "f1", upgrade: null, commands: null, tools: "llm-catalog" };
+  var panelFor = {};
+
+  function boxAttrs(id) { return 'type="button" data-select="' + id + '" aria-pressed="false"'; }
+
+  function renderStatus() {
+    var h = '<div class="view-head"><h2>How 2.1.0 was released</h2><p class="note">Every step is done. The readiness check and CI passed on 86b8384, #492 merged, the v2.1.0 tag started the release workflow, and the GitHub Release is published. A few items wait for after the release.</p></div><div class="rows">';
+    ROWS.forEach(function (r) {
+      var items = STAGES.filter(function (s) { return s.row === r[0]; });
+      h += '<div class="row"><div class="row-label">' + stateChip(r[3] || r[0]) + '<span class="count">' + r[2] + '</span></div><div class="flow">';
+      items.forEach(function (s, i) {
+        if (i > 0) h += '<span class="arrow" aria-hidden="true">→</span>';
+        h += '<button class="box state-' + (s.state || s.row) + '" ' + boxAttrs(s.id) + '><span class="' + (s.big ? "big" : "t") + '">' + esc(s.title) + '</span><span class="s">' + esc(s.sub) + '</span></button>';
+        panelFor[s.id] = { chip: stateChip(s.state || s.row), title: s.title, body: s.detail };
+      });
+      h += '</div></div>';
+    });
+    return h + '</div>';
+  }
+
+  function refsHtml(refs) { return '<div class="refs">' + refs.map(function (n) { return '<span class="tag">#' + n + '</span>'; }).join("") + '</div>'; }
+
+  function renderNew() {
+    var h = '<div class="view-head"><h2>What 2.1.0 changes for you</h2><p class="note">The eight highlights from the CHANGELOG, then the fixes and security updates you are most likely to notice.</p>' +
+      '<div class="counts"><span class="pill">18 Added</span><span class="pill">21 Fixed</span><span class="pill">6 Changed</span><span class="pill">2 Security</span><span class="pill">13 upgrade notes</span></div></div>';
+    h += '<div class="grid-2">';
+    HIGHLIGHTS.forEach(function (x) {
+      h += '<button class="box" ' + boxAttrs(x.id) + '><span class="t">' + esc(x.title) + '</span><span class="s">' + esc(x.sub) + '</span>' + refsHtml(x.refs) + '</button>';
+      panelFor[x.id] = { chip: '<span class="chip">Highlight</span>', title: x.title, body: x.detail, refs: x.refs };
+    });
+    h += '</div><div class="view-head"><h3>Fixes you will notice</h3></div><div class="list">';
+    FIXES.forEach(function (x) {
+      h += '<button class="box" ' + boxAttrs(x.id) + '><span class="t">' + esc(x.title) + '</span>' + refsHtml(x.refs) + '</button>';
+      panelFor[x.id] = { chip: '<span class="chip">Fixed</span>', title: x.title, body: (function (t) { return function () { return '<p>' + t + '</p>'; }; })(x.text), refs: x.refs };
+    });
+    h += '</div><div class="view-head"><h3>Security</h3></div><div class="list">';
+    SECURITY.forEach(function (x) {
+      h += '<button class="box" ' + boxAttrs(x.id) + '><span class="t">' + esc(x.title) + '</span>' + refsHtml(x.refs) + '</button>';
+      panelFor[x.id] = { chip: '<span class="chip">Security</span>', title: x.title, body: (function (t) { return function () { return '<p>' + t + '</p>'; }; })(x.text), refs: x.refs };
+    });
+    return h + '</div>';
+  }
+
+  function renderParts() {
+    var names = {};
+    LANES.forEach(function (l) { l.parts.forEach(function (p) { names[p.id] = p.title; }); });
+    var h = '<div class="view-head"><h2>Who does what</h2><p class="note">The parts you meet, left to right in the order they act. Boxes marked 2.1 changed in this release.</p></div><div class="lanes">';
+    LANES.forEach(function (l, li) {
+      h += '<div class="lane"><div class="lane-head"><span>' + l.name + '</span>' + (li < LANES.length - 1 ? '<span class="to">' + l.to + ' →</span>' : '<span class="to">' + l.to + '</span>') + '</div>';
+      l.parts.forEach(function (p) {
+        h += '<button class="box" ' + boxAttrs(p.id) + '><span class="t">' + esc(p.title) + (p.isNew ? ' <span class="tag new">2.1</span>' : '') + '</span><span class="where">' + esc(p.where) + '</span></button>';
+        panelFor[p.id] = { chip: '<span class="chip">' + l.name + '</span>', title: p.title, body: (function (part) {
+          return function () {
+            return '<p class="mono foot">' + esc(part.where) + '</p><p>' + part.text + '</p>' +
+              sec("Works with", '<div class="refs">' + part.links.map(function (id) { return '<button class="filter" type="button" data-select="' + id + '">' + esc(names[id]) + '</button>'; }).join("") + '</div>');
+          };
+        })(p) };
+      });
+      h += '</div>';
+    });
+    return h + '</div>';
+  }
+
+  function renderFirst() {
+    var h = '<div class="view-head"><h2>A first session on 2.1.0</h2><p class="note">From a clean machine to a working session, then the optional extras. Each step says what to expect and how to check it.</p></div><div class="steps">';
+    var n = 0;
+    FIRST.forEach(function (s) {
+      n += 1;
+      var first = s.show || s.cmd.split("\n")[0];
+      h += '<button class="box step' + (s.optional ? " optional" : "") + '" ' + boxAttrs(s.id) + '><span class="n">' + n + '</span><span class="t">' + esc(s.title) + '</span><code class="inline">' + esc(first) + '</code></button>';
+      panelFor[s.id] = { chip: '<span class="chip">' + (s.optional ? "Optional step" : "Step " + n) + '</span>', title: s.title, body: (function (st) {
+        return function () {
+          return cmd(st.cmd) + sec("Expect", '<p>' + st.expect + '</p>') + sec("Verify", '<p>' + st.verify + '</p>') + sec("If not", '<p>' + st.ifnot + '</p>');
+        };
+      })(s) };
+    });
+    return h + '</div>';
+  }
+
+  var upgradeOn = {};
+  WHO.forEach(function (w) { upgradeOn[w[0]] = true; });
+  try {
+    var saved = JSON.parse(localStorage.getItem("cct-map-upgrade") || "null");
+    if (saved && typeof saved === "object") { Object.keys(saved).forEach(function (k) { if (k in upgradeOn && k !== "everyone") upgradeOn[k] = !!saved[k]; }); }
+  } catch (e) { /* storage unavailable: show everything */ }
+
+  function renderUpgrade() {
+    var h = '<div class="view-head"><h2>Upgrading from 2.0</h2><p class="note">Nothing has to be recreated: the Session Analytics store moves from schema 12 to 13 in place, and both old locations are still read. Pick what applies to you.</p></div>';
+    h += '<div class="filters" role="group" aria-label="What applies to you">';
+    WHO.forEach(function (w) {
+      var always = w[0] === "everyone";
+      h += '<button class="filter" type="button" id="who-' + w[0] + '" data-who="' + w[0] + '" aria-pressed="' + (upgradeOn[w[0]] ? "true" : "false") + '"' + (always ? " disabled" : "") + '>' + esc(w[1]) + '</button>';
+    });
+    h += '</div><div class="steps" id="upgrade-steps"></div>';
+    return h;
+  }
+  function fillUpgrade() {
+    var host = document.getElementById("upgrade-steps");
+    if (!host) return;
+    var label = {};
+    WHO.forEach(function (w) { label[w[0]] = w[1]; });
+    var shown = UPGRADE.filter(function (u) { return upgradeOn[u.who]; });
+    host.innerHTML = shown.map(function (u, i) {
+      return '<div class="box step" style="cursor:default"><span class="n">' + (i + 1) + '</span><span class="t">' + esc(u.title) + ' <span class="tag">' + esc(label[u.who]) + '</span></span><span class="s">' + u.text + '</span>' + (u.cmd ? cmd(u.cmd) : '') + '</div>';
+    }).join("") || '<p class="note">Nothing selected beyond the everyone step.</p>';
+  }
+
+  function renderCommands() {
+    var h = '<div class="view-head"><h2>What you typed in 2.0, and what you type now</h2><p class="note">The README and the guides use the right-hand column. The old forms still work, so nothing breaks the day you upgrade.</p></div>';
+    h += '<div class="scroll"><table><thead><tr><th>You want to</th><th>2.0</th><th>2.1</th></tr></thead><tbody>';
+    COMMANDS.forEach(function (c) {
+      h += '<tr><td>' + esc(c[0]) + '</td><td class="old"><code>' + esc(c[1]) + '</code></td><td class="new"><code>' + esc(c[2]) + '</code></td></tr>';
+    });
+    return h + '</tbody></table></div><p class="foot">One name did not move: <code>cct list</code> was already the feature index, so the template list is <code>cct templates</code>.</p>';
+  }
+
+  function renderTools() {
+    var h = '<div class="view-head"><h2>Tool support</h2><p class="note">From the feature catalog, the same source as the README\'s tool table. Enforced means a gate that can block; advisory means rules the tool reads.</p></div>';
+    h += '<div class="adapter-sum">';
+    ADAPTERS.forEach(function (a) {
+      var enf = CATALOG.filter(function (f) { return f.adapters[a] === "enforced"; }).length;
+      var adv = CATALOG.filter(function (f) { return f.adapters[a] === "advisory"; }).length;
+      h += '<div class="cell"><div class="k">' + a + '</div><div class="v"><b>' + enf + '</b> enforced · <b>' + adv + '</b> advisory</div></div>';
+    });
+    h += '</div><div class="legend"><span><span class="sym enforced">●</span> enforced</span><span><span class="sym advisory">◐</span> advisory</span><span><span class="sym neutral">○</span> works with any tool</span><span><span class="sym unsupported">–</span> not delivered</span></div>';
+    h += '<div class="scroll"><table class="matrix"><thead><tr><th>Feature</th><th>Since</th>' + ADAPTERS.map(function (a) { return '<th>' + a + '</th>'; }).join("") + '</tr></thead><tbody>';
+    CATALOG.forEach(function (f) {
+      h += '<tr tabindex="0" data-select="' + f.id + '" aria-selected="false"><td>' + esc(f.title) + ' <span class="tag">' + esc(f.maturity) + '</span></td><td>' + (f.since === "v2.1.0" ? '<span class="tag new">v2.1.0</span>' : '<span class="mono">' + esc(f.since) + '</span>') + '</td>' +
+        ADAPTERS.map(function (a) { var v = f.adapters[a]; return '<td><span class="sym ' + v + '" title="' + v + '">' + SYM[v] + '</span></td>'; }).join("") + '</tr>';
+      panelFor[f.id] = { chip: '<span class="chip">' + esc(f.maturity) + ' · since ' + esc(f.since) + '</span>', title: f.title, body: (function (feat) {
+        return function () {
+          return '<p>' + esc(feat.problem) + '</p>' + sec("Per tool", ul(ADAPTERS.map(function (a) { return '<code>' + a + '</code>: ' + feat.adapters[a]; }))) +
+            (feat.guide ? '<p class="foot">Guide: <a href="' + REPO + '/blob/master/' + feat.guide + '" target="_blank" rel="noopener">' + esc(feat.guide) + '</a></p>' : '');
+        };
+      })(f) };
+    });
+    return h + '</tbody></table></div>';
+  }
+
+  var RENDER = { status: renderStatus, "whats-new": renderNew, parts: renderParts, "first-session": renderFirst, upgrade: renderUpgrade, commands: renderCommands, tools: renderTools };
+  var PANEL_DEFAULT = {
+    upgrade: { chip: '<span class="chip">Upgrade</span>', title: "What a 2.0 user does", body: function () {
+      return '<p>One step is for everyone: pull, then refresh the install with <code>--sync</code>. The rest depend on what you use. Turn a filter off to hide steps that do not apply.</p>' +
+        sec("Still read in 2.1.x, gone in 2.2", ul(["<code>~/.code-copilot-team</code> as the user home", "<code>.code-copilot-team/config.toml</code> in a Pi project"]));
+    } },
+    commands: { chip: '<span class="chip">Commands</span>', title: "Why the names changed", body: function () {
+      return '<p>2.0 started sessions with <code>claude-code</code>, a name that reads as Anthropic\'s CLI. 2.1 makes <code>cct</code> the one command you type: it hands launcher commands to the same installed launcher, with your arguments unchanged.</p>' +
+        '<p>The launcher keeps its name because it is the adapter id that <code>setup.sh --claude-code</code> installs, so <code>claude-code &lt;command&gt;</code> still works.</p>';
+    } }
+  };
+
+  /* ── wiring ───────────────────────────────────────────────── */
+  var tablist = document.getElementById("tablist");
+  var views = document.getElementById("views");
+  var panel = document.getElementById("panel");
+  var current = null;
+
+  tablist.innerHTML = TABS.map(function (t) {
+    return '<button class="tab" role="tab" type="button" id="tab-' + t.id + '" aria-controls="view-' + t.id + '" aria-selected="false" tabindex="-1" data-tab="' + t.id + '">' + t.label + '</button>';
+  }).join("");
+  views.innerHTML = TABS.map(function (t) {
+    return '<section class="view" role="tabpanel" id="view-' + t.id + '" aria-labelledby="tab-' + t.id + '" hidden>' + RENDER[t.id]() + '</section>';
+  }).join("");
+  fillUpgrade();
+
+  function showPanel(entry) {
+    if (!entry) { panel.innerHTML = '<p class="note">Click a box to see its details.</p>'; return; }
+    panel.innerHTML = '<div class="sec">' + entry.chip + '<h3>' + esc(entry.title) + '</h3></div>' + entry.body() +
+      (entry.refs ? sec("On GitHub", '<div class="refs">' + entry.refs.map(iss).join(" ") + '</div>') : '');
+    restoreManual();
+  }
+
+  function select(id, scroll) {
+    var view = document.getElementById("view-" + current);
+    if (!view) return;
+    view.querySelectorAll("[data-select]").forEach(function (el) {
+      if (el.tagName === "TR") el.setAttribute("aria-selected", el.getAttribute("data-select") === id ? "true" : "false");
+      else if (el.hasAttribute("aria-pressed")) el.setAttribute("aria-pressed", el.getAttribute("data-select") === id ? "true" : "false");
+    });
+    showPanel(panelFor[id]);
+    if (scroll && window.matchMedia("(max-width: 979px)").matches) {
+      var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      panel.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+    }
+  }
+
+  function showTab(id) {
+    if (!RENDER[id]) id = "status";
+    current = id;
+    TABS.forEach(function (t) {
+      var tab = document.getElementById("tab-" + t.id);
+      tab.setAttribute("aria-selected", t.id === id ? "true" : "false");
+      tab.tabIndex = t.id === id ? 0 : -1;
+      document.getElementById("view-" + t.id).hidden = t.id !== id;
+    });
+    var def = DEFAULT_SELECTION[id];
+    if (def) select(def, false); else showPanel(PANEL_DEFAULT[id]);
+  }
+
+  tablist.addEventListener("click", function (e) {
+    var b = e.target.closest("[data-tab]");
+    if (!b) return;
+    var id = b.getAttribute("data-tab");
+    if (location.hash !== "#" + id) { try { history.replaceState(null, "", "#" + id); } catch (err) { /* hash routing is a convenience */ } }
+    showTab(id);
+  });
+  tablist.addEventListener("keydown", function (e) {
+    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+    var i = TABS.findIndex(function (t) { return t.id === current; });
+    var next = TABS[(i + (e.key === "ArrowRight" ? 1 : TABS.length - 1)) % TABS.length].id;
+    document.getElementById("tab-" + next).focus();
+    try { history.replaceState(null, "", "#" + next); } catch (err) { /* ignore */ }
+    showTab(next);
+  });
+
+  function onSelect(e) {
+    var el = e.target.closest("[data-select]");
+    if (!el) return;
+    var id = el.getAttribute("data-select");
+    if (!panelFor[id]) return;
+    if (!document.getElementById("view-" + current).contains(el)) {
+      var owner = TABS.find(function (t) { return document.getElementById("view-" + t.id).querySelector('[data-select="' + id + '"]'); });
+      if (owner && owner.id !== current) showTab(owner.id);
+    }
+    select(id, true);
+  }
+  views.addEventListener("click", onSelect);
+  panel.addEventListener("click", function (e) {
+    if (e.target.closest(".copy")) return;
+    if (e.target.closest("[data-select]")) onSelect(e);
+  });
+  views.addEventListener("keydown", function (e) {
+    if ((e.key === "Enter" || e.key === " ") && e.target.matches("tr[data-select]")) { e.preventDefault(); onSelect(e); }
+  });
+
+  views.addEventListener("click", function (e) {
+    var f = e.target.closest("[data-who]");
+    if (!f || f.disabled) return;
+    var k = f.getAttribute("data-who");
+    upgradeOn[k] = !upgradeOn[k];
+    f.setAttribute("aria-pressed", upgradeOn[k] ? "true" : "false");
+    try { localStorage.setItem("cct-map-upgrade", JSON.stringify(upgradeOn)); } catch (err) { /* not kept */ }
+    fillUpgrade();
+  });
+
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest(".copy");
+    if (!btn) return;
+    var code = btn.parentElement.querySelector("code");
+    var text = code ? code.textContent : "";
+    function selectText() {
+      var r = document.createRange(); r.selectNodeContents(code);
+      var s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+      btn.textContent = "Selected";
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { btn.textContent = "Copied"; }, selectText);
+    } else { selectText(); }
+    setTimeout(function () { btn.textContent = "Copy"; }, 1600);
+  });
+
+  function restoreManual() {
+    var boxes = panel.querySelectorAll("[data-manual]");
+    if (!boxes.length) return;
+    var ticks = {};
+    try { ticks = JSON.parse(localStorage.getItem("cct-map-manual") || "{}") || {}; } catch (e) { ticks = {}; }
+    boxes.forEach(function (b) { b.checked = !!ticks[b.getAttribute("data-manual")]; });
+  }
+  panel.addEventListener("change", function (e) {
+    var b = e.target.closest("[data-manual]");
+    if (!b) return;
+    var ticks = {};
+    try { ticks = JSON.parse(localStorage.getItem("cct-map-manual") || "{}") || {}; } catch (err) { ticks = {}; }
+    ticks[b.getAttribute("data-manual")] = b.checked;
+    try { localStorage.setItem("cct-map-manual", JSON.stringify(ticks)); } catch (err) { /* not kept */ }
+  });
+
+  function fromHash() { showTab((location.hash || "").replace("#", "") || "status"); }
+  window.addEventListener("hashchange", fromHash);
+  fromHash();
+})();
+</script>
+</body>
+</html>

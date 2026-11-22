@@ -2198,9 +2198,9 @@ home_all_occurrences() {  # [<repo dir>] → every occurrence, line scan and exp
   { home_discover "${1:-$REPO_DIR}" | home_occurrences; home_expr_occurrences "${1:-$REPO_DIR}"; } | LC_ALL=C sort
 }
 # Discovery covers every tracked code and config file: prose (Markdown, the
-# generated .mdc rules, specs, the wiki, CHANGELOG, llms.txt) and test code
-# are the only exclusions.
-HOME_PATHSPEC=(. ':!*.md' ':!*.mdc' ':!specs' ':!knowledge' ':!CHANGELOG.md' ':!llms.txt' ':!*.jsonl' ':!tests' ':!*/tests/*')
+# generated .mdc rules, specs, the wiki, CHANGELOG, llms.txt, the static pages
+# in docs/visual/) and test code are the only exclusions.
+HOME_PATHSPEC=(. ':!*.md' ':!*.mdc' ':!specs' ':!knowledge' ':!CHANGELOG.md' ':!llms.txt' ':!*.jsonl' ':!docs/visual/*.html' ':!tests' ':!*/tests/*')
 home_discover() {  # [<repo dir>] → "<file>:<line>:<text>" for every tracked line naming either directory
   (cd "${1:-$REPO_DIR}" && git grep -n -E "\.(code-copilot-team|cct)$HOME_END" -- "${HOME_PATHSPEC[@]}" 2>/dev/null)
 }
