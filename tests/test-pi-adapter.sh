@@ -380,28 +380,37 @@ if command -v ruby >/dev/null 2>&1; then
 
   # T11.4: prepare-release assembles artifacts offline (version must match pkg)
   # and refuses to move a released tag. Both run in a throwaway repository built
-  # from the working tree's tracked files, with no tags: in the checkout itself,
-  # every commit after a release tag hit the guard, and the real dist/ was
-  # written (#497). `git stash create` commits the working tree without touching
-  # the stash list or the checkout, and prints nothing when the tree is clean.
-  # Untracked files are left out, as they are from a release.
+  # from the working tree's tracked files as they are on disk, with no tags: in
+  # the checkout itself, every commit after a release tag hit the guard, and the
+  # real dist/ was written (#497). Untracked files are left out, as they are
+  # from a release. Nothing is written to the checkout's repository, so it needs
+  # no git identity; a failure to build the fixture is reported with its output.
   REL_REPO="$TMP/release-repo"
   REL_GIT=(git -C "$REL_REPO" -c user.name=cct-test -c user.email=cct-test@example.invalid
            -c commit.gpgsign=false -c tag.gpgsign=false -c core.hooksPath=/dev/null)
-  git -c init.defaultBranch=main init -q "$REL_REPO"
-  REL_REV=$(git -C "$REPO_DIR" stash create)
-  git -C "$REPO_DIR" archive "${REL_REV:-HEAD}" | tar -xf - -C "$REL_REPO"
-  "${REL_GIT[@]}" add -A -f
-  "${REL_GIT[@]}" commit -q -m "release fixture"
-  assert "prepare-release.sh runs offline and produces artifacts" \
-    "bash '$REL_REPO/scripts/prepare-release.sh' >/dev/null 2>&1 && [[ -s '$REL_REPO/dist/SHA256SUMS' && -s '$REL_REPO/dist/RELEASE_NOTES.md' ]]"
-  REL_PKG=$(ruby -rjson -e 'print JSON.parse(File.read(ARGV[0]))["version"]' "$REL_REPO/adapters/pi/package.json")
-  "${REL_GIT[@]}" tag "v$REL_PKG"
-  "${REL_GIT[@]}" commit -q --allow-empty -m "a commit after the release"
-  REL_RC=0
-  REL_OUT=$(bash "$REL_REPO/scripts/prepare-release.sh" 2>&1) || REL_RC=$?
-  assert "prepare-release.sh refuses v$REL_PKG while its tag is on another commit" \
-    "[[ '$REL_RC' == '1' ]] && grep -q 'a released tag must not move' <<< \"\$REL_OUT\""
+  rel_fixture() {
+    git -c init.defaultBranch=main init -q "$REL_REPO" || return 1
+    ( cd "$REPO_DIR" && git ls-files -z | while IFS= read -r -d '' f; do
+        if [[ -e "$f" || -L "$f" ]]; then printf '%s\0' "$f"; fi
+      done | tar --null -T - -cf - ) | tar -xf - -C "$REL_REPO" || return 1
+    "${REL_GIT[@]}" add -A -f || return 1
+    "${REL_GIT[@]}" commit -q -m "release fixture" || return 1
+  }
+  if rel_fixture > "$TMP/release-fixture.log" 2>&1; then
+    assert "prepare-release.sh runs offline and produces artifacts" \
+      "bash '$REL_REPO/scripts/prepare-release.sh' >/dev/null 2>&1 && [[ -s '$REL_REPO/dist/SHA256SUMS' && -s '$REL_REPO/dist/RELEASE_NOTES.md' ]]"
+    REL_PKG=$(ruby -rjson -e 'print JSON.parse(File.read(ARGV[0]))["version"]' "$REL_REPO/adapters/pi/package.json")
+    "${REL_GIT[@]}" tag "v$REL_PKG"
+    "${REL_GIT[@]}" commit -q --allow-empty -m "a commit after the release"
+    REL_RC=0
+    REL_OUT=$(bash "$REL_REPO/scripts/prepare-release.sh" 2>&1) || REL_RC=$?
+    assert "prepare-release.sh refuses v$REL_PKG while its tag is on another commit" \
+      "[[ '$REL_RC' == '1' ]] && grep -q 'a released tag must not move' <<< \"\$REL_OUT\""
+  else
+    echo "  FAIL: the release fixture repository could not be built (2 assertions not run):"
+    sed 's/^/    /' "$TMP/release-fixture.log"
+    FAIL=$((FAIL + 2))
+  fi
 else
   echo "  SKIP: capability doc + SBOM drift guards — ruby not found"
   if [[ -n "${CI:-}" ]]; then
