@@ -932,6 +932,22 @@ HOME="$TPL_SYNC_HOME" bash "$REPO_DIR/adapters/claude-code/setup.sh" --sync > /d
 assert_eq "--sync over a fresh install leaves the template tree unchanged" "" \
   "$(diff -rq "$FRESH_HOME/.claude/templates" "$TPL_SYNC_HOME/.claude/templates" 2>&1)"
 
+# 18o. Installing the add-on for the copy its instructions describe must not
+#      make it a project type (#498): cct templates lists it apart from the
+#      templates, and init refuses it with those copy steps.
+TPL_LIST=$("${FRESH_RUN[@]}" cct templates < /dev/null 2>&1)
+TPL_STACKS=$(sed -n '/^Available project templates:/,/^Available add-ons/p' <<< "$TPL_LIST")
+TPL_ADDONS=$(sed -n '/^Available add-ons/,$p' <<< "$TPL_LIST")
+assert_contains "cct templates lists ui-harness under the add-ons" "$TPL_ADDONS" "ui-harness"
+assert_ok "...and not among the project templates" $([[ "$TPL_STACKS" != *ui-harness* ]] && echo 0 || echo 1)
+ADDON_PROJ="$TEST_TMPDIR/proj-addon"
+ADDON_RC=0
+ADDON_OUT=$("${FRESH_RUN[@]}" cct init ui-harness "$ADDON_PROJ" < /dev/null 2>&1) || ADDON_RC=$?
+assert_eq "cct init ui-harness is refused" "1" "$ADDON_RC"
+assert_contains "...with the copy steps from its instructions" "$ADDON_OUT" \
+  "cp -r ~/.claude/templates/ui-harness/harness"
+assert_ok "...and creates nothing" $([[ ! -e "$ADDON_PROJ" ]] && echo 0 || echo 1)
+
 # ══════════════════════════════════════════════════════════════
 echo ""
 echo "=== #212: setup.sh must never silently ignore a flag ==="

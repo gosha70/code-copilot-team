@@ -1,0 +1,3 @@
+This template is an add-on, not a project type: `cct templates` lists it under
+add-ons and `cct init` refuses it, printing the steps under "Scaffold it into a
+project" in PROJECT.md. See adapters/claude-code/claude-code (ADDON_MARKER).

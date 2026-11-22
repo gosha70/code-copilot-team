@@ -6,7 +6,7 @@
 #
 #   cct start [path] [...] start a harness session (the claude-code launcher)
 #   cct init <type> [path] create a project from a template
-#   cct templates          the templates init accepts
+#   cct templates          the templates init accepts, then the add-ons
 #   cct sync [path]        update a project from its template
 #   cct build <id> [...]   build an approved feature unattended
 #   cct permissions <tier> set a project's permission tier
@@ -42,8 +42,8 @@ COMMANDS
                   every argument through.
                     cct init ml-rag ~/projects/my-rag-app
                     cct init web-dynamic ./my-app --permissions balanced
-  templates       List the templates init accepts (the launcher's `list`;
-                  `cct list` is the feature index).
+  templates       List the templates init accepts, then the add-ons it refuses
+                  (the launcher's `list`; `cct list` is the feature index).
   sync            Update a project from its template. Never overwrites CLAUDE.md.
                     cct sync ~/projects/my-rag-app --dry-run   preview
                     cct sync ~/projects/my-rag-app             apply
