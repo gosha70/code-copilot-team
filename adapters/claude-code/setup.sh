@@ -322,6 +322,59 @@ install_permission_profiles() {
     echo "[done] $1 permission profiles to $target_dir"
 }
 
+# Project templates: every shared/templates/<name>/ that has a PROJECT.md,
+# redeployed whole so deleted files do not linger. PROJECT.md becomes
+# CLAUDE.md; commands/, .claude/, .github/ and every other subdirectory and
+# top-level file are copied. ONE implementation, called from both paths: the
+# fresh install used to copy eleven templates by name, and only the parts it
+# named, so ui-harness and domain-pack's .gitignore arrived only with --sync
+# (#498).
+# install_project_templates <verb> — <verb> is the word the [done] line uses.
+install_project_templates() {
+    local tmpl_dir tmpl_name dest extra extra_name extra_file count=0
+    for tmpl_dir in "$SHARED_DIR"/templates/*/; do
+        [[ -f "$tmpl_dir/PROJECT.md" ]] || continue
+        tmpl_name=$(basename "$tmpl_dir")
+        dest="$TEMPLATES_DIR/$tmpl_name"
+        rm -rf "$dest"
+        mkdir -p "$dest/commands"
+        cp "$tmpl_dir/PROJECT.md" "$dest/CLAUDE.md"
+        if [[ -d "$tmpl_dir/commands" ]]; then
+            cp "$tmpl_dir/commands/"*.md "$dest/commands/" 2>/dev/null || true
+        fi
+        if [[ -d "$tmpl_dir/.claude" ]]; then
+            mkdir -p "$dest/.claude"
+            cp -r "$tmpl_dir/.claude/"* "$dest/.claude/" 2>/dev/null || true
+        fi
+        if [[ -d "$tmpl_dir/.github" ]]; then
+            cp -r "$tmpl_dir/.github" "$dest/" 2>/dev/null || true
+        fi
+        # Every other top-level subdirectory (domain-pack ships content/,
+        # jvm-wrapper/, python-wrapper/, scripts/; gradle-plugin ships plugin/,
+        # sample-consumer/, gradle/; ui-harness ships harness/, design/).
+        # `${extra%/}` drops the trailing slash so `cp -r` copies the
+        # directory itself into $dest, preserving the layout.
+        for extra in "$tmpl_dir"/*/; do
+            [[ -d "$extra" ]] || continue
+            extra_name=$(basename "$extra")
+            case "$extra_name" in
+                commands|.claude|.github) continue ;;
+            esac
+            cp -r "${extra%/}" "$dest/" 2>/dev/null || true
+        done
+        # Top-level regular files other than PROJECT.md (already CLAUDE.md):
+        # gradle-plugin's build.gradle.kts, settings.gradle.kts and .gitignore,
+        # domain-pack's .gitignore, ui-harness's DESIGN.md.
+        while IFS= read -r -d '' extra_file; do
+            extra_name=$(basename "$extra_file")
+            [[ "$extra_name" == "PROJECT.md" ]] && continue
+            cp "$extra_file" "$dest/$extra_name" 2>/dev/null || true
+        done < <(find "$tmpl_dir" -maxdepth 1 -type f -print0 2>/dev/null)
+        count=$((count + 1))
+    done
+    echo "[done] $1 $count templates to $TEMPLATES_DIR"
+}
+
 # The harness identity the SessionStart hook harness-stamp.sh reads
 # (#371 A4): the release (package.json) and the FULL commit the
 # instructions were installed from. Only the installer knows the repo,
@@ -503,52 +556,10 @@ if [[ "$SYNC_MODE" == "1" ]]; then
         done
     fi
 
-    # Remove and recreate each current template so deleted files don't linger.
-    for tmpl_dir in "$SHARED_DIR"/templates/*/; do
-        [[ -f "$tmpl_dir/PROJECT.md" ]] || continue
-        tmpl_name=$(basename "$tmpl_dir")
-        dest="$TEMPLATES_DIR/$tmpl_name"
-        rm -rf "$dest"
-        mkdir -p "$dest/commands"
-        cp "$tmpl_dir/PROJECT.md" "$dest/CLAUDE.md"
-        if [[ -d "$tmpl_dir/commands" ]]; then
-            cp "$tmpl_dir/commands/"*.md "$dest/commands/" 2>/dev/null || true
-        fi
-        if [[ -d "$tmpl_dir/.claude" ]]; then
-            mkdir -p "$dest/.claude"
-            cp -r "$tmpl_dir/.claude/"* "$dest/.claude/" 2>/dev/null || true
-        fi
-        if [[ -d "$tmpl_dir/.github" ]]; then
-            cp -r "$tmpl_dir/.github" "$dest/" 2>/dev/null || true
-        fi
-        # Copy any other top-level template subdirs (e.g. domain-pack ships
-        # content/, jvm-wrapper/, python-wrapper/, scripts/; gradle-plugin
-        # ships plugin/, sample-consumer/, gradle/). Skip the ones already
-        # handled above.
-        #
-        # NOTE: trailing slash on the source path unwraps the directory
-        # contents into $dest. Strip it with `${extra%/}` so `cp -r` copies
-        # the directory itself into $dest, preserving the layout.
-        for extra in "$tmpl_dir"/*/; do
-            [[ -d "$extra" ]] || continue
-            extra_name=$(basename "$extra")
-            case "$extra_name" in
-                commands|.claude|.github) continue ;;
-            esac
-            cp -r "${extra%/}" "$dest/" 2>/dev/null || true
-        done
-        # Copy top-level regular files other than PROJECT.md (already mapped
-        # to CLAUDE.md above). gradle-plugin ships build.gradle.kts /
-        # settings.gradle.kts / .gitignore at the template root.
-        while IFS= read -r -d '' extra_file; do
-            extra_name=$(basename "$extra_file")
-            [[ "$extra_name" == "PROJECT.md" ]] && continue
-            cp "$extra_file" "$dest/$extra_name" 2>/dev/null || true
-        done < <(find "$tmpl_dir" -maxdepth 1 -type f -print0 2>/dev/null)
-    done
-    echo "[done] Synced templates to $TEMPLATES_DIR"
+    install_project_templates Synced
 
-    # SDD / Shape-Up template library (flat dir; templates loop above filters by PROJECT.md)
+    # SDD / Shape-Up template library (flat dir with no PROJECT.md, so
+    # install_project_templates above leaves it to this block)
     if [[ -d "$SHARED_DIR/templates/sdd" ]]; then
         SDD_TARGET="$TEMPLATES_DIR/sdd"
         rm -rf "$SDD_TARGET"
@@ -767,222 +778,10 @@ echo "[done] Created ~/.claude/CLAUDE.md"
 fi
 
 # ══════════════════════════════════════════════════════════════
-# 2. TEMPLATE: ml-rag
+# 2–9a. PROJECT TEMPLATES
 # ══════════════════════════════════════════════════════════════
 
-mkdir -p "$TEMPLATES_DIR/ml-rag/commands"
-cp "$SHARED_DIR/templates/ml-rag/PROJECT.md" "$TEMPLATES_DIR/ml-rag/CLAUDE.md"
-if [[ -d "$SHARED_DIR/templates/ml-rag/commands" ]]; then
-    cp "$SHARED_DIR/templates/ml-rag/commands/"*.md "$TEMPLATES_DIR/ml-rag/commands/" 2>/dev/null || true
-fi
-if [[ -d "$SHARED_DIR/templates/ml-rag/.claude" ]]; then
-    mkdir -p "$TEMPLATES_DIR/ml-rag/.claude"
-    cp -r "$SHARED_DIR/templates/ml-rag/.claude/"* "$TEMPLATES_DIR/ml-rag/.claude/" 2>/dev/null || true
-fi
-if [[ -d "$SHARED_DIR/templates/ml-rag/.github" ]]; then
-    cp -r "$SHARED_DIR/templates/ml-rag/.github" "$TEMPLATES_DIR/ml-rag/" 2>/dev/null || true
-fi
-echo "[done] Created template: ml-rag"
-
-# ══════════════════════════════════════════════════════════════
-# 3. TEMPLATE: ml-app
-# ══════════════════════════════════════════════════════════════
-
-mkdir -p "$TEMPLATES_DIR/ml-app/commands"
-cp "$SHARED_DIR/templates/ml-app/PROJECT.md" "$TEMPLATES_DIR/ml-app/CLAUDE.md"
-if [[ -d "$SHARED_DIR/templates/ml-app/commands" ]]; then
-    cp "$SHARED_DIR/templates/ml-app/commands/"*.md "$TEMPLATES_DIR/ml-app/commands/" 2>/dev/null || true
-fi
-if [[ -d "$SHARED_DIR/templates/ml-app/.claude" ]]; then
-    mkdir -p "$TEMPLATES_DIR/ml-app/.claude"
-    cp -r "$SHARED_DIR/templates/ml-app/.claude/"* "$TEMPLATES_DIR/ml-app/.claude/" 2>/dev/null || true
-fi
-if [[ -d "$SHARED_DIR/templates/ml-app/.github" ]]; then
-    cp -r "$SHARED_DIR/templates/ml-app/.github" "$TEMPLATES_DIR/ml-app/" 2>/dev/null || true
-fi
-echo "[done] Created template: ml-app"
-
-# ══════════════════════════════════════════════════════════════
-# 3b. TEMPLATE: ml-utils
-# ══════════════════════════════════════════════════════════════
-
-mkdir -p "$TEMPLATES_DIR/ml-utils/commands"
-cp "$SHARED_DIR/templates/ml-utils/PROJECT.md" "$TEMPLATES_DIR/ml-utils/CLAUDE.md"
-if [[ -d "$SHARED_DIR/templates/ml-utils/commands" ]]; then
-    cp "$SHARED_DIR/templates/ml-utils/commands/"*.md "$TEMPLATES_DIR/ml-utils/commands/" 2>/dev/null || true
-fi
-if [[ -d "$SHARED_DIR/templates/ml-utils/.claude" ]]; then
-    mkdir -p "$TEMPLATES_DIR/ml-utils/.claude"
-    cp -r "$SHARED_DIR/templates/ml-utils/.claude/"* "$TEMPLATES_DIR/ml-utils/.claude/" 2>/dev/null || true
-fi
-if [[ -d "$SHARED_DIR/templates/ml-utils/.github" ]]; then
-    cp -r "$SHARED_DIR/templates/ml-utils/.github" "$TEMPLATES_DIR/ml-utils/" 2>/dev/null || true
-fi
-echo "[done] Created template: ml-utils"
-
-# ══════════════════════════════════════════════════════════════
-# 4. TEMPLATE: ml-langchain
-# ══════════════════════════════════════════════════════════════
-
-mkdir -p "$TEMPLATES_DIR/ml-langchain/commands"
-cp "$SHARED_DIR/templates/ml-langchain/PROJECT.md" "$TEMPLATES_DIR/ml-langchain/CLAUDE.md"
-if [[ -d "$SHARED_DIR/templates/ml-langchain/commands" ]]; then
-    cp "$SHARED_DIR/templates/ml-langchain/commands/"*.md "$TEMPLATES_DIR/ml-langchain/commands/" 2>/dev/null || true
-fi
-if [[ -d "$SHARED_DIR/templates/ml-langchain/.claude" ]]; then
-    mkdir -p "$TEMPLATES_DIR/ml-langchain/.claude"
-    cp -r "$SHARED_DIR/templates/ml-langchain/.claude/"* "$TEMPLATES_DIR/ml-langchain/.claude/" 2>/dev/null || true
-fi
-if [[ -d "$SHARED_DIR/templates/ml-langchain/.github" ]]; then
-    cp -r "$SHARED_DIR/templates/ml-langchain/.github" "$TEMPLATES_DIR/ml-langchain/" 2>/dev/null || true
-fi
-echo "[done] Created template: ml-langchain"
-
-# ══════════════════════════════════════════════════════════════
-# 5. TEMPLATE: ml-n8n
-# ══════════════════════════════════════════════════════════════
-
-mkdir -p "$TEMPLATES_DIR/ml-n8n/commands"
-cp "$SHARED_DIR/templates/ml-n8n/PROJECT.md" "$TEMPLATES_DIR/ml-n8n/CLAUDE.md"
-if [[ -d "$SHARED_DIR/templates/ml-n8n/commands" ]]; then
-    cp "$SHARED_DIR/templates/ml-n8n/commands/"*.md "$TEMPLATES_DIR/ml-n8n/commands/" 2>/dev/null || true
-fi
-if [[ -d "$SHARED_DIR/templates/ml-n8n/.claude" ]]; then
-    mkdir -p "$TEMPLATES_DIR/ml-n8n/.claude"
-    cp -r "$SHARED_DIR/templates/ml-n8n/.claude/"* "$TEMPLATES_DIR/ml-n8n/.claude/" 2>/dev/null || true
-fi
-if [[ -d "$SHARED_DIR/templates/ml-n8n/.github" ]]; then
-    cp -r "$SHARED_DIR/templates/ml-n8n/.github" "$TEMPLATES_DIR/ml-n8n/" 2>/dev/null || true
-fi
-echo "[done] Created template: ml-n8n"
-
-# ══════════════════════════════════════════════════════════════
-# 6. TEMPLATE: java-enterprise
-# ══════════════════════════════════════════════════════════════
-
-mkdir -p "$TEMPLATES_DIR/java-enterprise/commands"
-cp "$SHARED_DIR/templates/java-enterprise/PROJECT.md" "$TEMPLATES_DIR/java-enterprise/CLAUDE.md"
-if [[ -d "$SHARED_DIR/templates/java-enterprise/commands" ]]; then
-    cp "$SHARED_DIR/templates/java-enterprise/commands/"*.md "$TEMPLATES_DIR/java-enterprise/commands/" 2>/dev/null || true
-fi
-if [[ -d "$SHARED_DIR/templates/java-enterprise/.claude" ]]; then
-    mkdir -p "$TEMPLATES_DIR/java-enterprise/.claude"
-    cp -r "$SHARED_DIR/templates/java-enterprise/.claude/"* "$TEMPLATES_DIR/java-enterprise/.claude/" 2>/dev/null || true
-fi
-if [[ -d "$SHARED_DIR/templates/java-enterprise/.github" ]]; then
-    cp -r "$SHARED_DIR/templates/java-enterprise/.github" "$TEMPLATES_DIR/java-enterprise/" 2>/dev/null || true
-fi
-echo "[done] Created template: java-enterprise"
-
-# ══════════════════════════════════════════════════════════════
-# 7. TEMPLATE: web-static
-# ══════════════════════════════════════════════════════════════
-
-mkdir -p "$TEMPLATES_DIR/web-static/commands"
-cp "$SHARED_DIR/templates/web-static/PROJECT.md" "$TEMPLATES_DIR/web-static/CLAUDE.md"
-if [[ -d "$SHARED_DIR/templates/web-static/commands" ]]; then
-    cp "$SHARED_DIR/templates/web-static/commands/"*.md "$TEMPLATES_DIR/web-static/commands/" 2>/dev/null || true
-fi
-if [[ -d "$SHARED_DIR/templates/web-static/.claude" ]]; then
-    mkdir -p "$TEMPLATES_DIR/web-static/.claude"
-    cp -r "$SHARED_DIR/templates/web-static/.claude/"* "$TEMPLATES_DIR/web-static/.claude/" 2>/dev/null || true
-fi
-if [[ -d "$SHARED_DIR/templates/web-static/.github" ]]; then
-    cp -r "$SHARED_DIR/templates/web-static/.github" "$TEMPLATES_DIR/web-static/" 2>/dev/null || true
-fi
-echo "[done] Created template: web-static"
-
-# ══════════════════════════════════════════════════════════════
-# 8. TEMPLATE: web-dynamic
-# ══════════════════════════════════════════════════════════════
-
-mkdir -p "$TEMPLATES_DIR/web-dynamic/commands"
-cp "$SHARED_DIR/templates/web-dynamic/PROJECT.md" "$TEMPLATES_DIR/web-dynamic/CLAUDE.md"
-if [[ -d "$SHARED_DIR/templates/web-dynamic/commands" ]]; then
-    cp "$SHARED_DIR/templates/web-dynamic/commands/"*.md "$TEMPLATES_DIR/web-dynamic/commands/" 2>/dev/null || true
-fi
-if [[ -d "$SHARED_DIR/templates/web-dynamic/.claude" ]]; then
-    mkdir -p "$TEMPLATES_DIR/web-dynamic/.claude"
-    cp -r "$SHARED_DIR/templates/web-dynamic/.claude/"* "$TEMPLATES_DIR/web-dynamic/.claude/" 2>/dev/null || true
-fi
-if [[ -d "$SHARED_DIR/templates/web-dynamic/.github" ]]; then
-    cp -r "$SHARED_DIR/templates/web-dynamic/.github" "$TEMPLATES_DIR/web-dynamic/" 2>/dev/null || true
-fi
-echo "[done] Created template: web-dynamic"
-
-# ══════════════════════════════════════════════════════════════
-# 9. TEMPLATE: java-tooling
-# ══════════════════════════════════════════════════════════════
-
-mkdir -p "$TEMPLATES_DIR/java-tooling/commands"
-cp "$SHARED_DIR/templates/java-tooling/PROJECT.md" "$TEMPLATES_DIR/java-tooling/CLAUDE.md"
-if [[ -d "$SHARED_DIR/templates/java-tooling/commands" ]]; then
-    cp "$SHARED_DIR/templates/java-tooling/commands/"*.md "$TEMPLATES_DIR/java-tooling/commands/" 2>/dev/null || true
-fi
-if [[ -d "$SHARED_DIR/templates/java-tooling/.claude" ]]; then
-    mkdir -p "$TEMPLATES_DIR/java-tooling/.claude"
-    cp -r "$SHARED_DIR/templates/java-tooling/.claude/"* "$TEMPLATES_DIR/java-tooling/.claude/" 2>/dev/null || true
-fi
-if [[ -d "$SHARED_DIR/templates/java-tooling/.github" ]]; then
-    cp -r "$SHARED_DIR/templates/java-tooling/.github" "$TEMPLATES_DIR/java-tooling/" 2>/dev/null || true
-fi
-echo "[done] Created template: java-tooling"
-
-# ══════════════════════════════════════════════════════════════
-# 9a0. TEMPLATE: gradle-plugin
-# ══════════════════════════════════════════════════════════════
-
-mkdir -p "$TEMPLATES_DIR/gradle-plugin/commands"
-cp "$SHARED_DIR/templates/gradle-plugin/PROJECT.md" "$TEMPLATES_DIR/gradle-plugin/CLAUDE.md"
-if [[ -d "$SHARED_DIR/templates/gradle-plugin/commands" ]]; then
-    cp "$SHARED_DIR/templates/gradle-plugin/commands/"*.md "$TEMPLATES_DIR/gradle-plugin/commands/" 2>/dev/null || true
-fi
-if [[ -d "$SHARED_DIR/templates/gradle-plugin/.claude" ]]; then
-    mkdir -p "$TEMPLATES_DIR/gradle-plugin/.claude"
-    cp -r "$SHARED_DIR/templates/gradle-plugin/.claude/"* "$TEMPLATES_DIR/gradle-plugin/.claude/" 2>/dev/null || true
-fi
-if [[ -d "$SHARED_DIR/templates/gradle-plugin/.github" ]]; then
-    cp -r "$SHARED_DIR/templates/gradle-plugin/.github" "$TEMPLATES_DIR/gradle-plugin/" 2>/dev/null || true
-fi
-# gradle-plugin ships build/settings files at root + plugin/,
-# sample-consumer/, gradle/ subdirs. Copy them all so the bootstrapped
-# project is buildable end-to-end (modulo `gradle wrapper`).
-for sub in plugin sample-consumer gradle; do
-    if [[ -d "$SHARED_DIR/templates/gradle-plugin/$sub" ]]; then
-        cp -r "$SHARED_DIR/templates/gradle-plugin/$sub" "$TEMPLATES_DIR/gradle-plugin/" 2>/dev/null || true
-    fi
-done
-for f in build.gradle.kts settings.gradle.kts .gitignore; do
-    if [[ -f "$SHARED_DIR/templates/gradle-plugin/$f" ]]; then
-        cp "$SHARED_DIR/templates/gradle-plugin/$f" "$TEMPLATES_DIR/gradle-plugin/" 2>/dev/null || true
-    fi
-done
-echo "[done] Created template: gradle-plugin"
-
-# ══════════════════════════════════════════════════════════════
-# 9a. TEMPLATE: domain-pack
-# ══════════════════════════════════════════════════════════════
-
-mkdir -p "$TEMPLATES_DIR/domain-pack/commands"
-cp "$SHARED_DIR/templates/domain-pack/PROJECT.md" "$TEMPLATES_DIR/domain-pack/CLAUDE.md"
-if [[ -d "$SHARED_DIR/templates/domain-pack/commands" ]]; then
-    cp "$SHARED_DIR/templates/domain-pack/commands/"*.md "$TEMPLATES_DIR/domain-pack/commands/" 2>/dev/null || true
-fi
-if [[ -d "$SHARED_DIR/templates/domain-pack/.claude" ]]; then
-    mkdir -p "$TEMPLATES_DIR/domain-pack/.claude"
-    cp -r "$SHARED_DIR/templates/domain-pack/.claude/"* "$TEMPLATES_DIR/domain-pack/.claude/" 2>/dev/null || true
-fi
-if [[ -d "$SHARED_DIR/templates/domain-pack/.github" ]]; then
-    cp -r "$SHARED_DIR/templates/domain-pack/.github" "$TEMPLATES_DIR/domain-pack/" 2>/dev/null || true
-fi
-# domain-pack ships content/, jvm-wrapper/, python-wrapper/, scripts/ — copy
-# them all so `claude-code init domain-pack` produces a buildable project.
-for sub in content jvm-wrapper python-wrapper scripts; do
-    if [[ -d "$SHARED_DIR/templates/domain-pack/$sub" ]]; then
-        cp -r "$SHARED_DIR/templates/domain-pack/$sub" "$TEMPLATES_DIR/domain-pack/" 2>/dev/null || true
-    fi
-done
-echo "[done] Created template: domain-pack"
+install_project_templates Installed
 
 # ══════════════════════════════════════════════════════════════
 # 9b. INSTALL SDD / SHAPE-UP TEMPLATE LIBRARY

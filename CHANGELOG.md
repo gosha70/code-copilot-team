@@ -10,6 +10,16 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A fresh install installs the same project templates as `--sync`.**
+  `setup.sh --claude-code` copied eleven templates by name, and only the
+  parts it named, so the `ui-harness` add-on, whose own instructions copy it
+  from `~/.claude/templates/ui-harness/`, and `domain-pack`'s `.gitignore`
+  arrived only with `--sync`; `cct templates` listed eleven rows after a
+  fresh install and twelve after a sync. Both paths now run one installer
+  over every `shared/templates/` folder that has a `PROJECT.md` (#498).
+
 ## [2.1.0]
 
 The harness now has one name on the command line and one home on disk, and the

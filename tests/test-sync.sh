@@ -916,6 +916,22 @@ assert_contains "a missing profile file is named as missing" "$FRESH_MISSING_OUT
 [[ "$FRESH_MISSING_OUT" != *"unknown permission tier"* ]]
 assert_ok "...and not reported as an unknown tier" "$?"
 
+# 18n. The same fresh install delivers the project templates --sync does
+#      (#498). The fresh path used to copy eleven templates by name, and only
+#      the parts it named: ui-harness and domain-pack's .gitignore arrived only
+#      with --sync. Both paths now call install_project_templates, so a --sync
+#      over a copy of this home must leave the template tree as it was.
+TPL_WANT=$(for d in "$SHARED_DIR"/templates/*/; do [[ -f "$d/PROJECT.md" ]] && basename "$d"; done | sort | tr '\n' ' ')
+TPL_FRESH=$(for d in "$FRESH_HOME"/.claude/templates/*/; do [[ -f "$d/CLAUDE.md" ]] && basename "$d"; done | sort | tr '\n' ' ')
+assert_eq "a fresh install installs every template folder that has a PROJECT.md" "$TPL_WANT" "$TPL_FRESH"
+assert_file_exists "...ui-harness with its DESIGN.md" "$FRESH_HOME/.claude/templates/ui-harness/DESIGN.md"
+assert_file_exists "...and domain-pack with its .gitignore" "$FRESH_HOME/.claude/templates/domain-pack/.gitignore"
+TPL_SYNC_HOME="$TEST_TMPDIR/templates-sync-home"
+cp -R "$FRESH_HOME" "$TPL_SYNC_HOME"
+HOME="$TPL_SYNC_HOME" bash "$REPO_DIR/adapters/claude-code/setup.sh" --sync > /dev/null 2>&1
+assert_eq "--sync over a fresh install leaves the template tree unchanged" "" \
+  "$(diff -rq "$FRESH_HOME/.claude/templates" "$TPL_SYNC_HOME/.claude/templates" 2>&1)"
+
 # ══════════════════════════════════════════════════════════════
 echo ""
 echo "=== #212: setup.sh must never silently ignore a flag ==="
