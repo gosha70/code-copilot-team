@@ -17,8 +17,9 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   parts it named, so the `ui-harness` add-on, whose own instructions copy it
   from `~/.claude/templates/ui-harness/`, and `domain-pack`'s `.gitignore`
   arrived only with `--sync`; `cct templates` listed eleven rows after a
-  fresh install and twelve after a sync. Both paths now run one installer
-  over every `shared/templates/` folder that has a `PROJECT.md` (#498).
+  fresh install and twelve (the eleven stacks and the add-on) after a sync.
+  Both paths now run one installer over every `shared/templates/` folder
+  that has a `PROJECT.md` (#498).
 
 ## [2.1.0]
 
