@@ -262,7 +262,16 @@ rt_tmp_cleanup() {
 
 if [[ "$ROUTING" == "1" ]]; then
   if ! mkdir "$RUN_LOCK" 2>/dev/null; then
-    RL_OWNER="$(cat "$RUN_LOCK/pid" 2>/dev/null || echo "")"
+    # #507: the owner takes the lock in two steps, the mkdir above and then
+    # its pid below, so a supervisor that loses the mkdir race can arrive
+    # between them. Re-read the pid for about a second before calling the
+    # lock ownerless: "remove it" is the wrong advice while its owner runs.
+    RL_OWNER=""
+    for _rl_try in 1 2 3 4 5 6 7 8 9 10; do
+      RL_OWNER="$(cat "$RUN_LOCK/pid" 2>/dev/null || echo "")"
+      [[ "$RL_OWNER" =~ ^[0-9]+$ ]] && break
+      sleep 0.1
+    done
     if [[ ! "$RL_OWNER" =~ ^[0-9]+$ ]]; then
       err "the run lock $RUN_LOCK exists but its owner is unverifiable (missing/malformed pid)."
       err "Refusing to take it over. Inspect it, and remove it if no supervisor is running."

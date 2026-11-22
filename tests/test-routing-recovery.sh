@@ -1403,6 +1403,36 @@ assert_eq "init-race: ...and exactly one ledger exists, initialised once" "1" \
 assert "init-race: the refusal happens BEFORE the ledger is touched (lock precedes init)" \
     bash -c "grep -n 'RUN_LOCK=' '$SUPV' | head -1 | cut -d: -f1 | { read -r a; grep -n 'if \[\[ -f \"\\\$RUN\" \]\]' '$SUPV' | head -1 | cut -d: -f1 | { read -r b; [ \"\$a\" -lt \"\$b\" ]; }; }"
 
+# ── #507: a lock caught mid-acquisition is waited on, not called ownerless ──
+# The owner takes the lock in two steps, mkdir and then its pid. A second
+# supervisor arriving between them found no pid and refused as "owner is
+# unverifiable", advising removal while the owner ran (and the init-race
+# count above missed it). It now re-reads the pid for about a second. Here
+# the lock directory exists first and its owner, this shell (alive),
+# records its pid half a second later.
+mkdir -p "$WK/gap/specs/demo-gap"
+printf -- "- [x] done\n" > "$WK/gap/specs/demo-gap/tasks.md"
+GAP_LOCK="$WK/gap/.cct/supervisor/demo-gap/routing-run.lock"
+gap_supervisor() { ( set +e; cd "$REPO_DIR"
+    env CCT_SUPERVISOR_HARNESS_CMD="bash '$WK/slow.sh'" CCT_SUPERVISOR_SLEEP=true \
+        CCT_ROUTING_REGISTRY="$TK/reg.toml" CCT_ROUTING_STATE="$WK/gap-state.json" \
+        bash "$SUPV" demo-gap --routing --worktree "$WK/gap" --profile unattended 2>&1
+    echo "rc=$?" ); }
+mkdir -p "$GAP_LOCK"
+( sleep 0.5; printf '%s\n' "$$" > "$GAP_LOCK/pid" ) &
+GAP_WRITER=$!
+GAP_OUT=$(gap_supervisor)
+wait "$GAP_WRITER"
+assert "lock-gap: a supervisor that finds the lock before its pid waits, then names the running owner" \
+    bash -c "grep -q 'already running feature' <<< \"\$1\" && ! grep -q 'unverifiable' <<< \"\$1\" && grep -q '^rc=5$' <<< \"\$1\"" _ "$GAP_OUT"
+assert_eq "lock-gap: ...and leaves the owner's lock as it was" "$$" "$(cat "$GAP_LOCK/pid" 2>/dev/null)"
+# A lock that never gets a pid is still refused as unverifiable, after the wait.
+rm -f "$GAP_LOCK/pid"
+GAP_OUT=$(gap_supervisor)
+assert "lock-gap: a lock that stays without a pid is still refused as unverifiable" \
+    bash -c "grep -q 'owner is unverifiable' <<< \"\$1\" && grep -q '^rc=5$' <<< \"\$1\"" _ "$GAP_OUT"
+rm -rf "$GAP_LOCK"
+
 # ── the mode discriminator: bounded work is never auto-woken ──
 # --delegate and --reconcile can both stop for
 # routing_no_eligible_profile, and their identity is a task id plus

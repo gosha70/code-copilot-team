@@ -12,6 +12,14 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Fixed
 
+- **A routed supervisor that starts while another is taking the run lock
+  names the running one.** The lock is taken in two steps, its directory
+  and then the owner's pid. A second supervisor arriving between them found
+  no pid and refused with "owner is unverifiable", advising removal of the
+  lock while its owner ran, which would let a third start beside it. It now
+  re-reads the pid for about a second and reports the supervisor already
+  running; a lock that stays without a pid is still refused as
+  unverifiable (#507).
 - **A fresh install installs the same project templates as `--sync`, and
   the `ui-harness` add-on is no longer a project type.** `setup.sh
   --claude-code` copied eleven templates by name, and only the parts it
