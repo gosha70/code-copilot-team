@@ -179,7 +179,7 @@ cct init ml-rag ~/projects/my-rag-app              # start from a template
 cct start ~/projects/existing-api                  # or just point at an existing project
 cct start --llm <target> ~/projects/existing-api   # this one session on another LLM (docs/llm-catalog.md)
 
-git pull && ./scripts/setup.sh --sync --claude-code   # after pulling repo updates
+./scripts/setup.sh --sync --claude-code               # after updating the checkout (docs/install.md)
 cct home migrate --dry-run && cct home migrate        # once, if you installed before 2.1 (docs/cct-home.md)
 cct sync ~/projects/my-rag-app --dry-run              # preview what would change
 cct sync ~/projects/my-rag-app                        # apply
