@@ -967,7 +967,7 @@ printf '#!/usr/bin/env bash\ncat "$FIXTURE"\nexit 1\n' > "$WK/blocked.sh"
 printf '#!/usr/bin/env bash\nsleep 8\nexit 0\n' > "$WK/slow.sh"
 # held.sh <dir>: the harness for cases that act on a LIVE supervisor. It
 # creates <dir>/started when it begins and runs until <dir>/release appears
-# (60 s at most). The supervisor records the run's profile and status in
+# (about a minute at most). The supervisor records the run's profile and status in
 # run.json AFTER it takes the run lock and BEFORE it launches the harness, so
 # a case that rewrites run.json once the lock exists can have that rewrite
 # undone; waiting for "started" cannot. Releasing it, rather than racing a
@@ -1337,8 +1337,8 @@ LIVE_WAIT=0
 # status=running and would undo the rewrite below.
 while [[ ! -e "$WK/live-harness/started" && "$LIVE_WAIT" -lt 300 ]]; do sleep 0.1; LIVE_WAIT=$((LIVE_WAIT+1)); done
 LIVE_PID=$(cat "$LIVE_LOCK/pid" 2>/dev/null || echo "")
-assert "runlock: a live routed supervisor holds an owner-aware run lock" \
-    bash -c "[[ '$LIVE_PID' =~ ^[0-9]+$ ]] && kill -0 '$LIVE_PID' 2>/dev/null"
+assert "runlock: a live routed supervisor holds an owner-aware run lock (its harness has started)" \
+    bash -c "[[ -e '$WK/live-harness/started' && '$LIVE_PID' =~ ^[0-9]+$ ]] && kill -0 '$LIVE_PID' 2>/dev/null"
 LRUN="$WK/live/.cct/supervisor/demo-live/run.json"
 jq '.status="failed" | .last_reason="routing_no_eligible_profile: blocked" | .routing_wake.claimed=null' \
     "$LRUN" > "$WK/live.tmp" && mv "$WK/live.tmp" "$LRUN"
@@ -1643,8 +1643,8 @@ FBW=0
 # own profile (alpha) and would undo the "beta" rewrite below.
 while [[ ! -e "$FB/harness/started" && "$FBW" -lt 300 ]]; do sleep 0.1; FBW=$((FBW+1)); done
 FBRUN="$FBLED/run.json"
-assert "failback: (fixture) a REAL supervisor is alive and holds the run lock" \
-    bash -c "P=\$(cat '$FBLED/routing-run.lock/pid' 2>/dev/null); [[ \"\$P\" =~ ^[0-9]+\$ ]] && kill -0 \"\$P\" 2>/dev/null"
+assert "failback: (fixture) a REAL supervisor is alive, holds the run lock and has started its harness" \
+    bash -c "P=\$(cat '$FBLED/routing-run.lock/pid' 2>/dev/null); [[ -e '$FB/harness/started' && \"\$P\" =~ ^[0-9]+\$ ]] && kill -0 \"\$P\" 2>/dev/null"
 jq '.routing_profile = "beta" | .status = "running"' "$FBRUN" > "$FB/t.json" && mv "$FB/t.json" "$FBRUN"
 FBTICK() { ( set +e; cd "$REPO_DIR"
     CCT_ROUTING_REGISTRY="$FB/reg.toml" CCT_ROUTING_STATE="${1:-$FB/state.json}" \
