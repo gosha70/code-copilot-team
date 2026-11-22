@@ -22,7 +22,9 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   it. Both paths now run one installer over every `shared/templates/`
   folder that has a `PROJECT.md`; `cct templates` lists `ui-harness` under
   *Available add-ons*, and `cct init` refuses it, printing the copy steps
-  from its instructions (#498).
+  from its instructions. Each template is now redeployed whole on every
+  install, as `--sync` already did, so local edits under
+  `~/.claude/templates/` are replaced (#498).
 - **An auto-build run no longer finishes over its cost cap.** The cap was
   checked before each session, so spend in a run's last phase had no later
   check: a run that crossed `caps.cost_usd` there reviewed, committed and
