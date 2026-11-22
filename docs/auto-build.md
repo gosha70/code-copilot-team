@@ -110,6 +110,12 @@ Raise `caps.cost_usd` in `automation.json` and re-run with `--resume`; the
 resume path re-reads `caps` from the live config and restarts the wall-clock
 guard.
 
+Spend is checked before every build or fix session, before every review
+round, and at every phase gate. The invocation that crosses the cap still
+finishes, since it cannot be stopped midway, so a run can end up to one
+invocation over; it then parks before anything else runs, and never marks the
+phase done or publishes over its cap.
+
 **Raising the cap mid-run.** Config is frozen into
 `.cct/auto-build/<feature-id>/config.snapshot.json` at launch, so most edits
 to `automation.json` during a run are ignored by design. `caps.cost_usd` is

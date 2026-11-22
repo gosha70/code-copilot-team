@@ -860,6 +860,49 @@ ESC=$(ls "$P"/.cct/auto-build/demo-feat/escalations/esc-*.json | head -1)
 assert_contains "max_phases detail" "$(jq -r '.detail' "$ESC")" "max_phases"
 rm -rf "$P"
 
+# #503: the cost cap is checked after a phase's spend, not only before each
+# session. A run whose LAST phase crossed the cap (no later session to check
+# it) went on to review, committed and finished done over its cap.
+CAP_REV_COUNT=$(mktemp)
+CAP_COUNT_PROFILE=$(mktemp)
+cat > "$CAP_COUNT_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "echo review >> $CAP_REV_COUNT; printf '### Summary\nLooks good.\n\n### Findings\n\n### Verdict\nPASS\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+
+# The build session crosses the cap: park before a review round spends more.
+P=$(setup_project); single_phase "$P"
+: > "$CAP_REV_COUNT"
+MOCK_CLAUDE_COST=6 REVIEW_PROFILE="$CAP_COUNT_PROFILE" run_driver "$P"
+assert_exit "#503: a last-phase build session that crosses the cost cap parks" 4 "$RC"
+ESC=$(ls "$P"/.cct/auto-build/demo-feat/escalations/esc-*.json 2>/dev/null | head -1)
+assert_eq "#503: ...as cap_exceeded" "cap_exceeded" "$(jq -r '.reason' "$ESC" 2>/dev/null)"
+assert_eq "#503: ...before any review round runs" "0" "$(wc -l < "$CAP_REV_COUNT" | tr -d ' ')"
+assert_eq "#503: ...and the phase is not marked done" "true" \
+    "$(jq -r '.phases["1"].status != "done"' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+rm -rf "$P"
+
+# The review crosses the cap (an unmetered reviewer debits the estimate):
+# park at the phase gate instead of finishing done over the cap.
+P=$(setup_project); single_phase "$P"
+cfg_set "$P" '.schema_version = 2 | .caps.cost_usd = 2 | .unattended.budget = {meter_all_invocations: true, estimate_unmetered: true, estimate_usd_per_invocation: 2.0}'
+: > "$CAP_REV_COUNT"
+REVIEW_PROFILE="$CAP_COUNT_PROFILE" run_driver "$P"
+assert_exit "#503: a last-phase review that crosses the cost cap parks at the phase gate" 4 "$RC"
+ESC=$(ls "$P"/.cct/auto-build/demo-feat/escalations/esc-*.json 2>/dev/null | head -1)
+assert_eq "#503: ...as cap_exceeded" "cap_exceeded" "$(jq -r '.reason' "$ESC" 2>/dev/null)"
+assert_contains "#503: ...whose detail counts the estimated review" "$(jq -r '.detail' "$ESC" 2>/dev/null)" "estimated"
+assert_eq "#503: ...after exactly one review round" "1" "$(wc -l < "$CAP_REV_COUNT" | tr -d ' ')"
+assert_eq "#503: ...and the phase is not marked done" "true" \
+    "$(jq -r '.phases["1"].status != "done"' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+rm -rf "$P"
+rm -f "$CAP_REV_COUNT" "$CAP_COUNT_PROFILE"
+
 # Empty diff from build session parks as git_anomaly
 P=$(setup_project)
 NOOP_SCRIPT=$(mktemp)
