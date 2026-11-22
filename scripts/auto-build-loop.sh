@@ -4858,6 +4858,10 @@ run_review_loop() {
     fi
     local fix_count=0
     while true; do
+        # #503: the session before this round (the build session, or the
+        # previous round's fix) started under the cap but may have crossed
+        # it. Park before a review spends more.
+        check_caps
         local rc=0
         # Track the newest findings file across the runner call so this
         # round's cost is debited exactly once — a runner that died before
@@ -5240,6 +5244,11 @@ run_phase() {
     # Phase gate: origin re-check + artifact commit
     set_status "phase-gate"
     refresh_live_caps
+    # #503: check spend here whether or not the live cap changed. The phase's
+    # last review or fix can cross the cap with no later session to catch it,
+    # and in the last phase the run would otherwise finish, and publish, over
+    # its cap. The coverage gate re-checks only when a coverage block exists.
+    check_caps
     phase_gate "$n" "$title"
     # Sub-phase progress marker: from here only the coverage gate remains.
     # A gate park resumes HERE, not at the build session (see above).
