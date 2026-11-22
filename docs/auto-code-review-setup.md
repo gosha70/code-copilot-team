@@ -248,7 +248,7 @@ CCT_REVIEW_DIFF_MAX_LINES=4000 scripts/auto-build-loop.sh my-feature
 An inconclusive stop gives the diff's line count against the limit and
 where the limit came from. A parked run keeps the `review.diff_max_lines`
 it started with, so to raise the limit for that run, resume with the
-variable set.
+variable set; the variable itself is read again at every start and resume.
 
 DeepSeek's context is a million tokens; 4000 lines is not a strain.
 

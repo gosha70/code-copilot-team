@@ -5017,19 +5017,22 @@ run_review_loop() {
                 _rv_verdict=$(jq -r '.verdict // ""' "$findings" 2>/dev/null || echo "")
                 _rv_blocking=$(jq -r '[.findings[]? | select(.severity == "blocking")] | length' "$findings" 2>/dev/null || echo 0)
                 if [[ "$_rv_verdict" == "INCONCLUSIVE" && "${_rv_blocking:-0}" -eq 0 ]]; then
-                    local _rv_prov _rv_n _rv_lines _rv_seen
+                    local _rv_prov _rv_n _rv_lines _rv_size
                     _rv_prov=$(jq -r '.reviewer_provider // "?"' "$findings" 2>/dev/null || echo "?")
                     _rv_n=$(jq -r '.findings | length' "$findings" 2>/dev/null || echo 0)
                     # #504: the diff's size against the limit the runner
-                    # applied, counted the way the runner truncates.
-                    _rv_lines=$(git -C "$PROJECT_DIR" diff "$base_ref" 2>/dev/null | wc -l | tr -d ' ')
-                    if [[ "${_rv_lines:-0}" -gt "$REVIEW_DIFF_MAX_LINES" ]]; then
-                        _rv_seen="so the reviewer saw only the first $REVIEW_DIFF_MAX_LINES"
+                    # applied, counted the way the runner truncates. A diff
+                    # that cannot be taken is said so, never counted as 0.
+                    _rv_lines=$(set -o pipefail; git -C "$PROJECT_DIR" diff "$base_ref" 2>/dev/null | wc -l | tr -d ' ') || _rv_lines=""
+                    if [[ -z "$_rv_lines" ]]; then
+                        _rv_size="The diff against $base_ref could not be measured; the limit was $REVIEW_DIFF_MAX_LINES lines ($REVIEW_DIFF_MAX_LINES_SOURCE)"
+                    elif [[ "$_rv_lines" -gt "$REVIEW_DIFF_MAX_LINES" ]]; then
+                        _rv_size="The diff had $_rv_lines lines against a limit of $REVIEW_DIFF_MAX_LINES ($REVIEW_DIFF_MAX_LINES_SOURCE), so the reviewer saw only the first $REVIEW_DIFF_MAX_LINES"
                     else
-                        _rv_seen="so the reviewer saw all of it"
+                        _rv_size="The diff had $_rv_lines lines against a limit of $REVIEW_DIFF_MAX_LINES ($REVIEW_DIFF_MAX_LINES_SOURCE), so the reviewer saw all of it"
                     fi
                     dispose "review_inconclusive" \
-                        "reviewer '$_rv_prov' could not judge phase $n round $round (INCONCLUSIVE, $_rv_n finding(s), none blocking). The diff had ${_rv_lines:-0} lines against a limit of $REVIEW_DIFF_MAX_LINES ($REVIEW_DIFF_MAX_LINES_SOURCE), $_rv_seen. Fix what kept it from judging, then rerun the review: the limit (resume with CCT_REVIEW_DIFF_MAX_LINES set; this run keeps the review.diff_max_lines it started with), the provider, or the request. No fix session is run on a verdict that judged nothing" \
+                        "reviewer '$_rv_prov' could not judge phase $n round $round (INCONCLUSIVE, $_rv_n finding(s), none blocking). $_rv_size. Fix what kept it from judging, then rerun the review: the limit (resume with CCT_REVIEW_DIFF_MAX_LINES set; this run keeps the review.diff_max_lines it started with), the provider, or the request. No fix session is run on a verdict that judged nothing" \
                         "$(jq -n --arg f "$findings" --arg p "$_rv_prov" '{findings_file: $f, reviewer: $p}')"
                 fi
                 set_status "addressing-findings"

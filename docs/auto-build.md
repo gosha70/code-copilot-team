@@ -57,7 +57,8 @@ and where that limit came from: `CCT_REVIEW_DIFF_MAX_LINES` if set, else
 (#504). Fix the cause and `--resume` runs the review again over the same
 build commit. The run keeps the `review.diff_max_lines` it started with, so
 to raise the limit for it, set `CCT_REVIEW_DIFF_MAX_LINES` on the
-`--resume` command.
+`--resume` command. The variable is not frozen: it is read again at every
+start and resume.
 INCONCLUSIVE with a blocking finding still has something to fix and keeps
 the fix session.
 
