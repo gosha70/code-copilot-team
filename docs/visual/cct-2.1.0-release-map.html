@@ -509,15 +509,15 @@ td.new code { color: var(--ink); }
           sec("A target in ~/.cct/llms.toml", cmd('[llms.deepseek]\nprovider = "deepseek"\nmodel = "deepseek-chat"\n\n[bindings.deepseek-claude]\nharness = "claude-code"\nllm = "deepseek"\nendpoint = "deepseek"')) +
           '<p class="foot">Claude Code only in this release, and the first slice of ' + iss(400) + '. A credential is named by its environment variable, never written in the catalog.</p>';
       } },
-    { id: "home", title: "One home and one project file", sub: "User files live in ~/.cct. A Pi project's config is .cct.toml.", refs: [411, 460, 463], detail: function () {
+    { id: "new-home", title: "One home and one project file", sub: "User files live in ~/.cct. A Pi project's config is .cct.toml.", refs: [411, 460, 463], detail: function () {
         return '<p>Every reader in bash, Python and TypeScript finds a user file the same way: <code>${CCT_HOME:-~/.cct}/&lt;entry&gt;</code>.</p>' +
           sec("What lives in ~/.cct", ul(["<code>providers.toml</code>: peer reviewers and auto-build providers", "<code>llms.toml</code>: the targets <code>--llm</code> accepts", "<code>harness.json</code> and <code>harness-stamps.jsonl</code>: which harness ran a session", "the Session Analytics config, store and graph", "<code>pi/</code> and <code>config.toml</code> for the Pi adapter"])) +
           sec("Moving off the old home", '<p>Refresh every adapter you installed first (add <code>--pi</code> for <code>pi-code</code>) and close running <code>pi-code</code> sessions; an older <code>pi-code</code> would recreate the old home.</p>' +
-            cmd("cct home                     # what is still read from ~/.code-copilot-team\ncct home migrate --dry-run\ncct home migrate             # never overwrites, never deletes") +
+            cmd("cct home                     # what is still read from ~/.code-copilot-team\ncct home migrate --dry-run\ncct home migrate             # move legacy entries in; never overwrites") +
             '<p>On the same filesystem each entry moves; with <code>CCT_HOME</code> on another filesystem it is copied, the old one is kept, and <code>migrate</code> exits 1 so you remove it by hand. The old home is still read through the 2.1.x line. 2.2 removes that fallback.</p>') +
           sec("A Pi project", '<p><code>.cct.toml</code> at the repo root (committed), <code>.cct.local.toml</code> (personal, never committed) and <code>.cct-init.json</code>. The old <code>.code-copilot-team/config.toml</code> is read through 2.1.x.</p>' + cmd("pi-code migrate ~/projects/app --dry-run"));
       } },
-    { id: "cct", title: "cct is the command", sub: "Every launcher command now has a cct name, and the docs use it.", refs: [410, 494], detail: function () {
+    { id: "new-cct", title: "cct is the command", sub: "Every launcher command now has a cct name, and the docs use it.", refs: [410, 494], detail: function () {
         return '<p><code>setup.sh --claude-code</code> puts <code>cct</code> on your PATH in <code>~/.local/bin</code>. It hands launcher commands to the installed <code>claude-code</code> launcher with your arguments unchanged.</p>' +
           sec("Launcher commands", ul(["<code>cct start [path]</code>: a session, with any launcher flag (<code>--llm</code>, <code>--peer-review</code>)", "<code>cct init &lt;template&gt; [path]</code> and <code>cct templates</code>", "<code>cct sync [path] [--dry-run]</code>", "<code>cct build &lt;feature-id&gt;</code>", "<code>cct permissions &lt;tier&gt; [dir]</code>", "<code>cct playwright [dir]</code>"])) +
           sec("cct's own commands", ul(["<code>cct features</code> and <code>cct list</code>: what the harness offers", "<code>cct doctor</code>: is this machine ready", "<code>cct config</code>, <code>cct home</code>, <code>cct llm</code>, <code>cct routing</code>"])) +
@@ -534,11 +534,11 @@ td.new code { color: var(--ink); }
           cmd("./scripts/session-analytics gaps --cutoff 15 --exclude-noise") +
           '<p class="foot">Duration stays wall clock, first entry to last. No page shows active time yet.</p>';
       } },
-    { id: "wiki", title: "wiki-studio runs the wiki", sub: "The in-repo engine is gone; a pinned wheel does the work.", refs: [384], detail: function () {
+    { id: "new-wiki", title: "wiki-studio runs the wiki", sub: "The in-repo engine is gone; a pinned wheel does the work.", refs: [384], detail: function () {
         return '<p>The five wiki verbs (<code>ingest</code>, <code>promote</code>, <code>query</code>, <code>lint</code>, <code>audit-flush</code>) run the <code>wiki-studio==0.9.0</code> wheel, pinned by hash. CCT\'s own copy, 10,344 lines, is deleted.</p>' +
           ul(["<code>scripts/setup.sh</code> installs it into the checkout's <code>.venv</code> (Python 3.11 to 3.13).", "<code>./scripts/wiki</code> refuses, naming the remedy, when it is missing or the wrong version.", "<code>cct doctor</code> reports it under Wiki.", "<code>WIKI_STUDIO_BACKEND</code> replaces <code>WIKI_INGEST_BACKEND</code>, which still works with a warning."]);
       } },
-    { id: "autobuild", title: "Auto-build lands less, and says why", sub: "Stricter about what it lands and about the PR it opens.", refs: [403, 404, 405, 427, 471], detail: function () {
+    { id: "new-autobuild", title: "Auto-build lands less, and says why", sub: "Stricter about what it lands and about the PR it opens.", refs: [403, 404, 405, 427, 471], detail: function () {
         return ul([
           "It lands only when <code>test.command</code> passes on the final head (" + iss(403) + ").",
           "It never writes onto a closed PR, and adopts only an open one (" + iss(427) + ").",
@@ -619,8 +619,8 @@ td.new code { color: var(--ink); }
     ["wiki", "Wiki"], ["aider", "aider"], ["stamps", "CCT_HARNESS_STAMPS"], ["windows", "Windows evidence"]
   ];
   var UPGRADE = [
-    { who: "everyone", title: "Update the checkout and refresh the install", cmd: "git pull\n./scripts/setup.sh --sync --claude-code        # add --pi if you use pi-code",
-      text: "Installs the launcher that knows <code>--llm</code>, the <code>cct</code> shim and the permission profiles. It also removes the peer-review defaults an earlier setup wrote into <code>~/.claude/settings.json</code>, which overrode <code>--peer-review</code>." },
+    { who: "everyone", title: "Update the checkout and refresh the install", cmd: "git fetch origin tag v2.1.0\ngit switch --detach v2.1.0\n./scripts/setup.sh --sync --claude-code        # add --pi if you use pi-code",
+      text: "The 2.0 Quick Start cloned <code>--branch v2.0.0</code>, so the checkout is on no branch: <code>git pull</code> fails there and leaves it at 2.0, and a sync would reinstall 2.0. A checkout that follows <code>master</code> runs <code>git pull --ff-only</code> in place of the first two lines. The sync installs the launcher that knows <code>--llm</code>, the <code>cct</code> shim and the permission profiles. It also removes the peer-review defaults an earlier setup wrote into <code>~/.claude/settings.json</code>, which overrode <code>--peer-review</code>." },
     { who: "legacy", title: "Move your user home", cmd: "cct home migrate --dry-run\ncct home migrate",
       text: "First refresh every adapter you installed (add <code>--pi</code> for <code>pi-code</code>) and close running <code>pi-code</code> sessions: an older <code>pi-code</code> points <code>CCT_HOME</code> at the old home and would recreate it after the move. <code>~/.code-copilot-team</code> is still read through 2.1.x, and <code>cct doctor</code> lists what is served from it. On the same filesystem each entry moves; with <code>CCT_HOME</code> on another filesystem it is copied, the old one is kept, and <code>migrate</code> exits 1 and names what to check and remove by hand. 2.2 removes the fallback." },
     { who: "pi", title: "Move a Pi project's configuration", cmd: "pi-code migrate ~/projects/app --dry-run\npi-code migrate ~/projects/app",

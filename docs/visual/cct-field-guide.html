@@ -423,7 +423,7 @@ td.num.hi { color: var(--ok); font-weight: 500; }
         { id: "scripts", t: "scripts/", path: true, s: "setup.sh, cct, session-analytics, the auto-build driver, the review runner",
           body: function () {
             return sec("The commands you run from the checkout", kv([
-                ["setup.sh", "Installs a tool's harness, and re-syncs it after " + c("git pull") + " with " + c("--sync") + "."],
+                ["setup.sh", "Installs a tool's harness, and with " + c("--sync") + " re-syncs it after you update the checkout."],
                 ["cct", "The front door. The " + c("cct") + " in " + c("~/.local/bin") + " is a shim that runs this file."],
                 ["session-analytics", "Ingests transcripts, runs the judge, and starts the API and Harness Studio."],
                 ["auto-build-loop.sh", "The unattended build driver behind " + c("cct build") + "."],
@@ -443,7 +443,7 @@ td.num.hi { color: var(--ok); font-weight: 500; }
               p(goto("studio", "Open the Harness Studio tab"));
           } }
       ],
-      via: { code: "./scripts/setup.sh --claude-code", text: "installs the harness on your machine. Run it again with --sync after git pull." }
+      via: { code: "./scripts/setup.sh --claude-code", text: "installs the harness on your machine. Run it again with --sync after you update the checkout." }
     },
     {
       key: "On your machine", name: "Installed once", where: "your home directory",
@@ -486,8 +486,10 @@ td.num.hi { color: var(--ok); font-weight: 500; }
                 ["session-analytics.*", "The analytics config file, the SQLite store and the graph."],
                 ["pi/, config.toml", "The Pi runtime and its global configuration."]
               ])) +
-              sec("Upgrading from 2.0", p("First refresh every adapter you installed (" + c("./scripts/setup.sh --sync --claude-code") + ", adding " + c("--pi") + " if you use " + c("pi-code") + ") and close running " + c("pi-code") + " sessions. An older " + c("pi-code") + " still points at the old home and would recreate it after the move.") +
-                cmd("cct home                      # what is still read from ~/.code-copilot-team\ncct home migrate --dry-run    # what would move\ncct home migrate") +
+              sec("Upgrading from 2.0", p("First switch the checkout to 2.1.0 and refresh every adapter you installed, adding " + c("--pi") + " if you use " + c("pi-code") + ". The 2.0 Quick Start cloned a tag, so the checkout is on no branch and " + c("git pull") + " fails there; a checkout that follows " + c("master") + " runs " + c("git pull --ff-only") + " in place of the first two lines.") +
+                cmd("git fetch origin tag v2.1.0\ngit switch --detach v2.1.0\n./scripts/setup.sh --sync --claude-code") +
+                p("Close running " + c("pi-code") + " sessions before the move: an older " + c("pi-code") + " still points at the old home and would recreate it.") +
+                cmd("cct home                     # what is still read from ~/.code-copilot-team\ncct home migrate --dry-run    # what would move\ncct home migrate") +
                 p("On the same filesystem " + c("migrate") + " moves each entry. With " + c("CCT_HOME") + " on another filesystem it copies each entry, keeps the old one, exits 1 and says what to check and remove by hand. The 2.1.x line still reads the old home as a fallback; 2.2 removes it.")) +
               more([doc("docs/cct-home.md", "The CCT home")]);
           } },
