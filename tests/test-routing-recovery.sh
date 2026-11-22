@@ -965,7 +965,15 @@ printf '{"schema_version":2,"profile":"advisory","routing":{"recovery":{"wake_en
     > "$WK/default-wake.json"
 printf '#!/usr/bin/env bash\ncat "$FIXTURE"\nexit 1\n' > "$WK/blocked.sh"
 printf '#!/usr/bin/env bash\nsleep 8\nexit 0\n' > "$WK/slow.sh"
-chmod +x "$WK/blocked.sh" "$WK/slow.sh"
+# held.sh <dir>: the harness for cases that act on a LIVE supervisor. It
+# creates <dir>/started when it begins and runs until <dir>/release appears
+# (about a minute at most). The supervisor records the run's profile and status in
+# run.json AFTER it takes the run lock and BEFORE it launches the harness, so
+# a case that rewrites run.json once the lock exists can have that rewrite
+# undone; waiting for "started" cannot. Releasing it, rather than racing a
+# fixed sleep, keeps the run live for every tick the case makes.
+printf '#!/usr/bin/env bash\n: > "$1/started"\nfor _ in $(seq 1 600); do [[ -e "$1/release" ]] && exit 0; sleep 0.1; done\nexit 0\n' > "$WK/held.sh"
+chmod +x "$WK/blocked.sh" "$WK/slow.sh" "$WK/held.sh"
 WFIX="$SCRIPT_DIR/fixtures/routing/claude-weekly-limit.out"
 
 # A live supervisor owns recovery for the run it is supervising. External
@@ -1317,17 +1325,20 @@ cp "$WK/default-wake.json" "$WK/live/specs/demo-live/automation.json"
 ( cd "$WK/live" && git init -q 2>/dev/null
   git config user.email t@t && git config user.name t
   git add -A >/dev/null 2>&1 && git commit -qm fixture >/dev/null 2>&1 ) || true
+mkdir -p "$WK/live-harness"
 ( set +e; cd "$REPO_DIR"
-  env CCT_SUPERVISOR_HARNESS_CMD="bash '$WK/slow.sh'" CCT_SUPERVISOR_SLEEP=true \
+  env CCT_SUPERVISOR_HARNESS_CMD="bash '$WK/held.sh' '$WK/live-harness'" CCT_SUPERVISOR_SLEEP=true \
       CCT_ROUTING_REGISTRY="$TK/reg.toml" CCT_ROUTING_STATE="$WK/live-state.json" \
       bash "$SUPV" demo-live --routing --worktree "$WK/live" --profile unattended \
       >/dev/null 2>&1 ) &
 LIVE_LOCK="$WK/live/.cct/supervisor/demo-live/routing-run.lock"
 LIVE_WAIT=0
-while [[ ! -d "$LIVE_LOCK" && "$LIVE_WAIT" -lt 100 ]]; do sleep 0.1; LIVE_WAIT=$((LIVE_WAIT+1)); done
+# The harness, not the lock: the supervisor's pre-launch write sets
+# status=running and would undo the rewrite below.
+while [[ ! -e "$WK/live-harness/started" && "$LIVE_WAIT" -lt 300 ]]; do sleep 0.1; LIVE_WAIT=$((LIVE_WAIT+1)); done
 LIVE_PID=$(cat "$LIVE_LOCK/pid" 2>/dev/null || echo "")
-assert "runlock: a live routed supervisor holds an owner-aware run lock" \
-    bash -c "[[ '$LIVE_PID' =~ ^[0-9]+$ ]] && kill -0 '$LIVE_PID' 2>/dev/null"
+assert "runlock: a live routed supervisor holds an owner-aware run lock (its harness has started)" \
+    bash -c "[[ -e '$WK/live-harness/started' && '$LIVE_PID' =~ ^[0-9]+$ ]] && kill -0 '$LIVE_PID' 2>/dev/null"
 LRUN="$WK/live/.cct/supervisor/demo-live/run.json"
 jq '.status="failed" | .last_reason="routing_no_eligible_profile: blocked" | .routing_wake.claimed=null' \
     "$LRUN" > "$WK/live.tmp" && mv "$WK/live.tmp" "$LRUN"
@@ -1341,6 +1352,7 @@ SECOND=$( set +e; cd "$REPO_DIR"
         bash "$SUPV" demo-live --routing --worktree "$WK/live" --profile unattended 2>&1 )
 assert "runlock: a second supervisor on the same ledger refuses too" \
     grep -q "already running feature" <<< "$SECOND"
+: > "$WK/live-harness/release"
 wait
 assert "runlock: the lock is released when that supervisor exits" \
     bash -c "[[ ! -d '$LIVE_LOCK' ]]"
@@ -1619,17 +1631,20 @@ data_policy = "approved-cloud"
 credential_mode = "claude-login"
 FEOF
 recovered "$FB/state.json"
+mkdir -p "$FB/harness"
 ( set +e; cd "$REPO_DIR"
-  env CCT_SUPERVISOR_HARNESS_CMD="bash '$WK/slow.sh'" CCT_SUPERVISOR_SLEEP=true \
+  env CCT_SUPERVISOR_HARNESS_CMD="bash '$WK/held.sh' '$FB/harness'" CCT_SUPERVISOR_SLEEP=true \
       CCT_ROUTING_REGISTRY="$TK/reg.toml" CCT_ROUTING_STATE="$FB/sup-state.json" \
       bash "$SUPV" demo-fb --routing --worktree "$FB/wt" --profile unattended \
       >/dev/null 2>&1 ) &
 FBLED="$FB/wt/.cct/supervisor/demo-fb"
 FBW=0
-while [[ ! -d "$FBLED/routing-run.lock" && "$FBW" -lt 100 ]]; do sleep 0.1; FBW=$((FBW+1)); done
+# The harness, not the lock: the supervisor's pre-launch write records its
+# own profile (alpha) and would undo the "beta" rewrite below.
+while [[ ! -e "$FB/harness/started" && "$FBW" -lt 300 ]]; do sleep 0.1; FBW=$((FBW+1)); done
 FBRUN="$FBLED/run.json"
-assert "failback: (fixture) a REAL supervisor is alive and holds the run lock" \
-    bash -c "P=\$(cat '$FBLED/routing-run.lock/pid' 2>/dev/null); [[ \"\$P\" =~ ^[0-9]+\$ ]] && kill -0 \"\$P\" 2>/dev/null"
+assert "failback: (fixture) a REAL supervisor is alive, holds the run lock and has started its harness" \
+    bash -c "P=\$(cat '$FBLED/routing-run.lock/pid' 2>/dev/null); [[ -e '$FB/harness/started' && \"\$P\" =~ ^[0-9]+\$ ]] && kill -0 \"\$P\" 2>/dev/null"
 jq '.routing_profile = "beta" | .status = "running"' "$FBRUN" > "$FB/t.json" && mv "$FB/t.json" "$FBRUN"
 FBTICK() { ( set +e; cd "$REPO_DIR"
     CCT_ROUTING_REGISTRY="$FB/reg.toml" CCT_ROUTING_STATE="${1:-$FB/state.json}" \
@@ -1662,6 +1677,7 @@ FBTICK >/dev/null 2>&1
 assert "failback: a run ALREADY on the preferred profile is never marked" \
     bash -c "[[ ! -e '$FBM' ]]"
 jq '.routing_profile = "beta"' "$FBRUN" > "$FB/t.json" && mv "$FB/t.json" "$FBRUN"
+: > "$FB/harness/release"
 wait                     # the real supervisor exits; its run lock goes
 assert "failback: (fixture) the supervisor has exited and released the lock" \
     bash -c "[[ ! -d '$FBLED/routing-run.lock' ]]"
