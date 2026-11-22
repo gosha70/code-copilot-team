@@ -17,6 +17,25 @@ SELECT_LIB="$REPO_DIR/scripts/lib/routing-select.sh"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/cct-rrec.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
+# Isolation (#482). A case that set no probe command of its own reached the
+# real launcher: a tick that found a due profile started a claude-code session
+# and appended a fixture record to the invoking user's probe ledger. Every case
+# now inherits a canary that fails the way an unreachable endpoint does, with
+# nothing to classify, and a ledger under $TMP; a case that needs another sets
+# its own. The two checks at the end compare the invoking home with this
+# snapshot.
+INVOKING_LEDGER="$( ( source "$REPO_DIR/scripts/lib/cct-home.sh"; cct_home_path routing-probe-ledger.json ) 2>/dev/null )"
+INVOKING_LEDGER="${INVOKING_LEDGER:-$HOME/.cct/routing-probe-ledger.json}"
+file_sig() { if [[ -f "$1" ]]; then cksum < "$1"; else echo absent; fi; }
+probe_logs() { ls "$HOME"/.claude/logs/headless-cct-probe.* 2>/dev/null | sort; }
+INVOKING_LEDGER_SIG="$(file_sig "$INVOKING_LEDGER")"
+INVOKING_PROBE_LOGS="$(probe_logs)"
+mkdir -p "$TMP/default-probe"
+printf '#!/usr/bin/env bash\ncat > /dev/null\necho "test default canary: this case set no probe command" >&2\nexit 1\n' \
+    > "$TMP/default-probe/unreachable.sh"
+export CCT_ROUTING_PROBE_CMD="bash $TMP/default-probe/unreachable.sh"
+export CCT_ROUTING_PROBE_LEDGER="$TMP/default-probe/ledger.json"
+
 PASS=0; FAIL=0
 assert() {
     local name="$1"; shift
@@ -1847,6 +1866,12 @@ assert_eq "enable: a scheduler cannot claim an auth-disabled profile" "" \
     "$(CCT_ROUTING_STATE="$ENSTATE" bash -c "source '$SLIB'; rs_claim_due \$(date -u +%s)" 2>/dev/null)"
 assert "enable: late success evidence cannot race auth-disabled back to healthy" \
     bash -c "! CCT_ROUTING_STATE='$ENSTATE' bash -c \"source '$SLIB'; rs_mark_success late-success alpha\" >/dev/null 2>&1 && [[ \$(jq -r '.profiles.alpha.state' '$ENSTATE') == disabled ]]"
+
+# Isolation (#482): the run leaves the invoking user's home as it found it.
+assert_eq "isolation: the invoking user's probe ledger is unchanged" \
+    "$INVOKING_LEDGER_SIG" "$(file_sig "$INVOKING_LEDGER")"
+assert_eq "isolation: no launcher log of a probe appeared in the invoking home" \
+    "$INVOKING_PROBE_LOGS" "$(probe_logs)"
 
 echo ""
 echo "========================================="
