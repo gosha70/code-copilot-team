@@ -384,13 +384,13 @@ if command -v ruby >/dev/null 2>&1; then
   # every commit after a release tag hit the guard, and the real dist/ was
   # written (#497). `git stash create` commits the working tree without touching
   # the stash list or the checkout, and prints nothing when the tree is clean.
+  # Untracked files are left out, as they are from a release.
   REL_REPO="$TMP/release-repo"
   REL_GIT=(git -C "$REL_REPO" -c user.name=cct-test -c user.email=cct-test@example.invalid
            -c commit.gpgsign=false -c tag.gpgsign=false -c core.hooksPath=/dev/null)
-  mkdir -p "$REL_REPO"
-  REL_REV=$(git -C "$REPO_DIR" stash create 2>/dev/null || true)
-  git -C "$REPO_DIR" archive "${REL_REV:-HEAD}" | tar -xf - -C "$REL_REPO"
   git -c init.defaultBranch=main init -q "$REL_REPO"
+  REL_REV=$(git -C "$REPO_DIR" stash create)
+  git -C "$REPO_DIR" archive "${REL_REV:-HEAD}" | tar -xf - -C "$REL_REPO"
   "${REL_GIT[@]}" add -A -f
   "${REL_GIT[@]}" commit -q -m "release fixture"
   assert "prepare-release.sh runs offline and produces artifacts" \
