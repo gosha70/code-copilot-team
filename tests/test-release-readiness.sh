@@ -60,6 +60,10 @@ check() {
   fi
 }
 warn() { echo "  WARN: $1"; WARN=$((WARN + 1)); }
+# A command's output, indented under the FAIL line it explains.
+show_output() {
+  if [[ -n "$1" ]]; then printf '%s\n' "$1" | sed 's/^/      | /'; fi
+}
 # A gate that owns its own reporting: run it, judge it by exit code only.
 # A failing gate prints what it printed, so the reason is in this log and
 # not only in a re-run (#519).
@@ -74,12 +78,9 @@ gate() {
     show_output "$out"
   fi
 }
-# Indented under the FAIL line it explains.
-show_output() {
-  if [[ -n "$1" ]]; then printf '%s\n' "$1" | sed 's/^/      | /'; fi
-}
-# This version's CHANGELOG section, as prepare-release.sh extracts it: the
-# lines after `## [X.Y.Z]`, up to the next `## [` heading.
+# This version's CHANGELOG section: the lines after `## [X.Y.Z]`, up to the
+# next `## [` heading. Keep it in step with the awk in step 4 of
+# scripts/prepare-release.sh, which writes dist/RELEASE_NOTES.md.
 changelog_section() {
   awk -v h="## [$1]" 'index($0, h) == 1 { grab = 1; next } grab && /^## \[/ { exit } grab { print }' CHANGELOG.md
 }
@@ -234,7 +235,7 @@ done
 # A release may ship no new feature, so nothing has to carry this version.
 # What a version bump must not leave behind is a feature still marked
 # `since: unreleased`, which would ship under that label (#519).
-UNRELEASED=$(grep -nE "^[[:space:]]*since:[[:space:]]*[\"']?unreleased[\"']?[[:space:]]*\$" shared/features/catalog.yaml)
+UNRELEASED=$(grep -nE "^[[:space:]]*since:[[:space:]]*[\"']?unreleased[\"']?([[:space:]]+#.*)?[[:space:]]*\$" shared/features/catalog.yaml)
 check "no catalog entry is since: unreleased" "[[ -z \"\$UNRELEASED\" ]]" \
   "shared/features/catalog.yaml line $(cut -d: -f1 <<<"$UNRELEASED" | paste -sd, -)"
 RC=0; bash scripts/cct no-such-command >/dev/null 2>&1 || RC=$?
