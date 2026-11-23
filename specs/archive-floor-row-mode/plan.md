@@ -48,8 +48,10 @@ archive not re-run. Session analysis then carries 5 of 13 canaries, Ask
   session's current and recorded mode. `archived_text(session, text,
   row_mode)` and `archive_floors(session, row_mode)` decide an archived
   row by its own mode against the project's current one, so a row written
-  under a looser mode leaves as the metadata-only marker. A row with no
-  recorded mode takes the session's. The session-level methods are
+  under a looser mode leaves as the metadata-only marker. A row with no,
+  an empty, or an unknown recorded mode fails closed: it counts as
+  `none`, never as the session's mode, which a re-ingest may have made
+  stricter than the row (since `6de5f3e`). The session-level methods are
   unchanged.
 - **D2. In every path that applies the floor and reads `trace_document`:**
   - `build_transcript`, which serves session analysis and Ask
