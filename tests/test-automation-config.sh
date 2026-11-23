@@ -600,6 +600,21 @@ assert "schema loop_timeout_sec is integer type" \
 assert "schema loop_timeout_sec has minimum 1" \
     jq -e '.properties.review.properties.loop_timeout_sec.minimum == 1' "$SCHEMA"
 
+# #504: diff_max_lines is a count like the two above.
+w rev5.json '{"review":{"diff_max_lines":1.5}}'
+assert_rejects "fractional diff_max_lines is rejected" "$TMP/rev5.json" "positive integer"
+
+w rev6.json '{"review":{"diff_max_lines":0}}'
+assert_rejects "zero diff_max_lines is rejected" "$TMP/rev6.json" "positive integer"
+
+w rev7.json '{"review":{"diff_max_lines":6000}}'
+assert "a positive diff_max_lines is accepted" bash "$V" "$TMP/rev7.json"
+
+assert "schema diff_max_lines is integer type" \
+    jq -e '.properties.review.properties.diff_max_lines.type == "integer"' "$SCHEMA"
+assert "schema diff_max_lines has minimum 1" \
+    jq -e '.properties.review.properties.diff_max_lines.minimum == 1' "$SCHEMA"
+
 
 # ── routing (#248, increment A of #109): trust-asymmetric repo block ──
 # A repository may only NARROW user-registry authority — never create

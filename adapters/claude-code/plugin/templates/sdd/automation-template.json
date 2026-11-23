@@ -30,7 +30,8 @@
       }
     ],
     "max_rounds": 5,
-    "loop_timeout_sec": 900
+    "loop_timeout_sec": 900,
+    "diff_max_lines": 500
   },
   "caps": {
     "wall_clock_sec": 14400,

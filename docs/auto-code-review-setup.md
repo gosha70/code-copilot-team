@@ -207,7 +207,8 @@ or fall back:
     { "provider": "deepseek", "specialization": "correctness", "scope": "both", "gating": true }
   ],
   "max_rounds": 3,
-  "loop_timeout_sec": 600
+  "loop_timeout_sec": 600,
+  "diff_max_lines": 4000
 }
 ```
 
@@ -235,11 +236,19 @@ recovery on an inconclusive verdict.
 The runner shows the reviewer at most `CCT_REVIEW_DIFF_MAX_LINES` lines
 of diff (default 500). A normal small feature exceeds that; a reviewer
 shown a truncated diff will, if honest, answer INCONCLUSIVE (run 6,
-2026-09-12). Set the limit for the session or the run:
+2026-09-12). For an auto-build run, set `review.diff_max_lines` in
+`automation.json` (§5.2): it is frozen with the run's config, so a
+`--resume` keeps it. The variable still wins when set, for the session or
+the run:
 
 ```bash
 CCT_REVIEW_DIFF_MAX_LINES=4000 scripts/auto-build-loop.sh my-feature
 ```
+
+An inconclusive stop gives the diff's line count against the limit and
+where the limit came from. A parked run keeps the `review.diff_max_lines`
+it started with, so to raise the limit for that run, resume with the
+variable set; the variable itself is read again at every start and resume.
 
 DeepSeek's context is a million tokens; 4000 lines is not a strain.
 
@@ -265,7 +274,7 @@ DeepSeek's context is a million tokens; 4000 lines is not a strain.
 2. `providers-health.sh --provider <name>` → usable.
 3. `review-round-runner.sh . --probe --peer <name> --out f.json` → exit 0.
 4. `peer_for.claude` and `fallback_chain.claude` set.
-5. `CCT_REVIEW_DIFF_MAX_LINES` sized for your diffs.
+5. `review.diff_max_lines` (or `CCT_REVIEW_DIFF_MAX_LINES`) sized for your diffs.
 6. Rates set if the provider bills per token.
 7. `--peer-review` on the session, or the `review` block in
    `automation.json` for a run.

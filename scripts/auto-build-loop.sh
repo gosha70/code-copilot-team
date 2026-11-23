@@ -826,6 +826,26 @@ load_config() {
         echo "[auto-build] WARNING: review.loop_timeout_sec '$REVIEW_LOOP_TIMEOUT_SEC' is not a positive integer — using 900" >&2
         REVIEW_LOOP_TIMEOUT_SEC=900
     fi
+    # #504: the review diff limit. CCT_REVIEW_DIFF_MAX_LINES wins, then
+    # review.diff_max_lines from the snapshot (frozen at launch, so a resumed
+    # run keeps it without the variable), then the runner's 500. The source
+    # is kept for the review_inconclusive stop and its resume.
+    REVIEW_DIFF_MAX_LINES=500
+    REVIEW_DIFF_MAX_LINES_SOURCE="the default"
+    local _diff_cfg
+    _diff_cfg=$(cfg '.review.diff_max_lines' '')
+    if [[ "$_diff_cfg" =~ ^[1-9][0-9]*$ ]]; then
+        REVIEW_DIFF_MAX_LINES="$_diff_cfg"
+        REVIEW_DIFF_MAX_LINES_SOURCE="from review.diff_max_lines in automation.json"
+    elif [[ -n "$_diff_cfg" ]]; then
+        echo "[auto-build] WARNING: review.diff_max_lines '$_diff_cfg' is not a positive integer — ignoring it" >&2
+    fi
+    if [[ "${CCT_REVIEW_DIFF_MAX_LINES:-}" =~ ^[1-9][0-9]*$ ]]; then
+        REVIEW_DIFF_MAX_LINES="$CCT_REVIEW_DIFF_MAX_LINES"
+        REVIEW_DIFF_MAX_LINES_SOURCE="from CCT_REVIEW_DIFF_MAX_LINES"
+    elif [[ -n "${CCT_REVIEW_DIFF_MAX_LINES:-}" ]]; then
+        echo "[auto-build] WARNING: CCT_REVIEW_DIFF_MAX_LINES '$CCT_REVIEW_DIFF_MAX_LINES' is not a positive integer — ignoring it" >&2
+    fi
     TEST_CMD=$(cfg '.test.command' '')
     TEST_TIMEOUT=$(cfg '.test.timeout_sec' '1200')
     # T4: the verification.coverage block governs contract initialisation.
@@ -4774,6 +4794,7 @@ run_advisory_pass() {
         # — this pass debits ONE invocation and files findings under $_prov.
         ( cd "$PROJECT_DIR" && CCT_REVIEW_DIR="$scratch" CCT_REVIEW_COLLAB_DIR="$scratch/collab" \
             CCT_REVIEW_BASE_REF="$base_ref" CCT_REVIEW_MAX_ROUNDS=1 CCT_REVIEW_ADVISORY=true \
+            CCT_REVIEW_DIFF_MAX_LINES="$REVIEW_DIFF_MAX_LINES" \
             bash "$SCRIPT_DIR/review-round-runner.sh" "$PROJECT_DIR" ) >/dev/null 2>&1 || true
         local frf
         frf=$(ls "$scratch"/findings-round-*.json 2>/dev/null | sort -V | tail -1)
@@ -4875,6 +4896,7 @@ run_review_loop() {
         ( cd "$PROJECT_DIR" && CCT_REVIEW_BASE_REF="$base_ref" \
             CCT_REVIEW_TIMEOUT_SEC="${CCT_REVIEW_TIMEOUT_SEC:-$REVIEW_LOOP_TIMEOUT_SEC}" \
             CCT_REVIEW_MAX_ROUNDS="${CCT_REVIEW_MAX_ROUNDS:-$REVIEW_MAX_ROUNDS}" \
+            CCT_REVIEW_DIFF_MAX_LINES="$REVIEW_DIFF_MAX_LINES" \
             CCT_REVIEW_COLLAB_DIR="${CCT_REVIEW_COLLAB_DIR:-$SPEC_DIR/collaboration}" \
             bash "$SCRIPT_DIR/review-round-runner.sh" "$PROJECT_DIR" ) >&2 || rc=$?
         local round
@@ -4995,11 +5017,22 @@ run_review_loop() {
                 _rv_verdict=$(jq -r '.verdict // ""' "$findings" 2>/dev/null || echo "")
                 _rv_blocking=$(jq -r '[.findings[]? | select(.severity == "blocking")] | length' "$findings" 2>/dev/null || echo 0)
                 if [[ "$_rv_verdict" == "INCONCLUSIVE" && "${_rv_blocking:-0}" -eq 0 ]]; then
-                    local _rv_prov _rv_n
+                    local _rv_prov _rv_n _rv_lines _rv_size
                     _rv_prov=$(jq -r '.reviewer_provider // "?"' "$findings" 2>/dev/null || echo "?")
                     _rv_n=$(jq -r '.findings | length' "$findings" 2>/dev/null || echo 0)
+                    # #504: the diff's size against the limit the runner
+                    # applied, counted the way the runner truncates. A diff
+                    # that cannot be taken is said so, never counted as 0.
+                    _rv_lines=$(set -o pipefail; git -C "$PROJECT_DIR" diff "$base_ref" 2>/dev/null | wc -l | tr -d ' ') || _rv_lines=""
+                    if [[ -z "$_rv_lines" ]]; then
+                        _rv_size="The diff against $base_ref could not be measured; the limit was $REVIEW_DIFF_MAX_LINES lines ($REVIEW_DIFF_MAX_LINES_SOURCE)"
+                    elif [[ "$_rv_lines" -gt "$REVIEW_DIFF_MAX_LINES" ]]; then
+                        _rv_size="The diff had $_rv_lines lines against a limit of $REVIEW_DIFF_MAX_LINES ($REVIEW_DIFF_MAX_LINES_SOURCE), so the reviewer saw only the first $REVIEW_DIFF_MAX_LINES"
+                    else
+                        _rv_size="The diff had $_rv_lines lines against a limit of $REVIEW_DIFF_MAX_LINES ($REVIEW_DIFF_MAX_LINES_SOURCE), so the reviewer saw all of it"
+                    fi
                     dispose "review_inconclusive" \
-                        "reviewer '$_rv_prov' could not judge phase $n round $round (INCONCLUSIVE, $_rv_n finding(s), none blocking) — fix what kept it from judging (the diff it was shown: CCT_REVIEW_DIFF_MAX_LINES, default 500 lines; the provider; the request) and rerun the review; no fix session is run on a verdict that judged nothing" \
+                        "reviewer '$_rv_prov' could not judge phase $n round $round (INCONCLUSIVE, $_rv_n finding(s), none blocking). $_rv_size. Fix what kept it from judging, then rerun the review: the limit (resume with CCT_REVIEW_DIFF_MAX_LINES set; this run keeps the review.diff_max_lines it started with), the provider, or the request. No fix session is run on a verdict that judged nothing" \
                         "$(jq -n --arg f "$findings" --arg p "$_rv_prov" '{findings_file: $f, reviewer: $p}')"
                 fi
                 set_status "addressing-findings"
@@ -5785,7 +5818,7 @@ resume_parked() {
                 mv "$PROJECT_DIR/.cct/review" "$_ri_stale"
                 journal "review_state_reset" "review state of the inconclusive round set aside at ${_ri_stale#$PROJECT_DIR/}; the review runs again"
             fi
-            resolve_escalation "$esc_file" "reviewer chain healthy; the review runs again over the same build commit (diff limit: CCT_REVIEW_DIFF_MAX_LINES=${CCT_REVIEW_DIFF_MAX_LINES:-500})"
+            resolve_escalation "$esc_file" "reviewer chain healthy; the review runs again over the same build commit (diff limit: $REVIEW_DIFF_MAX_LINES lines, $REVIEW_DIFF_MAX_LINES_SOURCE)"
             ;;
         runner_error)
             # A runner crash can leave findings newer than state.json. Do not
