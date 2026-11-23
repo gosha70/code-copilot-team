@@ -379,6 +379,14 @@ class TestExportFloorRules(unittest.TestCase):
         # time instead of having the floor decide its columns; fail here.
         self.assertEqual(set(exp._FLOOR_RULES), set(C.EXPORT_DATA_TABLES))
 
+    def test_a_table_joined_to_its_session_carries_no_text_and_no_mode(self) -> None:
+        # ExportFloor.rows skips the join when nothing is opted out, which is
+        # only safe while a joined table has nothing a tightening would change.
+        for table, rule in exp._FLOOR_RULES.items():
+            if rule.session_idx is None:
+                with self.subTest(table=table):
+                    self.assertEqual((rule.text_idx, rule.mode_idx), ((), None))
+
 
 class _TwoProjectStore(RegistryResetTestCase):
     """Two sessions of two projects in one store: the canary corpus (project
