@@ -363,6 +363,10 @@ TBL_HEURISTIC_LABEL = "heuristic_label"
 # Session-level LLM analysis (#65 Phase 1). The kind names cross the
 # config-data / API / Studio boundary, so they live here.
 TBL_SESSION_ANALYSIS = "session_analysis"
+#: #515: the loosest mode of the session text each stored analysis's judge
+#: was sent, one row per (session_ref, kind). An analysis with no row was
+#: stored before schema 14 and counts as `none`.
+TBL_SESSION_ANALYSIS_MODE = "session_analysis_mode"
 ANALYSIS_KIND_TUNING = "tuning"
 ANALYSIS_KIND_COACHING = "coaching"
 ANALYSIS_KIND_EFFICIENCY = "efficiency"

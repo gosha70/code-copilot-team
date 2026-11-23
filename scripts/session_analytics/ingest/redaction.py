@@ -127,6 +127,14 @@ def safe_error_type(text: str, mode: str) -> str:
 #   from its sessions leaves the machine, not even a marker or an id.
 
 
+def loosest_mode(modes: Any) -> Optional[str]:
+    """The loosest of ``modes``, or ``None`` when there are none. A mode
+    that is missing or unknown counts as `none`: what it describes may
+    have been stored under the loosest mode (#515)."""
+    ranked = [m if m in C.REDACTION_STRICTNESS else C.REDACT_NONE for m in modes]
+    return min(ranked, key=C.REDACTION_STRICTNESS.index) if ranked else None
+
+
 def outbound_mode(recorded: Optional[str], current: str, ingest_off: bool) -> Optional[str]:
     """The mode a session's text leaves the machine under, or ``None`` when
     the session must not leave it at all (its project is opted out)."""
@@ -297,11 +305,12 @@ class OutboundPolicy:
         written = row_mode if row_mode is not None else C.REDACT_NONE
         return written, stricter_mode(written, current)
 
-    def archived_text(self, session_id: Any, text: Optional[str], row_mode: Optional[str]) -> Optional[str]:
-        """A kept session's ARCHIVED text as it may leave the machine, judged
-        by the trace row's own recorded mode against the project's current
-        mode: the session's recorded mode can be newer than the row."""
-        floor = self._archived_floor(session_id, row_mode)
+    def recorded_text(self, session_id: Any, text: Optional[str], mode: Optional[str]) -> Optional[str]:
+        """A kept session's stored text as it may leave the machine, judged
+        by the mode that TEXT was recorded under against the project's
+        current mode. That mode can be older than the session's recorded
+        one: an archived row (#514) or a stored analysis (#515)."""
+        floor = self._archived_floor(session_id, mode)
         if floor is None:
             return self.text(session_id, text)
         written, outbound = floor
@@ -311,13 +320,36 @@ class OutboundPolicy:
             return text
         return redact_text(text, C.REDACT_METADATA_ONLY)
 
-    def archive_floors(self, session_id: Any, row_mode: Optional[str]) -> bool:
-        """Whether an archived row written under ``row_mode`` leaves as a
-        marker (a search hit on it is skipped, as a tightened session's is)."""
-        floor = self._archived_floor(session_id, row_mode)
+    def recorded_floors(self, session_id: Any, mode: Optional[str]) -> bool:
+        """Whether text recorded under ``mode`` leaves as a marker."""
+        floor = self._archived_floor(session_id, mode)
         if floor is None:
             return self.floors(session_id)
         return floor[1] != floor[0]
+
+    def archived_text(self, session_id: Any, text: Optional[str], row_mode: Optional[str]) -> Optional[str]:
+        """A kept session's ARCHIVED text, judged by its trace row's own mode."""
+        return self.recorded_text(session_id, text, row_mode)
+
+    def archive_floors(self, session_id: Any, row_mode: Optional[str]) -> bool:
+        """Whether an archived row written under ``row_mode`` leaves as a
+        marker (a search hit on it is skipped, as a tightened session's is)."""
+        return self.recorded_floors(session_id, row_mode)
+
+    def recorded_mode(self, session_id: Any) -> Optional[str]:
+        """The mode a kept session was recorded under, or ``None``."""
+        try:
+            return self._recorded.get(int(session_id))
+        except (TypeError, ValueError):
+            return None
+
+    def leaving_mode(self, session_id: Any, mode: Optional[str]) -> str:
+        """The mode text recorded under ``mode`` actually leaves under:
+        metadata-only when it leaves as the marker, else its own (a missing
+        mode counts as `none`, the loosest)."""
+        if self.recorded_floors(session_id, mode):
+            return C.REDACT_METADATA_ONLY
+        return mode if mode is not None else C.REDACT_NONE
 
     def project_filter_sql(self, column: str) -> tuple[str, tuple]:
         """A WHERE fragment leaving out the opted-out projects' rows, for an

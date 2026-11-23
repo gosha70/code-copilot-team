@@ -65,6 +65,89 @@ class TheFloorAppliesWithoutReingest(RegistryResetTestCase):
                 self.assertEqual(modes, (M, {C.REDACT_NONE}))
                 K.assert_no_leak(self, captured, M)
 
+    def test_an_analysis_stored_before_a_tightening_and_reingest_sends_no_canary(self):
+        """#515: an analysis stored while the project was looser quotes
+        what the judge was sent, in its result or, when the answer did not
+        parse, in its error. After a tightening and `ingest --full` the
+        session is re-recorded under the stricter mode, so a floor judged
+        by the session sees nothing to do; the stored text must still leave
+        as the marker, with or without an archive."""
+        for archive in (True, False):
+            for stored in ("result", "error"):
+                with self.subTest(archive=archive, stored=stored):
+                    dsn = self.sqlite_dsn()
+                    with K.corpus() as (source, project):
+                        with K.user_config(K.config_for(project, project_mode=C.REDACT_NONE, archive=archive)):
+                            sid = K.ingest_corpus(dsn, source)
+                            quoted = K.store_quoting_analysis(dsn, sid, unparseable=stored == "error")
+                            before = K.capture_ask(dsn, sid)["ask session_analyses"]
+                        with K.user_config(K.config_for(project, project_mode=M, archive=archive)):
+                            K.ingest_corpus(dsn, source, archive=False)
+                            after = K.capture_ask(dsn, sid)["ask session_analyses"]
+                    # The positive control: under none the stored text carries the quote.
+                    self.assertIn(quoted, before)
+                    K.assert_no_leak(self, {"ask session_analyses": after}, M)
+
+    def test_an_analysis_with_no_recorded_mode_counts_as_none(self):
+        """#515: an analysis stored before schema 14 has no recorded mode.
+        It counts as `none`, so after a tightening and `ingest --full` it
+        still leaves as the marker."""
+        dsn = self.sqlite_dsn()
+        with K.corpus() as (source, project):
+            with K.user_config(K.config_for(project, project_mode=C.REDACT_NONE)):
+                sid = K.ingest_corpus(dsn, source)
+                quoted = K.store_quoting_analysis(dsn, sid)
+            db = Database.connect(dsn)
+            try:
+                db.execute(f"DELETE FROM {C.TBL_SESSION_ANALYSIS_MODE} WHERE session_ref = ?", (sid,))
+                db.commit()
+            finally:
+                db.close()
+            with K.user_config(K.config_for(project, project_mode=M)):
+                K.ingest_corpus(dsn, source, archive=False)
+                after = K.capture_ask(dsn, sid)["ask session_analyses"]
+        self.assertNotIn(quoted, after)
+        K.assert_no_leak(self, {"ask session_analyses": after}, M)
+
+    def test_a_reingest_rewrites_tool_inputs_and_tool_errors_under_the_current_mode(self):
+        """#515's inventory rests on this. A tightening and `ingest --full`
+        rewrite a session's tool-call input previews and tool-result errors
+        under the current mode, so the session floor is right for them;
+        only archived rows and stored analyses outlive the re-ingest."""
+        dsn = self.sqlite_dsn()
+        with K.corpus() as (source, project):
+            with K.user_config(K.config_for(project, project_mode=C.REDACT_NONE)):
+                sid = K.ingest_corpus(dsn, source)
+                before = self.tool_texts(dsn, sid)
+            with K.user_config(K.config_for(project, project_mode=M)):
+                K.ingest_corpus(dsn, source, archive=False)
+                after = self.tool_texts(dsn, sid)
+        for column in ("input_preview", "error_message"):
+            with self.subTest(column=column):
+                self.assertTrue(K.present(before[column]), f"under none the corpus's {column} carries a canary")
+                self.assertEqual(K.present(after[column]), [])
+
+    @staticmethod
+    def tool_texts(dsn: str, sid: int) -> dict[str, str]:
+        """The session's stored tool-call input previews and tool-result errors."""
+        db = Database.connect(dsn)
+        try:
+            inputs = db.query(
+                "SELECT tc.input_preview FROM copilot_tool_call tc "
+                "JOIN copilot_turn t ON t.id = tc.turn_id WHERE t.session_id = ?", (sid,),
+            )
+            errors = db.query(
+                "SELECT r.error_message FROM copilot_tool_result r "
+                "JOIN copilot_tool_call tc ON tc.id = r.tool_call_id "
+                "JOIN copilot_turn t ON t.id = tc.turn_id WHERE t.session_id = ?", (sid,),
+            )
+        finally:
+            db.close()
+        return {
+            "input_preview": "\n".join(r[0] or "" for r in inputs),
+            "error_message": "\n".join(r[0] or "" for r in errors),
+        }
+
     @staticmethod
     def recorded_modes(dsn: str, sid: int) -> tuple[str, set]:
         """(the session's recorded mode, the modes its archived rows carry)."""

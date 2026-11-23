@@ -275,18 +275,30 @@ def session_analyses(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]
     for kind, row in all_analyses(ctx.db, sid).items():
         if row is None:
             out[kind] = {"status": "not run"}
-        elif row["parse_status"] != PARSE_OK:
-            out[kind] = {"status": row["parse_status"], "error": policy.text(sid, row["error"])}
-        elif policy.floors(sid):
+            continue
+        mode = row.get("redaction_mode")
+        if row["parse_status"] != PARSE_OK:
+            out[kind] = {"status": row["parse_status"], "error": _analysis_text(policy, sid, row["error"], mode)}
+        elif policy.floors(sid) or policy.recorded_floors(sid, mode):
             # A stored analysis quotes the turns it was given; a project
-            # tightened since then sends a marker in its place (#457).
+            # tightened since then sends a marker in its place (#457, #515).
             out[kind] = {
                 "status": "ok", "judge": row["judge_model"],
-                "result": policy.text(sid, json.dumps(row["result"], ensure_ascii=False)),
+                "result": _analysis_text(policy, sid, json.dumps(row["result"], ensure_ascii=False), mode),
             }
         else:
             out[kind] = {"status": "ok", "judge": row["judge_model"], "result": row["result"]}
     return out
+
+
+def _analysis_text(policy: OutboundPolicy, sid: int, text: Optional[str], mode: Optional[str]) -> Optional[str]:
+    """A stored analysis's result or error as it may leave the machine.
+    Judged by the loosest mode its judge was sent (#515), which a re-ingest
+    does not rewrite: an analysis from before that was recorded has
+    ``None``, counted as `none`. Otherwise by its session (#457)."""
+    if policy.recorded_floors(sid, mode):
+        return policy.recorded_text(sid, text, mode)
+    return policy.text(sid, text)
 
 
 def search_text(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
