@@ -575,6 +575,10 @@ class TestExportFloorColumns(_TwoProjectStore):
             rest = set(s) - {"content", "redaction_mode"}
             self.assertEqual({c: o[c] for c in rest}, {c: s[c] for c in rest})
         self.assertEqual(floor.changes[_TRACE], {**_NO_CHANGE, "reduced": len(stored)})
+        self.assertEqual(
+            floor.table_summary(_TRACE),
+            f"export: trace_documents: {_rows(len(stored))} reduced to metadata-only (project tightened since archive)",
+        )
         # The re-ingest rewrote the session's own rows, which leave as stored.
         for table in (_SESSIONS, _TURNS):
             with self.subTest(table=table):

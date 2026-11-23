@@ -47,10 +47,10 @@ floor for archived text), with items 3 and 4 of the owner's review of #513.
 
 ## Mismatches
 
-None. A wording point for review: a `trace_documents` row reduced by its own
-mode is counted under the existing reason, "(project tightened since
-ingest)". After a re-ingest, the project was tightened since the row was
-archived rather than since the last ingest.
+None. One consequence was settled here: a `trace_documents` row reduced by
+its own mode was counted under "(project tightened since ingest)", which is
+wrong after a re-ingest. That table's summary now says "(project tightened
+since archive)", and FR-6 says so; the other tables keep "since ingest".
 
 ## Verdict
 

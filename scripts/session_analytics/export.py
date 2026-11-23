@@ -341,6 +341,7 @@ class _FloorRule:
     keeps_row: bool = False  # benchmark_results: empty the link, keep the row
     run_dir_idx: Optional[int] = None  # a run directory, emptied under an opted-out path
     emptied: str = ""  # what the summary says was emptied
+    tightened_since: str = "ingest"  # when the summary says the text was stored
 
 
 _FLOOR_RULES: dict[str, _FloorRule] = {
@@ -368,6 +369,7 @@ _FLOOR_RULES: dict[str, _FloorRule] = {
         text_idx=(TRACE_DOCUMENTS_COLUMNS.index("content"),),
         mode_idx=TRACE_DOCUMENTS_COLUMNS.index("redaction_mode"),
         row_mode=True,
+        tightened_since="archive",
     ),
     C.EXPORT_TABLE_FEEDBACK: _FloorRule(session_idx=FEEDBACK_COLUMNS.index("session_ref")),
 }
@@ -488,7 +490,8 @@ class ExportFloor:
         if c.get(_DROPPED):
             parts.append(f"{_count(c[_DROPPED], 'row')} dropped (project opted out)")
         if c.get(_REDUCED):
-            parts.append(f"{_count(c[_REDUCED], 'row')} reduced to metadata-only (project tightened since ingest)")
+            since = _FLOOR_RULES[table].tightened_since
+            parts.append(f"{_count(c[_REDUCED], 'row')} reduced to metadata-only (project tightened since {since})")
         if c.get(_EMPTIED):
             parts.append(f"{_count(c[_EMPTIED], 'row')} with {_FLOOR_RULES[table].emptied} emptied (opted-out project)")
         return f"export: {table}: " + "; ".join(parts) if parts else None

@@ -50,7 +50,8 @@ as it is.
     gives, with their reasons, the counts of:
     - rows dropped, because their session's project is opted out;
     - rows reduced to `metadata-only`, because their session's project was
-      tightened since ingest: the text replaced by the marker, the
+      tightened since ingest (a `trace_documents` row: since it was
+      archived, FR-4): the text replaced by the marker, the
       `redaction_mode` set to `metadata-only`, or both, counting a row once;
     - rows with a link to an opted-out project emptied:
       `benchmark_results.session_ref` or `run_dir`, and
