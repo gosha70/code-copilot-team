@@ -536,6 +536,20 @@ def session_facets(
     }
 
 
+def archived_modes(db: Database, session_id: int) -> dict[int, Optional[str]]:
+    """{sequence_num: redaction_mode} of a session's archived transcript
+    rows. The outbound floor judges archived text by its row's own mode,
+    which `ingest --full` does not rewrite (only `archive --full` does)."""
+    return {
+        int(seq): mode
+        for seq, mode in db.query(
+            f"SELECT sequence_num, redaction_mode FROM {C.TBL_TRACE_DOCUMENT} "
+            "WHERE session_ref = ? AND source_kind = ?",
+            (session_id, C.SOURCE_KIND_COPILOT_TRANSCRIPT),
+        )
+    }
+
+
 def get_session_details(db: Database, session_id: int) -> dict[str, Any]:
     """Full turn/tool/error breakdown for one session."""
     srow = db.query_one(

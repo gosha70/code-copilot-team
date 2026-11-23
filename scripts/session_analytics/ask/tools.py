@@ -305,8 +305,13 @@ def search_text(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
         seen.add(key)
         # An opted-out session is skipped, and so is one whose project was
         # tightened after ingest: a masked snippet would still say that its
-        # stored text matched the query (#457).
-        if not policy.keeps(h["session_ref"]) or policy.floors(h["session_ref"]):
+        # stored text matched the query (#457). The archived row is judged
+        # by its own recorded mode, which `ingest --full` does not rewrite.
+        if (
+            not policy.keeps(h["session_ref"])
+            or policy.floors(h["session_ref"])
+            or policy.archive_floors(h["session_ref"], h.get("redaction_mode"))
+        ):
             continue
         hits.append({
             "session_id": h["session_ref"], "turn": h["sequence_num"],

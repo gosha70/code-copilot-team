@@ -147,6 +147,44 @@ class OutboundFloor(unittest.TestCase):
         self.assertEqual(outbound_text("kept", C.REDACT_CODE, C.REDACT_CODE), "kept")
         self.assertIsNone(outbound_text(None, C.REDACT_NONE, C.REDACT_METADATA_ONLY))
 
+    def test_archived_text_is_judged_by_its_rows_own_recorded_mode(self):
+        """After a tightening and `ingest --full` the session is re-recorded
+        under the current mode, so it is not floored, but a row archived
+        before it keeps its older mode until `archive --full`."""
+        from session_analytics.ingest.redaction import OutboundPolicy
+
+        M, N = C.REDACT_METADATA_ONLY, C.REDACT_NONE
+        policy = OutboundPolicy(current={1: M}, recorded={1: M})
+        self.assertFalse(policy.floors(1))
+        self.assertEqual(policy.text(1, "sk-secret"), "sk-secret")  # previews were re-redacted
+        self.assertTrue(policy.archived_text(1, "sk-secret", N).startswith("[redacted"))
+        self.assertTrue(policy.archive_floors(1, N))
+        # A row archived under the current mode, or a stricter one, is as stored.
+        self.assertEqual(policy.archived_text(1, "kept", M), "kept")
+        self.assertFalse(policy.archive_floors(1, M))
+        loosened = OutboundPolicy(current={2: N}, recorded={2: N})
+        self.assertEqual(loosened.archived_text(2, "[redacted 9 chars sha256:x]", M), "[redacted 9 chars sha256:x]")
+        self.assertFalse(loosened.archive_floors(2, M))
+
+    def test_an_archived_row_with_no_or_an_unknown_mode_fails_closed(self):
+        """Not the session's mode: a re-ingest may have made it stricter
+        than the row was written under."""
+        from session_analytics.ingest.redaction import OutboundPolicy
+
+        policy = OutboundPolicy(current={1: C.REDACT_METADATA_ONLY}, recorded={1: C.REDACT_METADATA_ONLY})
+        for row_mode in (None, "", "bogus"):
+            with self.subTest(row_mode=row_mode):
+                self.assertTrue(policy.archived_text(1, "sk-secret", row_mode).startswith("[redacted"))
+                self.assertTrue(policy.archive_floors(1, row_mode))
+
+    def test_a_session_the_policy_does_not_know_keeps_the_session_floor(self):
+        from session_analytics.ingest.redaction import OutboundPolicy
+
+        policy = OutboundPolicy(floored={3: (C.REDACT_NONE, C.REDACT_METADATA_ONLY)})
+        self.assertTrue(policy.archived_text(3, "sk-secret", C.REDACT_NONE).startswith("[redacted"))
+        self.assertEqual(policy.archived_text(4, "kept", C.REDACT_NONE), "kept")
+        self.assertEqual((policy.archive_floors(3, C.REDACT_NONE), policy.archive_floors(4, C.REDACT_NONE)), (True, False))
+
 
 if __name__ == "__main__":
     unittest.main()
