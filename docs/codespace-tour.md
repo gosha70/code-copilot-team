@@ -11,7 +11,7 @@ Opening a Codespace uses the Codespaces minutes of **your** GitHub account (pers
 The Codespace is a small Linux container with `bash`, `git`, `jq` and Python. When it is created it runs `adapters/claude-code/setup.sh`, the same installer the [Quick Start](../README.md#quick-start) uses, which takes about ten seconds. This page opens by itself.
 
 It opens the `master` branch (active development). The `cct` command it uses
-also ships in v2.1.0.
+also ships in v2.1.1.
 
 **Not included:** a real Claude Code or Pi session. Those need the provider's own CLI and your own credentials, and nothing here asks for either. The tour shows the harness: what it installs, how you discover it, and the rails it puts around an agent.
 

@@ -40,7 +40,7 @@ About five minutes from clone to a first session.
 
 ```bash
 # 1. Clone the latest stable release (master is unreleased, in development)
-git clone --branch v2.1.0 https://github.com/gosha70/code-copilot-team.git
+git clone --branch v2.1.1 https://github.com/gosha70/code-copilot-team.git
 cd code-copilot-team
 
 # 2. Install for your tool — see "Choose your tool" below
@@ -53,7 +53,7 @@ cct start ~/projects/my-app
 Every other install path — Pi, Codex, Cursor, Copilot, Windsurf, Aider, the
 Claude Code plugin — is in [Install options](docs/install.md).
 
-> **Released as v2.1.0.** Everything this page describes is in the latest
+> **Released as v2.1.1.** Everything this page describes is in the latest
 > release and what the Quick Start installs. `master` continues as active
 > development; read it as in-development.
 

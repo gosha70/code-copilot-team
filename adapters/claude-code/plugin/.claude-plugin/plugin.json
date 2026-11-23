@@ -1,5 +1,5 @@
 {
   "name": "cct",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Code Copilot Team: 24 skills, 14 agents, 14 commands and the SDD templates, plus hooks for file protection, git safety, auto-format, type verification, test-on-stop, context re-injection and notifications. Generated from the same sources as setup.sh; always-loaded rules, the launcher and the peer-review hooks need setup.sh."
 }

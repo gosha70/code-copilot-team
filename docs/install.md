@@ -7,7 +7,7 @@ install more than one adapter.
 
 ```bash
 # 1. Clone the latest stable release (drop --branch for unreleased master)
-git clone --branch v2.1.0 https://github.com/gosha70/code-copilot-team.git
+git clone --branch v2.1.1 https://github.com/gosha70/code-copilot-team.git
 cd code-copilot-team
 
 # 2. Install for your tool(s)
@@ -24,7 +24,7 @@ cd code-copilot-team
 
 # Update an older release clone to this one, then re-sync. A release clone is
 # on a tag, where git pull fails; a clone of master updates with git pull --ff-only.
-git fetch origin tag v2.1.0 && git switch --detach v2.1.0
+git fetch origin tag v2.1.1 && git switch --detach v2.1.1
 ./scripts/setup.sh --sync --claude-code
 
 # Once, if you installed before 2.1: move your files into the one harness home
