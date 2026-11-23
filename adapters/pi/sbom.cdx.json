@@ -5,10 +5,10 @@
   "metadata": {
     "component": {
       "type": "application",
-      "bom-ref": "pkg:github/gosha70/code-copilot-team@2.1.0",
+      "bom-ref": "pkg:github/gosha70/code-copilot-team@2.1.1",
       "name": "code-copilot-team-pi",
-      "version": "2.1.0",
-      "purl": "pkg:github/gosha70/code-copilot-team@2.1.0",
+      "version": "2.1.1",
+      "purl": "pkg:github/gosha70/code-copilot-team@2.1.1",
       "description": "Code Copilot Team — Pi adapter (advisory content + the enforced pi-code runtime).",
       "licenses": [
         {
@@ -75,7 +75,7 @@
   ],
   "dependencies": [
     {
-      "ref": "pkg:github/gosha70/code-copilot-team@2.1.0",
+      "ref": "pkg:github/gosha70/code-copilot-team@2.1.1",
       "dependsOn": [
         "pi-runtime"
       ]

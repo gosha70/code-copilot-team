@@ -10,6 +10,36 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ## [Unreleased]
 
+## [2.1.1]
+
+A privacy release for Session Analytics. After a project is tightened and its
+sessions re-ingested, archived turns and stored session analyses are judged by
+the mode they were recorded under, so neither leaves the machine as stored, and
+`session-analytics export` applies each project's current settings. It also
+stops an auto-build run that crosses its cost cap, gives a fresh install the
+same templates as `--sync`, has a second routed supervisor name the one already
+taking the run lock, and lets a run set its review diff limit in
+`automation.json`.
+
+### Upgrade notes
+
+Nothing has to be recreated. The Session Analytics store moves from schema 13
+to 14 in place.
+
+- **Update the checkout and refresh the install:**
+  `git fetch origin tag v2.1.1 && git switch --detach v2.1.1`, then
+  `./scripts/setup.sh --sync --claude-code`, adding `--pi` if you use
+  `pi-code`. The refresh installs the launcher that lists `ui-harness` under
+  *Available add-ons* in `cct templates` and refuses `cct init ui-harness`,
+  printing the copy steps from its instructions instead (#498).
+- **Re-run the session analyses Ask should quote.** Unless a project's current
+  mode is `none`, an analysis stored before the upgrade reaches Ask as the
+  metadata-only marker until it is re-run from Studio's session page. The
+  default mode is `code`, so on a default configuration that is every earlier
+  analysis. Studio's own pages still show them (#515).
+- **Scripts that run `session-analytics export` now get the filtered output
+  by default,** with `--raw` for the store as it is (#487).
+
 ### Security
 
 - **Archived text follows a project's current settings after a re-ingest.**
@@ -32,9 +62,11 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   a new table (schema 14, created in place, so no store is recreated).
   Ask judges the stored result and error by that mode against the project's
   current one.
-  - An analysis stored before this has no recorded mode and counts as
-    `none`, so under a stricter project it leaves as the metadata-only
-    marker until it is run again.
+  - An analysis stored before the upgrade has no recorded mode and counts
+    as `none`. Unless a project's current mode is `none`, Ask gets it as the
+    metadata-only marker until it is re-run from Studio's session page; on a
+    default configuration, whose mode is `code`, that is every earlier
+    analysis. Studio's own pages still show it.
   - Affects 2.1.0; until you upgrade, re-run a tightened project's analyses
     from Studio after `archive --full` (#515).
 
