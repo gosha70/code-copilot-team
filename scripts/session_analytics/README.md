@@ -354,6 +354,9 @@ Parquet (optional `pyarrow`) for spreadsheets, pandas, or DuckDB:
 
 # Parquet (needs `pip install pyarrow`) always writes to a file.
 ./scripts/session-analytics export --format parquet --table sessions --out sessions.parquet
+
+# The store as it is, without applying the projects' current settings.
+./scripts/session-analytics export --table all --raw --out ./export-raw/
 ```
 
 **Tables** (fixed, documented column order — see `export.py`):
@@ -386,14 +389,39 @@ all` always requires `--out <dir>`.
 **Redaction-safe by construction (FR-6)**: export reads ONLY the relational
 store — it never re-reads raw transcripts, so it can only ever surface what
 `ingest` already wrote. A project opted out under E8 (`ingest: "off"`) before
-its sessions were ingested has no rows in the store and is absent from every
-export. One opted out later keeps the rows it already has, and `export`
-writes them: it reads the store as it is and does not apply the current-mode
-floor that the off-machine paths do. To drop those rows, use a new, empty
-store. `redaction_mode` is
-an exported column on both `sessions` and `turns`, so an export
-self-documents its own privacy posture per row (a `redaction: none` session
-exports its raw preview — the operator's own ingest-time choice).
+its sessions were ingested has no rows in the store.
+
+**Your current project settings apply (#487)**: by default `export` applies
+each project's current settings, as every path that sends session text off
+the machine does, reading them under both of the project's keys (its
+`project_ids` id and its git root):
+
+- A project opted out since ingest has no row in `sessions`, `turns`,
+  `labels`, `kpis`, `trace_documents` or `feedback`. A `benchmark_results`
+  row linked to one of its sessions keeps its outcome with `session_ref`
+  empty. A `run_dir`, or a session's `benchmark_run_dir`, under the
+  project's path is emptied.
+- A project tightened since ingest exports its sessions' stored text
+  (`turns.content_preview`, `trace_documents.content`) as a metadata-only
+  marker, and their `redaction_mode` reads `metadata-only`. Feedback text,
+  which no mode governs, is exported as stored. An archived turn is judged
+  by the mode it was archived under, so it stays a marker after
+  `ingest --full` until `archive --full` rewrites it.
+
+When that changes anything, `export` prints one line on stderr for each table
+it changed, in counts only and never naming a project, for example:
+
+```
+export: turns: 7 rows dropped (project opted out)
+```
+
+`--raw` writes the store as it is and prints one stderr line giving how many
+sessions of opted-out and of tightened projects it wrote as stored. Neither
+rewrites the store: to remove an opted-out project's rows for good, use a
+new, empty store. `redaction_mode` is an exported column on `sessions`,
+`turns` and `trace_documents`, so an export self-documents its own privacy
+posture per row (a `redaction: none` session exports its raw preview — the
+operator's own ingest-time choice).
 
 ## Watch (E6, issue #89)
 

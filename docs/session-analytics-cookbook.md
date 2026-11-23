@@ -714,8 +714,9 @@ runs); the default is this repository's own `.cct`.
 
 ```bash
 ./scripts/session-analytics search "pricing config" --limit 20   # archived text, ranked
-./scripts/session-analytics export --table sessions --format csv --out sessions.csv
+./scripts/session-analytics export --table sessions --format csv --out sessions.csv   # applies each project's current settings
 ./scripts/session-analytics export --table all --format parquet --out ./export/
+./scripts/session-analytics export --table all --raw --out ./export-raw/             # the store as it is
 ./scripts/session-analytics correlate --runs-root runs             # same as Analysis pipeline → Link benchmark runs
 ./scripts/session-analytics runs                                   # auto-build runs and their verdicts (§8.6)
 ./scripts/session-analytics gaps                                   # inter-turn gaps and active hours by cutoff (§5.4)

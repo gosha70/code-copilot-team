@@ -21,11 +21,12 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import io
 import json
 import shutil
 import subprocess
 import tempfile
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any, Iterator, Optional
 from unittest import mock
@@ -361,6 +362,28 @@ def capture_mcp(dsn: str, session_id: int) -> dict[str, str]:
     return out
 
 
+def capture_export(dsn: str, session_id: int) -> dict[str, str]:
+    """Every file `export --table all` writes, through the real CLI, and the
+    summary it prints (#487). Export is an on-machine output, so it is not
+    in the coverage map; it applies the same floor by default."""
+    from session_analytics.cli import main
+
+    out_dir = Path(tempfile.mkdtemp(prefix="cct-sa-canary-export-"))
+    err = io.StringIO()
+    try:
+        with redirect_stdout(io.StringIO()), redirect_stderr(err):
+            code = main(["export", "--db", dsn, "--table", "all", "--out", str(out_dir)])
+        assert code == C.EXIT_OK, f"export failed: {err.getvalue()}"
+        captured = {
+            f"export {table}": (out_dir / f"{table}.{C.EXPORT_FORMAT_CSV}").read_text(encoding="utf-8")
+            for table in C.EXPORT_DATA_TABLES
+        }
+        captured["export summary"] = err.getvalue()
+        return captured
+    finally:
+        shutil.rmtree(out_dir, ignore_errors=True)
+
+
 def capture_all(dsn: str, session_id: int) -> dict[str, str]:
     captured = {}
     captured.update(capture_judge(dsn, session_id))
@@ -368,6 +391,7 @@ def capture_all(dsn: str, session_id: int) -> dict[str, str]:
     captured.update(capture_embedding(dsn, session_id))
     if HAS_MCP:
         captured.update(capture_mcp(dsn, session_id))
+    captured.update(capture_export(dsn, session_id))
     return captured
 
 

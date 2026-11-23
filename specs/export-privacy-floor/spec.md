@@ -27,6 +27,7 @@ as it is.
   A `benchmark_results` row linked to such a session keeps its benchmark
   outcome, with `session_ref` empty, and in any `benchmark_results` row a
   `run_dir` that sits under an opted-out project's path is emptied (D3).
+  So is a kept session's `benchmark_run_dir` that sits under one.
   The column table below gives the rule for every column.
 - **FR-4: a tightened project exports markers.** For a session whose
   project's current mode is stricter than the mode it was recorded under,
@@ -37,6 +38,10 @@ as it is.
   carries (D2). Its feedback text is exported as stored, since the redaction
   mode has never governed feedback (D4). Every other column is exported as
   stored: metadata is not content (`specs/redaction-canaries/spec.md`).
+  A `trace_documents` row is judged by its own `redaction_mode`, as the
+  off-machine paths judge archived text (#514), so a row archived before a
+  tightening exports the marker even after `ingest --full` has re-recorded
+  its session.
 - **FR-5: the store as it is, on request.** `--raw` writes every row as
   stored, as `export` does today (D1).
 - **FR-6: the export says what it changed in the tables it wrote, in counts
@@ -45,10 +50,12 @@ as it is.
     gives, with their reasons, the counts of:
     - rows dropped, because their session's project is opted out;
     - rows reduced to `metadata-only`, because their session's project was
-      tightened since ingest: the text replaced by the marker, the
+      tightened since ingest (a `trace_documents` row: since it was
+      archived, FR-4): the text replaced by the marker, the
       `redaction_mode` set to `metadata-only`, or both, counting a row once;
-    - `benchmark_results` rows with `session_ref` or `run_dir` emptied,
-      because they pointed at an opted-out project.
+    - rows with a link to an opted-out project emptied:
+      `benchmark_results.session_ref` or `run_dir`, and
+      `sessions.benchmark_run_dir`.
 
     Only counts above 0 are given. A table the floor did not change prints
     nothing, so `--table kpis` with a tightened project prints nothing: its
@@ -89,12 +96,15 @@ means the column is written as the store holds it.
 
 **`sessions`**, linked by `id`.
 - Opted out: the row is dropped.
+- `benchmark_run_dir`, in any kept row: emptied when it is the path of an
+  opted-out project or sits under it, as `benchmark_results.run_dir` is;
+  otherwise as stored.
 - Tightened: `redaction_mode` reads `metadata-only` (D2). As stored: `id`,
   `copilot`, `session_id`, `project_path`, `model`, `phase`,
   `developer_id`, `turn_count`, `tool_call_count`, `error_count`,
-  `started_at`, `ended_at`, `duration_seconds`, `cost_usd`, the eight
-  `kpi_*` columns and `benchmark_run_dir`. They hold identity, timing,
-  counts and cost, and no session text.
+  `started_at`, `ended_at`, `duration_seconds`, `cost_usd` and the eight
+  `kpi_*` columns. They hold identity, timing, counts and cost, and no
+  session text.
 
 **`turns`**, linked by `session_id`.
 - Opted out: the rows are dropped.

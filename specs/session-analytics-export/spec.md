@@ -53,6 +53,9 @@ stored content is already redacted at ingest (`content_preview`,
   exports; `redaction_mode` is an exported column so an export self-documents
   its privacy posture (a session ingested with `redaction: none` exports its
   raw preview — the operator's own ingest-time choice).
+  Since #487, a project opted out or tightened *after* ingest is covered
+  too: export applies the current-mode floor by default, and `--raw` writes
+  the store as it is (`specs/export-privacy-floor/`).
 - FR-7: **Tests** — CSV shape/content/ordering per table; the `sessions`
   summary carries `cost_usd` + `redaction_mode` + KPI columns; determinism
   (stable order across runs); redaction-safety (a metadata-only session's
