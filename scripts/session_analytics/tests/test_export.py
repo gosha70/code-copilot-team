@@ -557,6 +557,45 @@ class TestExportFloorColumns(_TwoProjectStore):
                 mine = sum(1 for r in stored if self.session_of(table, r) == self.sid)
                 self.assertEqual(floor.changes[table], {**_NO_CHANGE, "reduced": mine})
 
+    def test_an_archived_row_is_judged_by_its_own_mode_after_a_reingest(self) -> None:
+        # Tightened, then `ingest --full`: the session is re-recorded under the
+        # current mode, so nothing is floored and the floor is inert, while
+        # its archive keeps the mode it was written under (#514).
+        mode = C.REDACT_METADATA_ONLY
+        policy = OutboundPolicy(current={self.sid: mode}, recorded={self.sid: mode})
+        self.assertTrue(exp.ExportFloor(policy).inert, "the unfiltered path would skip the archive")
+        stored = self.stored(_TRACE)
+        self.assertEqual({r["redaction_mode"] for r in stored}, {C.REDACT_NONE}, "archived under none")
+        rows, floor = self.floored(policy, _TRACE)
+        self.assertEqual(len(rows), len(stored))
+        for s, o in zip(stored, rows):
+            want = redact_text(s["content"], C.REDACT_METADATA_ONLY) if s["content"] else s["content"]
+            self.assertEqual(o["content"], want)
+            self.assertEqual(o["redaction_mode"], C.REDACT_METADATA_ONLY)
+            rest = set(s) - {"content", "redaction_mode"}
+            self.assertEqual({c: o[c] for c in rest}, {c: s[c] for c in rest})
+        self.assertEqual(floor.changes[_TRACE], {**_NO_CHANGE, "reduced": len(stored)})
+        # The re-ingest rewrote the session's own rows, which leave as stored.
+        for table in (_SESSIONS, _TURNS):
+            with self.subTest(table=table):
+                rows, floor = self.floored(policy, table)
+                self.assertEqual(rows, self.stored(table))
+                self.assertIsNone(floor.table_summary(table))
+        # --raw writes the archive as stored and counts its session.
+        floor = exp.ExportFloor(policy, raw=True)
+        rows = _rows_as_dicts(exp.columns_for(_TRACE), list(exp.rows_for(self.db, _TRACE, floor)))
+        self.assertEqual(rows, stored)
+        self.assertEqual(floor.raw_tightened, {self.sid})
+
+    def test_an_archived_row_no_looser_than_the_current_mode_is_written_as_stored(self) -> None:
+        policy = OutboundPolicy(current={self.sid: C.REDACT_NONE}, recorded={self.sid: C.REDACT_NONE})
+        floor = exp.ExportFloor(policy)
+        with_floor, as_stored = io.StringIO(), io.StringIO()
+        exp.write_csv(self.db, _TRACE, with_floor, floor)
+        exp.write_csv(self.db, _TRACE, as_stored)
+        self.assertEqual(with_floor.getvalue(), as_stored.getvalue())
+        self.assertEqual(floor.changes[_TRACE], _NO_CHANGE)
+
     def test_a_tightened_project_leaves_labels_kpis_and_benchmarks_as_stored(self) -> None:
         for table in (_LABELS, _KPIS, _BENCH):
             with self.subTest(table=table):

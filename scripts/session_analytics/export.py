@@ -304,13 +304,18 @@ class UnknownExportTableError(ValueError):
 #   sessions.benchmark_run_dir);
 # * a tightened project's stored text (turns.content_preview,
 #   trace_documents.content) leaves as the metadata-only marker, and its
-#   redaction_mode reads metadata-only; feedback text stays as stored;
+#   redaction_mode reads metadata-only; feedback text stays as stored. A
+#   trace_documents row is judged by its own redaction_mode, as the
+#   off-machine paths judge archived text (#514);
 # * every other column is written as stored.
 #
 # Under ``raw`` every row is written as stored, and the floor only records
 # the sessions it would have dropped or changed, for the one-line notice. A
 # store with nothing opted out or tightened takes the unfiltered path, so
-# its export is byte for byte what it was before.
+# its export is byte for byte what it was before. trace_documents never
+# does: `ingest --full` re-records a tightened session, which leaves the
+# policy with nothing floored, while its archived rows keep the mode they
+# were written under. A row the floor leaves alone is written as stored.
 
 # heuristic_label has no session column: the session comes from the turn
 # (turn_id is NOT NULL and references copilot_turn), as a trailing column
@@ -332,6 +337,7 @@ class _FloorRule:
     session_idx: Optional[int]  # None: the session is joined on (labels)
     text_idx: tuple[int, ...] = ()  # stored text, replaced by the marker
     mode_idx: Optional[int] = None  # redaction_mode, set to metadata-only
+    row_mode: bool = False  # trace_documents: judged by the row's own mode (#514)
     keeps_row: bool = False  # benchmark_results: empty the link, keep the row
     run_dir_idx: Optional[int] = None  # a run directory, emptied under an opted-out path
     emptied: str = ""  # what the summary says was emptied
@@ -361,6 +367,7 @@ _FLOOR_RULES: dict[str, _FloorRule] = {
         session_idx=TRACE_DOCUMENTS_COLUMNS.index("session_ref"),
         text_idx=(TRACE_DOCUMENTS_COLUMNS.index("content"),),
         mode_idx=TRACE_DOCUMENTS_COLUMNS.index("redaction_mode"),
+        row_mode=True,
     ),
     C.EXPORT_TABLE_FEEDBACK: _FloorRule(session_idx=FEEDBACK_COLUMNS.index("session_ref")),
 }
@@ -411,7 +418,7 @@ class ExportFloor:
         rule = _FLOOR_RULES[table]
         counts = self.changes.setdefault(table, {_DROPPED: 0, _REDUCED: 0, _EMPTIED: 0})
         joined = rule.session_idx is None
-        if self.inert or (joined and not self.policy.skip_ids):
+        if not rule.row_mode and (self.inert or (joined and not self.policy.skip_ids)):
             # Nothing in this table can change: the unfiltered path.
             yield from _ROW_ITERATORS[table](db)
             return
@@ -439,13 +446,19 @@ class ExportFloor:
             return None, (_DROPPED,)
         r = list(row)
         changes: list[str] = []
-        if policy.floors(sid):
+        if rule.row_mode:
+            mode = r[rule.mode_idx]
+            if policy.archive_floors(sid, mode):
+                for i in rule.text_idx:
+                    r[i] = policy.archived_text(sid, r[i], mode)
+                r[rule.mode_idx] = C.REDACT_METADATA_ONLY
+        elif policy.floors(sid):
             for i in rule.text_idx:
                 r[i] = policy.text(sid, r[i])
             if rule.mode_idx is not None:
                 r[rule.mode_idx] = C.REDACT_METADATA_ONLY
-            if r != list(row):
-                changes.append(_REDUCED)
+        if r != list(row):
+            changes.append(_REDUCED)
         before = list(r)
         if rule.keeps_row and sid is not None and not policy.keeps(sid):
             r[rule.session_idx] = None

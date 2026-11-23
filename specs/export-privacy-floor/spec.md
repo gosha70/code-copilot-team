@@ -38,6 +38,10 @@ as it is.
   carries (D2). Its feedback text is exported as stored, since the redaction
   mode has never governed feedback (D4). Every other column is exported as
   stored: metadata is not content (`specs/redaction-canaries/spec.md`).
+  A `trace_documents` row is judged by its own `redaction_mode`, as the
+  off-machine paths judge archived text (#514), so a row archived before a
+  tightening exports the marker even after `ingest --full` has re-recorded
+  its session.
 - **FR-5: the store as it is, on request.** `--raw` writes every row as
   stored, as `export` does today (D1).
 - **FR-6: the export says what it changed in the tables it wrote, in counts

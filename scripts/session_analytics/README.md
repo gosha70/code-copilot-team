@@ -404,7 +404,9 @@ the machine does, reading them under both of the project's keys (its
 - A project tightened since ingest exports its sessions' stored text
   (`turns.content_preview`, `trace_documents.content`) as a metadata-only
   marker, and their `redaction_mode` reads `metadata-only`. Feedback text,
-  which no mode governs, is exported as stored.
+  which no mode governs, is exported as stored. An archived turn is judged
+  by the mode it was archived under, so it stays a marker after
+  `ingest --full` until `archive --full` rewrites it.
 
 When that changes anything, `export` prints one line on stderr for each table
 it changed, in counts only and never naming a project, for example:
