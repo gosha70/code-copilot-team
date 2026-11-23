@@ -26,11 +26,19 @@ taking the run lock, and lets a run set its review diff limit in
 Nothing has to be recreated. The Session Analytics store moves from schema 13
 to 14 in place.
 
+- **Update the checkout and refresh the install:**
+  `git fetch origin tag v2.1.1 && git switch --detach v2.1.1`, then
+  `./scripts/setup.sh --sync --claude-code`, adding `--pi` if you use
+  `pi-code`. The refresh installs the launcher that lists `ui-harness` under
+  *Available add-ons* in `cct templates` and refuses `cct init ui-harness`,
+  printing the copy steps from its instructions instead (#498).
 - **Re-run the session analyses Ask should quote.** Unless a project's current
   mode is `none`, an analysis stored before the upgrade reaches Ask as the
   metadata-only marker until it is re-run from Studio's session page. The
   default mode is `code`, so on a default configuration that is every earlier
   analysis. Studio's own pages still show them (#515).
+- **Scripts that run `session-analytics export` now get the filtered output
+  by default,** with `--raw` for the store as it is (#487).
 
 ### Security
 
