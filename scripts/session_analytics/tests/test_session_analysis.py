@@ -20,8 +20,9 @@ from session_analytics.judge.contracts import (
     JudgeAnswerTruncated,
     JudgeTransportError,
 )
+from session_analytics.relational import db as dbmod
 from session_analytics.relational.db import Database, apply_ddl
-
+from session_analytics.tests import canary as K
 from session_analytics.tests.support import CLAUDE_CODE_ROOT, RegistryResetTestCase
 
 _OPTED_IN = {"demo-project": ProjectOverride(trace_archive=True)}
@@ -588,3 +589,104 @@ class TestSessionAnalysis(RegistryResetTestCase):
             self.assertLessEqual(len(ctx.files), sa._CONFIG_LIST_CAP)
             self.assertEqual([n for n, _ in ctx.excerpts], ["AGENTS.md"])
             self.assertIn("Keep me", ctx.excerpts[0][1])
+
+
+class TestAnalysisRecordedMode(RegistryResetTestCase):
+    """#515: a stored analysis records the loosest mode of the session text
+    its judge was sent, and a reader judges it by that mode."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        claude_code.register()
+        self.dsn = self.sqlite_dsn()
+        ingest(dsn=self.dsn, copilots=[C.COPILOT_CLAUDE_CODE], root=CLAUDE_CODE_ROOT, full=True)
+        self.db = Database.connect(self.dsn)
+        apply_ddl(self.db)
+        self.session_id = int(self.db.query_one("SELECT id FROM copilot_session")[0])
+        recorded = self.db.query_one(
+            "SELECT redaction_mode FROM copilot_session WHERE id = ?", (self.session_id,)
+        )[0]
+        # Previews leave under the session's recorded mode; a missing one counts as none.
+        self.preview_mode = recorded or C.REDACT_NONE
+
+    def tearDown(self) -> None:
+        self.db.close()
+        super().tearDown()
+
+    def analyze(self, judge, config: dict) -> dict:
+        with K.user_config(config):
+            return sa.analyze_session(self.db, self.session_id, C.ANALYSIS_KIND_TUNING, judge=judge, force=True)
+
+    def test_an_analysis_records_the_mode_its_judges_text_was_stored_under(self) -> None:
+        row = self.analyze(_CannedJudge(_TUNING_OK), {})
+        self.assertEqual(row["parse_status"], PARSE_OK)
+        self.assertEqual(row["redaction_mode"], self.preview_mode)
+
+    def test_a_parse_failure_records_its_mode_too(self) -> None:
+        row = self.analyze(_CannedJudge("no json here"), {})
+        self.assertEqual(row["parse_status"], PARSE_INNER_UNPARSEABLE)
+        self.assertEqual(row["redaction_mode"], self.preview_mode)
+
+    def test_text_that_all_left_as_markers_records_metadata_only(self) -> None:
+        tightened = {
+            C.CFG_PROJECTS: {"demo-project": {C.CFG_REDACTION: C.REDACT_METADATA_ONLY}},
+            C.CFG_PROJECT_IDS: [{C.CFG_PROJECT_ID_MATCH: "/repo/demo", C.CFG_PROJECT_ID_ID: "demo-project"}],
+        }
+        judge = _CannedJudge(_TUNING_OK)
+        row = self.analyze(judge, tightened)
+        self.assertIn("[redacted ", judge.prompts[-1])
+        self.assertEqual(row["redaction_mode"], C.REDACT_METADATA_ONLY)
+
+    def test_an_analysis_stored_before_schema_14_reads_back_with_no_mode(self) -> None:
+        self.analyze(_CannedJudge(_TUNING_OK), {})
+        self.db.execute(f"DELETE FROM {C.TBL_SESSION_ANALYSIS_MODE} WHERE session_ref = ?", (self.session_id,))
+        self.db.commit()
+        row = sa.get_analysis(self.db, self.session_id, C.ANALYSIS_KIND_TUNING)
+        self.assertEqual(row["parse_status"], PARSE_OK)
+        self.assertIsNone(row["redaction_mode"])
+
+    def test_a_rerun_replaces_the_recorded_mode(self) -> None:
+        self.analyze(_CannedJudge(_TUNING_OK), {})
+        rows = self.db.query(
+            f"SELECT COUNT(*) FROM {C.TBL_SESSION_ANALYSIS_MODE} WHERE session_ref = ?", (self.session_id,)
+        )
+        self.analyze(_CannedJudge(_TUNING_OK), {})
+        again = self.db.query(
+            f"SELECT COUNT(*) FROM {C.TBL_SESSION_ANALYSIS_MODE} WHERE session_ref = ?", (self.session_id,)
+        )
+        self.assertEqual((rows, again), ([(1,)], [(1,)]))
+
+
+class TestSchema14(RegistryResetTestCase):
+    def test_a_schema_13_store_gains_the_table_in_place(self) -> None:
+        """A new table is the whole migration: no refusal, no recreation;
+        the store keeps its rows, is stamped 14, and an analysis stored
+        before it reads back with no recorded mode."""
+        path = Path(tempfile.mkdtemp(prefix="cct-sa-v13-")) / "v13.db"
+        store = Database.connect(f"sqlite:///{path}")
+        try:
+            dbmod.apply_ddl(store)
+            store.execute(f"DROP TABLE {C.TBL_SESSION_ANALYSIS_MODE}")
+            store.execute("DELETE FROM schema_version WHERE version = ?", (dbmod._SCHEMA_VERSION,))
+            store.execute(
+                "INSERT INTO schema_version (version, applied_at) VALUES (?, 'x')",
+                (dbmod._SCHEMA_VERSION - 1,),
+            )
+            store.execute(
+                "INSERT INTO copilot_session (session_id, copilot, project_path, started_at) "
+                "VALUES ('kept', 'claude-code', '/p', '2026-01-01T00:00:00Z')"
+            )
+            sid = int(store.query_one("SELECT id FROM copilot_session WHERE session_id = 'kept'")[0])
+            store.execute(
+                f"INSERT INTO {C.TBL_SESSION_ANALYSIS} (session_ref, kind, parse_status, result_json, created_at) "
+                "VALUES (?, ?, ?, ?, 'x')",
+                (sid, C.ANALYSIS_KIND_TUNING, PARSE_OK, json.dumps({"summary": "old"})),
+            )
+            store.commit()
+            dbmod.apply_ddl(store)
+            self.assertEqual(dbmod._SCHEMA_VERSION, 14)
+            self.assertEqual(store.query("SELECT MAX(version) FROM schema_version"), [(14,)])
+            self.assertEqual(store.query("SELECT COUNT(*) FROM copilot_session WHERE session_id = 'kept'"), [(1,)])
+            self.assertIsNone(sa.get_analysis(store, sid, C.ANALYSIS_KIND_TUNING)["redaction_mode"])
+        finally:
+            store.close()

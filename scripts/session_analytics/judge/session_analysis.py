@@ -26,6 +26,7 @@ from .. import constants as C
 from ..config import load_config, load_map
 from ..ingest.project_key import ProjectKeyResolver
 from ..ingest.redaction import OutboundPolicy, current_mode, outbound_mode, redact_text
+from ..ingest.redaction import loosest_mode as loosest_of
 from ..mcp.tools import turn_latency
 from ..relational.db import Database, now_iso
 from .contracts import (
@@ -131,6 +132,8 @@ class TranscriptTurn:
     tools: list[str] = field(default_factory=list)
     is_error: bool = False
     archived: bool = False
+    # #515: the mode this turn's text left under (None counts as `none`).
+    mode: Optional[str] = None
 
 
 @dataclass
@@ -142,6 +145,8 @@ class Transcript:
     chars: int                         # len(text)
     truncated: bool
     archived_turns: int
+    # #515: the loosest mode of the text the judge sees, over ``turns``.
+    loosest_mode: Optional[str] = None
 
 
 def build_transcript(
@@ -198,6 +203,14 @@ def build_transcript(
     turns: list[TranscriptTurn] = []
     prev_ts: Optional[datetime] = None
     archived = 0
+    # #515: the mode each turn's text leaves under, which the stored
+    # analysis records. A preview is stored under the session's recorded
+    # mode (a missing one counts as `none`) and leaves as the marker when
+    # the session is floored; an archived row has its own mode.
+    preview_mode = (
+        C.REDACT_METADATA_ONLY if policy.floors(session_id)
+        else (policy.recorded_mode(session_id) or C.REDACT_NONE)
+    )
     for seq, role, preview, ts, turn_id, content, archived_mode in rows:
         ts_dt = _parse_ts(ts)
         # Same rule as the page (mcp.tools.turn_latency): a gap needs BOTH
@@ -212,8 +225,10 @@ def build_transcript(
         # rows keep the mode they were archived under until `archive --full`.
         if is_archived:
             text = policy.archived_text(session_id, content, archived_mode) or ""
+            mode = policy.leaving_mode(session_id, archived_mode)
         else:
             text = policy.text(session_id, preview or "") or ""
+            mode = preview_mode
         if is_archived:
             archived += 1
         if role != C.ROLE_USER and len(text) > per_turn_cap:
@@ -227,6 +242,7 @@ def build_transcript(
                 tools=tools_by_turn.get(int(turn_id), []),
                 is_error=int(turn_id) in error_turns,
                 archived=is_archived,
+                mode=mode,
             )
         )
 
@@ -254,6 +270,9 @@ def build_transcript(
     return Transcript(
         turns=turns, all_turns=all_turns, text=rendered, source=source,
         chars=len(rendered), truncated=truncated, archived_turns=archived,
+        # Over what the judge sees: elided turns were not sent. With no
+        # text at all, the mode a preview of this session leaves under.
+        loosest_mode=loosest_of(t.mode for t in turns if t.text) or preview_mode,
     )
 
 
@@ -308,6 +327,8 @@ def _elide_middle(turns: list[TranscriptTurn], max_chars: int) -> list[Transcrip
         role="system",
         text=f"[… {len(dropped)} turns ({dropped_chars} chars) omitted to fit the judge's context …]",
         latency_seconds=None,
+        # Carries no session text, so it never loosens the recorded mode.
+        mode=C.REDACT_METADATA_ONLY,
     )
     return kept_head + [marker] + kept_tail
 
@@ -339,6 +360,8 @@ class ProjectContext:
     root: Optional[str]
     files: tuple[str, ...]
     excerpts: tuple[tuple[str, str], ...]
+    # #515: the mode the excerpts were read under (None when none were).
+    mode: Optional[str] = None
 
 
 def project_context(db: Database, session_id: int) -> ProjectContext:
@@ -392,7 +415,7 @@ def project_context(db: Database, session_id: int) -> ProjectContext:
             redacted = redact_text(text, mode)[:_STEERING_EXCERPT_CHARS]
             excerpts.append((name, redacted))
             total += len(redacted)
-    return ProjectContext(True, root, files, tuple(excerpts))
+    return ProjectContext(True, root, files, tuple(excerpts), mode)
 
 
 def render_project(ctx: ProjectContext) -> str:
@@ -545,10 +568,15 @@ def analyze_session(
         transcript=transcript.text,
     )
     model = getattr(judge, "_model_label", None) or getattr(judge, "_model", "") or ""
+    # #515: the loosest mode of the session text this request carries (the
+    # transcript the judge sees, and the steering excerpts when any were
+    # sent), stored with the outcome so a reader can judge it later.
+    sent_mode = loosest_of([transcript.loosest_mode, *([project.mode] if project.excerpts else [])])
+
     def failure(status: str, error: str) -> dict[str, Any]:
         return _record_failure(
             db, session_id, kind, judge, str(model), spec.version, transcript,
-            parse_status=status, error=error,
+            parse_status=status, error=error, mode=sent_mode,
         )
 
     try:
@@ -579,7 +607,7 @@ def analyze_session(
     result = _coerce(kind, obj, {t.sequence_num for t in transcript.all_turns}, project)
     _store(
         db, session_id, kind, judge, str(model), spec.version, transcript,
-        parse_status=PARSE_OK, result=result, error=None,
+        parse_status=PARSE_OK, result=result, error=None, mode=sent_mode,
     )
     return get_analysis(db, session_id, kind) or {}
 
@@ -587,6 +615,7 @@ def analyze_session(
 def _record_failure(
     db: Database, session_id: int, kind: str, judge: TurnJudge, model: str,
     version: str, transcript: Transcript, *, parse_status: str, error: Optional[str],
+    mode: Optional[str] = None,
 ) -> dict[str, Any]:
     """Report a failed run without destroying a good one.
 
@@ -600,7 +629,7 @@ def _record_failure(
     if existing is None or existing["parse_status"] != PARSE_OK:
         _store(
             db, session_id, kind, judge, model, version, transcript,
-            parse_status=parse_status, result=None, error=error,
+            parse_status=parse_status, result=None, error=error, mode=mode,
         )
         return get_analysis(db, session_id, kind) or {}
     return {
@@ -785,6 +814,7 @@ def _store(
     db: Database, session_id: int, kind: str, judge: TurnJudge, model: str,
     version: str, transcript: Transcript, *, parse_status: str,
     result: Optional[dict[str, Any]], error: Optional[str],
+    mode: Optional[str] = None,
 ) -> None:
     db.execute(
         f"DELETE FROM {C.TBL_SESSION_ANALYSIS} WHERE session_ref = ? AND kind = ?",
@@ -800,20 +830,35 @@ def _store(
             json.dumps(result) if result is not None else None, error, now_iso(),
         ),
     )
+    # #515: the mode beside the analysis, in the same transaction. A caller
+    # that gives none records `none`, the loosest, so the text fails closed.
+    db.execute(
+        f"DELETE FROM {C.TBL_SESSION_ANALYSIS_MODE} WHERE session_ref = ? AND kind = ?",
+        (session_id, kind),
+    )
+    db.execute(
+        f"INSERT INTO {C.TBL_SESSION_ANALYSIS_MODE} (session_ref, kind, redaction_mode, recorded_at) "
+        "VALUES (?, ?, ?, ?)",
+        (session_id, kind, mode or C.REDACT_NONE, now_iso()),
+    )
     db.commit()
 
 
 def get_analysis(db: Database, session_id: int, kind: str) -> Optional[dict[str, Any]]:
     row = db.query_one(
-        f"SELECT kind, judge_id, judge_model, prompt_version, transcript_source, "
-        f"transcript_chars, truncated, parse_status, result_json, error_text, created_at "
-        f"FROM {C.TBL_SESSION_ANALYSIS} WHERE session_ref = ? AND kind = ?",
+        f"SELECT a.kind, a.judge_id, a.judge_model, a.prompt_version, a.transcript_source, "
+        f"a.transcript_chars, a.truncated, a.parse_status, a.result_json, a.error_text, "
+        f"a.created_at, m.redaction_mode "
+        f"FROM {C.TBL_SESSION_ANALYSIS} a "
+        f"LEFT JOIN {C.TBL_SESSION_ANALYSIS_MODE} m "
+        f"  ON m.session_ref = a.session_ref AND m.kind = a.kind "
+        f"WHERE a.session_ref = ? AND a.kind = ?",
         (session_id, kind),
     )
     if row is None:
         return None
     (kind, judge_id, judge_model, version, source, chars, truncated,
-     status, result_json, error, created_at) = row
+     status, result_json, error, created_at, mode) = row
     return {
         "kind": kind,
         "judge_id": judge_id,
@@ -826,6 +871,9 @@ def get_analysis(db: Database, session_id: int, kind: str) -> Optional[dict[str,
         "result": json.loads(result_json) if result_json else None,
         "error": error,
         "created_at": created_at,
+        # #515: the loosest mode the judge was sent; None before schema 14,
+        # which readers count as `none`.
+        "redaction_mode": mode,
     }
 
 

@@ -210,6 +210,41 @@ class CapturingJudge:
         return "{}"
 
 
+class QuotingJudge:
+    """An analysis judge that quotes what it was sent, as a real one may
+    (#515). Its answer carries the first canary in the prompt: in the
+    result's summary, or, with ``unparseable``, as bare text, which is
+    stored as the analysis error."""
+
+    judge_id = "quoting"
+    _model = "quoting-model"
+
+    def __init__(self, *, unparseable: bool = False) -> None:
+        self.unparseable = unparseable
+        self.quoted = ""
+
+    def complete(self, prompt: str, timeout: Any = None) -> str:
+        self.quoted = next((value for value in CANARIES.values() if value in prompt), "")
+        if self.unparseable:
+            return f"I could not format an answer. The session said: {self.quoted}"
+        return json.dumps({"summary": f"The session said: {self.quoted}", "findings": []})
+
+
+def store_quoting_analysis(dsn: str, session_id: int, *, unparseable: bool = False) -> str:
+    """Store the first analysis kind from a QuotingJudge, under the
+    configuration in force, and return the canary it quoted."""
+    from session_analytics.judge import session_analysis as sa
+
+    judge = QuotingJudge(unparseable=unparseable)
+    db = Database.connect(dsn)
+    try:
+        sa.analyze_session(db, session_id, C.ANALYSIS_KINDS[0], judge=judge, force=True)
+    finally:
+        db.close()
+    assert judge.quoted, "the analysis request carried no canary to quote"
+    return judge.quoted
+
+
 class CapturingEmbedder:
     """Records every embedding input, then fails the call so nothing is
     stored."""

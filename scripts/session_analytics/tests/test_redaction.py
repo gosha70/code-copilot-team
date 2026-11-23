@@ -177,6 +177,37 @@ class OutboundFloor(unittest.TestCase):
                 self.assertTrue(policy.archived_text(1, "sk-secret", row_mode).startswith("[redacted"))
                 self.assertTrue(policy.archive_floors(1, row_mode))
 
+    def test_the_loosest_mode_of_several_counts_a_missing_or_unknown_one_as_none(self):
+        from session_analytics.ingest.redaction import loosest_mode
+
+        M, K, N = C.REDACT_METADATA_ONLY, C.REDACT_CODE, C.REDACT_NONE
+        self.assertEqual(loosest_mode([M, K]), K)
+        self.assertEqual(loosest_mode([M, M]), M)
+        self.assertEqual(loosest_mode([M, None]), N)
+        self.assertEqual(loosest_mode([M, "bogus"]), N)
+        self.assertIsNone(loosest_mode([]))
+
+    def test_the_mode_text_leaves_under_is_metadata_only_when_it_leaves_as_the_marker(self):
+        from session_analytics.ingest.redaction import OutboundPolicy
+
+        M, K, N = C.REDACT_METADATA_ONLY, C.REDACT_CODE, C.REDACT_NONE
+        policy = OutboundPolicy(current={1: K}, recorded={1: K})
+        self.assertEqual(policy.leaving_mode(1, N), M)  # looser than the current mode: the marker
+        self.assertEqual(policy.leaving_mode(1, K), K)
+        self.assertEqual(policy.leaving_mode(1, M), M)
+        self.assertEqual(policy.leaving_mode(1, None), M)  # missing counts as none, then floored
+        self.assertEqual(policy.recorded_mode(1), K)
+        self.assertIsNone(policy.recorded_mode(2))
+
+    def test_the_archived_methods_are_the_recorded_ones(self):
+        from session_analytics.ingest.redaction import OutboundPolicy
+
+        policy = OutboundPolicy(current={1: C.REDACT_METADATA_ONLY}, recorded={1: C.REDACT_METADATA_ONLY})
+        for mode in (C.REDACT_NONE, C.REDACT_METADATA_ONLY, None):
+            with self.subTest(mode=mode):
+                self.assertEqual(policy.archived_text(1, "t", mode), policy.recorded_text(1, "t", mode))
+                self.assertEqual(policy.archive_floors(1, mode), policy.recorded_floors(1, mode))
+
     def test_a_session_the_policy_does_not_know_keeps_the_session_floor(self):
         from session_analytics.ingest.redaction import OutboundPolicy
 

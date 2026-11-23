@@ -97,6 +97,7 @@ _DDL_FILES = (
     "ddl/postgres/011_expectation.sql",
     "ddl/postgres/012_thread.sql",
     "ddl/postgres/013_session_activity.sql",
+    "ddl/postgres/014_session_analysis_mode.sql",
 )
 # 3: + local_heartbeat (Slice B1, #187)
 # 4: + trace search index (E10 Slice B, #65). NOTE that apply_ddl creates
@@ -140,7 +141,13 @@ _DDL_FILES = (
 #    create-if-absent is the whole migration and a schema-12 store gains
 #    it in place; as with 4's index, apply_ddl then fills it for every
 #    stored session (activity.ensure_activity), so nothing is re-ingested.
-_SCHEMA_VERSION = 13
+# 14: + session_analysis_mode (#515, the mode each stored analysis was
+#    computed under). A NEW table, so create-if-absent is the whole
+#    migration and a schema-13 store gains it in place. It is not a column
+#    on session_analysis, which would have forced the recreate that 11's
+#    note describes. Analyses stored before it have no row and count as
+#    `none`.
+_SCHEMA_VERSION = 14
 
 _PK_SQL = {
     DIALECT_POSTGRES: "BIGSERIAL PRIMARY KEY",

@@ -23,6 +23,20 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   mode, so it leaves as the metadata-only marker. The upgrade alone closes
   the gap, with no re-archive needed. Affects 2.1.0; until you upgrade, run
   `archive --full` after tightening a project (#514).
+- **A stored session analysis follows a project's current settings after a
+  re-ingest.** An analysis quotes what its judge was sent and survives a
+  re-ingest, but it recorded no mode. After a tightening and `ingest
+  --full`, Ask `session_analyses` therefore returned one stored while the
+  project was looser as stored, with or without an archive. Each analysis
+  now records the loosest mode of the session text its judge was sent, in
+  a new table (schema 14, created in place, so no store is recreated).
+  Ask judges the stored result and error by that mode against the project's
+  current one.
+  - An analysis stored before this has no recorded mode and counts as
+    `none`, so under a stricter project it leaves as the metadata-only
+    marker until it is run again.
+  - Affects 2.1.0; until you upgrade, re-run a tightened project's analyses
+    from Studio after `archive --full` (#515).
 
 ### Fixed
 
