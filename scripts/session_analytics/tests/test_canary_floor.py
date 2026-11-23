@@ -15,6 +15,7 @@ import json
 import unittest
 
 from session_analytics import constants as C
+from session_analytics.relational.db import Database
 from session_analytics.tests import canary as K
 from session_analytics.tests.support import RegistryResetTestCase
 
@@ -42,6 +43,42 @@ class TheFloorAppliesWithoutReingest(RegistryResetTestCase):
                 # A tightened session's search hits are skipped, not masked:
                 # a masked snippet would still say its text matched (#457).
                 self.assertEqual(json.loads(captured["ask search_text"])["hits"], [])
+
+    def test_a_project_tightened_and_reingested_without_rearchiving_sends_no_canary(self):
+        """Ingest and archive under none, tighten, `ingest --full`, and do
+        not re-run the archive. The session's recorded mode now equals the
+        current one, so a floor judged by the session sees nothing to do,
+        while its archived rows keep the mode they were written under.
+        Their text must still leave as markers, judged row by row."""
+        for label, changed in (("by the project", dict(project_mode=M)), ("globally", dict(global_mode=M))):
+            with self.subTest(tightened=label):
+                dsn = self.sqlite_dsn()
+                with K.corpus() as (source, project):
+                    with K.user_config(K.config_for(project, project_mode=C.REDACT_NONE)):
+                        sid = K.ingest_corpus(dsn, source)
+                    with K.user_config(K.config_for(project, **changed)):
+                        K.ingest_corpus(dsn, source, archive=False)
+                        modes = self.recorded_modes(dsn, sid)
+                        captured = K.capture_all(dsn, sid)
+                # The state this case is about: the session is re-recorded
+                # under the stricter mode, its archive is still under none.
+                self.assertEqual(modes, (M, {C.REDACT_NONE}))
+                K.assert_no_leak(self, captured, M)
+
+    @staticmethod
+    def recorded_modes(dsn: str, sid: int) -> tuple[str, set]:
+        """(the session's recorded mode, the modes its archived rows carry)."""
+        db = Database.connect(dsn)
+        try:
+            session = db.query_one("SELECT redaction_mode FROM copilot_session WHERE id = ?", (sid,))[0]
+            archived = {
+                r[0] for r in db.query(
+                    f"SELECT DISTINCT redaction_mode FROM {C.TBL_TRACE_DOCUMENT} WHERE session_ref = ?", (sid,)
+                )
+            }
+        finally:
+            db.close()
+        return session, archived
 
     def test_a_global_mode_tightened_after_ingest_sends_no_canary(self):
         for ingested, archive in self.CASES:

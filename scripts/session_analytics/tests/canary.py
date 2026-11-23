@@ -137,9 +137,11 @@ def user_config(data: dict[str, Any]) -> Iterator[None]:
         yield
 
 
-def ingest_corpus(dsn: str, source: Path) -> int:
+def ingest_corpus(dsn: str, source: Path, *, archive: bool = True) -> int:
     """Ingest (and, where the project opted in, archive) the corpus under
-    the configuration in force. Returns the session's row id."""
+    the configuration in force. ``archive=False`` runs the ingest alone, as
+    `ingest --full` does when `archive` is not run after it. Returns the
+    session's row id."""
     from session_analytics import archive as arch
     from session_analytics._register import register_all
     from session_analytics.ingest.pipeline import configured_options, ingest
@@ -147,11 +149,12 @@ def ingest_corpus(dsn: str, source: Path) -> int:
     register_all()
     cfg = load_config()
     ingest(dsn=dsn, copilots=[C.COPILOT_CLAUDE_CODE], root=source, full=True, **configured_options(cfg))
-    arch.archive(
-        dsn=dsn, copilots=[C.COPILOT_CLAUDE_CODE], root=source, full=True,
-        redaction_mode=cfg.redaction_mode, projects=cfg.projects,
-        project_id_rules=cfg.project_id_rules,
-    )
+    if archive:
+        arch.archive(
+            dsn=dsn, copilots=[C.COPILOT_CLAUDE_CODE], root=source, full=True,
+            redaction_mode=cfg.redaction_mode, projects=cfg.projects,
+            project_id_rules=cfg.project_id_rules,
+        )
     db = Database.connect(dsn)
     try:
         row = db.query_one("SELECT id FROM copilot_session WHERE session_id = ?", ("sess-canary-001",))

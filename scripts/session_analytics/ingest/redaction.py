@@ -162,6 +162,12 @@ class OutboundPolicy:
     sessions whose stored text must leave as a marker (current mode
     stricter than recorded). When nothing is opted out or tightened, all
     three are empty and every output is unchanged.
+
+    It also keeps each kept session's current and recorded mode, because
+    ARCHIVED text is judged by the trace row's own recorded mode, not the
+    session's: ``ingest --full`` re-records a tightened session under the
+    current mode, while ``archive`` without ``--full`` leaves its rows as
+    they were written (``archived_text``, ``archive_floors``).
     """
 
     def __init__(
@@ -171,11 +177,15 @@ class OutboundPolicy:
         skip_keys: frozenset = frozenset(),
         excluded_projects: frozenset = frozenset(),
         floored: Optional[Mapping[int, tuple[Optional[str], str]]] = None,
+        current: Optional[Mapping[int, str]] = None,
+        recorded: Optional[Mapping[int, Optional[str]]] = None,
     ) -> None:
         self.skip_ids = skip_ids
         self.skip_keys = skip_keys
         self.excluded_projects = excluded_projects
         self._floored = dict(floored or {})
+        self._current = dict(current or {})
+        self._recorded = dict(recorded or {})
 
     @classmethod
     def load(cls, db: Any, cfg: Any = None, *, session_id: Optional[int] = None) -> "OutboundPolicy":
@@ -190,6 +200,8 @@ class OutboundPolicy:
         skip_keys: set[str] = set()
         excluded: set[str] = set()
         floored: dict[int, tuple[Optional[str], str]] = {}
+        currents: dict[int, str] = {}
+        recordeds: dict[int, Optional[str]] = {}
         sql = "SELECT id, copilot, session_id, project_path, redaction_mode FROM copilot_session"
         params: tuple = ()
         if session_id is not None:
@@ -206,11 +218,15 @@ class OutboundPolicy:
                 skip_keys.add(f"{copilot}:{native}")
                 if path:
                     excluded.add(str(path))
-            elif mode != (recorded or mode):
+                continue
+            currents[int(sid)] = current
+            recordeds[int(sid)] = recorded
+            if mode != (recorded or mode):
                 floored[int(sid)] = (recorded, mode)
         return cls(
             skip_ids=frozenset(skip_ids), skip_keys=frozenset(skip_keys),
             excluded_projects=frozenset(excluded), floored=floored,
+            current=currents, recorded=recordeds,
         )
 
     def keeps(self, session_id: Any) -> bool:
@@ -262,6 +278,39 @@ class OutboundPolicy:
         if floor is None:
             return text
         return outbound_text(text, floor[0], floor[1])
+
+    def _archived_floor(self, session_id: Any, row_mode: Optional[str]) -> Optional[tuple[str, str]]:
+        """(the mode an archived row was written under, the mode its text
+        may leave under), or ``None`` for a session this policy does not
+        know, which falls back to the session's own floor."""
+        try:
+            sid = int(session_id)
+        except (TypeError, ValueError):
+            return None
+        current = self._current.get(sid)
+        if current is None:
+            return None
+        # A row with no recorded mode predates the column: the session's
+        # recorded mode is the best evidence of what it was written under.
+        written = row_mode or self._recorded.get(sid) or current
+        return written, stricter_mode(written, current)
+
+    def archived_text(self, session_id: Any, text: Optional[str], row_mode: Optional[str]) -> Optional[str]:
+        """A kept session's ARCHIVED text as it may leave the machine, judged
+        by the trace row's own recorded mode against the project's current
+        mode: the session's recorded mode can be newer than the row."""
+        floor = self._archived_floor(session_id, row_mode)
+        if floor is None:
+            return self.text(session_id, text)
+        return outbound_text(text, floor[0], floor[1])
+
+    def archive_floors(self, session_id: Any, row_mode: Optional[str]) -> bool:
+        """Whether an archived row written under ``row_mode`` leaves as a
+        marker (a search hit on it is skipped, as a tightened session's is)."""
+        floor = self._archived_floor(session_id, row_mode)
+        if floor is None:
+            return self.floors(session_id)
+        return floor[1] != floor[0]
 
     def project_filter_sql(self, column: str) -> tuple[str, tuple]:
         """A WHERE fragment leaving out the opted-out projects' rows, for an

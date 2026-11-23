@@ -166,7 +166,7 @@ def build_transcript(
     rows = db.query(
         f"""
         SELECT t.sequence_num, t.role, t.content_preview, t.timestamp, t.id,
-               td.content
+               td.content, td.redaction_mode
         FROM copilot_turn t
         LEFT JOIN {C.TBL_TRACE_DOCUMENT} td
           ON td.session_ref = t.session_id
@@ -198,7 +198,7 @@ def build_transcript(
     turns: list[TranscriptTurn] = []
     prev_ts: Optional[datetime] = None
     archived = 0
-    for seq, role, preview, ts, turn_id, content in rows:
+    for seq, role, preview, ts, turn_id, content, archived_mode in rows:
         ts_dt = _parse_ts(ts)
         # Same rule as the page (mcp.tools.turn_latency): a gap needs BOTH
         # neighbours stamped, and a clock going backwards is no gap.
@@ -207,7 +207,13 @@ def build_transcript(
         # An archived row with EMPTY content is still archived (a
         # tool-result-only turn has no prose); only NULL means "no row".
         is_archived = content is not None
-        text = policy.text(session_id, content if is_archived else (preview or "")) or ""
+        # Archived text is judged by the row's own recorded mode: after a
+        # tightening and `ingest --full` the session is re-recorded, but its
+        # rows keep the mode they were archived under until `archive --full`.
+        if is_archived:
+            text = policy.archived_text(session_id, content, archived_mode) or ""
+        else:
+            text = policy.text(session_id, preview or "") or ""
         if is_archived:
             archived += 1
         if role != C.ROLE_USER and len(text) > per_turn_cap:

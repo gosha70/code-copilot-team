@@ -10,6 +10,19 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ## [Unreleased]
 
+### Security
+
+- **Archived text follows a project's current settings after a re-ingest.**
+  When a project was tightened and `ingest --full` re-recorded its sessions,
+  the outbound floor compared the session's new recorded mode with the
+  current one, found nothing to do, and let the archived rows through. Those
+  rows keep the mode they were written under until `archive --full`. Session
+  analysis, Ask `session_turns` and `search_text`, and MCP
+  `get_session_details` then sent that archived text as stored. Archived text
+  is now judged by its row's own recorded mode against the project's current
+  mode, so it leaves as the metadata-only marker. Affects 2.1.0. Until you
+  upgrade, run `archive --full` after tightening a project (#514).
+
 ### Fixed
 
 - **A routed supervisor that starts while another is taking the run lock

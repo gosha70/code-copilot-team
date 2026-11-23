@@ -182,20 +182,32 @@ def build_server(dsn: str, kuzu_path: str = ""):
             if not policy.keeps(session_id):
                 return _refused(session_id)
             details = tools.get_session_details(db, session_id)
-            if "error" in details or not policy.floors(session_id):
+            if "error" in details:
                 return details
+            # Archived text is judged by its row's own recorded mode: after a
+            # tightening and `ingest --full` the session is re-recorded (so it
+            # is not floored), but its rows keep their mode until
+            # `archive --full`. Everything else is rewritten by the re-ingest.
+            floored = policy.floors(session_id)
+            modes = tools.archived_modes(db, session_id)
+            if not floored and not any(policy.archive_floors(session_id, m) for m in modes.values()):
+                return details
+
             def text(value: Optional[str]) -> Optional[str]:
                 return policy.text(session_id, value)
 
             for turn in details["turns"]:
+                turn["content"] = policy.archived_text(session_id, turn["content"], modes.get(turn["sequence_num"]))
+                if not floored:
+                    continue
                 turn["content_preview"] = text(turn["content_preview"])
-                turn["content"] = text(turn["content"])
                 for call in turn["tool_calls"]:
                     call["input_preview"] = text(call["input_preview"])
                     call["error_message"] = text(call["error_message"])
-            for err in details["errors"]:
-                err["message"] = text(err["message"])
-                err["error_type"] = policy.error_type(session_id, err["error_type"])
+            if floored:
+                for err in details["errors"]:
+                    err["message"] = text(err["message"])
+                    err["error_type"] = policy.error_type(session_id, err["error_type"])
             return details
         finally:
             db.close()
