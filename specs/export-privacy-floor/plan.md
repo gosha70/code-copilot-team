@@ -8,7 +8,7 @@ justification: |
   for the store as it is. It reuses OutboundPolicy; there is no schema
   change and no new configuration. Lightweight by the owner's ruling of
   2026-11-20.
-status: draft
+status: approved
 date: 2026-11-23
 origin:
   issue: https://github.com/gosha70/code-copilot-team/issues/487
@@ -19,8 +19,9 @@ origin:
     proposal: "Export applies the same floor as the off-machine paths, by
     default", with "a flag [that] exports the store as it is". The owner,
     2026-11-20: "#487 waits until after 2.1.0: write a lightweight plan for
-    it first." On 2026-11-23, after 2.1.0, the owner asked to start #487
-    and answered the plan's four open decisions (D1 to D4 below).
+    it first." On 2026-11-23, after 2.1.0, the owner asked to start #487,
+    answered the plan's four open decisions (D1 to D4 below), and approved
+    the plan with two changes (recorded under Approval, below).
 ---
 
 # Plan: export applies a project's current privacy settings (#487)
@@ -42,8 +43,9 @@ The requirements, and the rule for every column of the seven tables, are in
    `copilot_turn`. The joined id is not written. The column table in
    `spec.md` then decides each row and column:
    - a row of an opted-out session is dropped, except in
-     `benchmark_results`, where the row stays and `session_ref` is emptied
-     (D3);
+     `benchmark_results`, where the row stays and `session_ref` is emptied;
+     there, in any row, a `run_dir` under an opted-out project's path is
+     emptied too (D3);
    - in a tightened session, `turns.content_preview` and
      `trace_documents.content` go through `policy.text`, and
      `redaction_mode` reads `metadata-only` (D2);
@@ -51,15 +53,19 @@ The requirements, and the rule for every column of the seven tables, are in
 
    CSV is written row by row as before, and Parquet builds its table from
    the same generator, so the two carry the same rows and values.
-3. **The stderr summary**, in counts only, never a project name, project
-   path or session.
-   - By default, after the last table: the number of sessions left out
-     (opted out) and of sessions exported as markers (tightened). Nothing is
-     printed when both are 0.
+3. **The stderr summary** counts what the written tables actually changed,
+   never naming a project, project path or session. Each row generator
+   tallies, per table, the rows it dropped, the rows it reduced to
+   `metadata-only` (a row counts once, whether its text, its mode or both
+   changed), and the `benchmark_results` rows whose `session_ref` or
+   `run_dir` it emptied.
+   - By default, one line per written table with a count above 0, after
+     that table is written. A table the floor did not change prints
+     nothing, so `--table kpis` with a tightened project prints nothing.
    - Under `--raw`: always one line, giving how many sessions of opted-out
-     projects and how many of tightened projects were written as stored.
-
-   The counts come from the policy: its skipped and floored sessions.
+     projects and how many of tightened projects were written as stored,
+     counting only sessions with rows in the written tables that the
+     default would have dropped or changed.
 4. **Tests.**
    - `tests/test_export.py`:
      - every table, opted out: the rows are gone, and a linked
@@ -70,9 +76,15 @@ The requirements, and the rule for every column of the seven tables, are in
        `rationale` are exported as stored;
      - an opt-out filed under the `project_ids` id, and one filed under the
        git root, each drop the session's rows (#478's combined check);
+     - a `run_dir` under an opted-out project's path is emptied, and one
+       outside it is kept;
      - the files of `--table all` agree with each other;
-     - `--raw` writes the store as it is and prints its one line;
-     - the default summary's counts, and neither line naming a project path;
+     - `--raw` writes the store as it is and prints its one line, with
+       `--raw --table kpis` reporting no tightened session;
+     - the summary counts what the written tables changed: `--table kpis`
+       with a tightened project prints nothing, `--table sessions` with one
+       reports one row reduced, and under `--table all` each changed table's
+       counts match its rows; neither line names a project path;
      - a store with nothing opted out or tightened: the same CSV bytes as
        today, and the same Parquet rows.
    - The canary harness gets an export capture, so the #457 floor tests
@@ -131,8 +143,25 @@ The requirements, and the rule for every column of the seven tables, are in
   recorded mode.
 - **D3. A `benchmark_results` row linked to an opted-out session is kept,
   with `session_ref` empty.** The benchmark outcome stays; its link to the
-  session goes.
+  session goes. Its `run_dir`, and that of any other row, is emptied when it
+  sits under an opted-out project's path, so a kept row cannot name the
+  project the opt-out hides.
 - **D4. A tightened session's feedback text is exported as stored.** The
   redaction mode has never governed feedback: it is stored unredacted under
   every mode, and no off-machine path sends it. An opted-out project's
   feedback rows are dropped (FR-3).
+
+### Approval (the owner, 2026-11-23)
+
+Approved with two changes, both made above:
+
+- **Where it is built.** Not on this plan's branch: the plan merges first
+  (PR #512), then the change is built on a fresh branch from master, in its
+  own PR.
+- **What the summary counts.** What the written tables actually changed:
+  rows dropped, rows reduced to `metadata-only`, `session_ref` or `run_dir`
+  emptied. So `--table kpis` with a tightened project prints nothing, and a
+  test says so.
+
+The `run_dir` line in D3 takes up the owner's optional suggestion, choosing
+to empty it rather than keep it as stored.

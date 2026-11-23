@@ -25,8 +25,9 @@ as it is.
   configured `ingest: "off"` now has no row in any table of session data:
   `sessions`, `turns`, `labels`, `kpis`, `trace_documents` and `feedback`.
   A `benchmark_results` row linked to such a session keeps its benchmark
-  outcome, with `session_ref` empty (D3). The column table below gives the
-  rule for every column.
+  outcome, with `session_ref` empty, and in any `benchmark_results` row a
+  `run_dir` that sits under an opted-out project's path is emptied (D3).
+  The column table below gives the rule for every column.
 - **FR-4: a tightened project exports markers.** For a session whose
   project's current mode is stricter than the mode it was recorded under,
   stored session text leaves as the marker `OutboundPolicy.text` returns,
@@ -38,15 +39,26 @@ as it is.
   stored: metadata is not content (`specs/redaction-canaries/spec.md`).
 - **FR-5: the store as it is, on request.** `--raw` writes every row as
   stored, as `export` does today (D1).
-- **FR-6: the export says what it changed, in counts only.**
-  - By default, when the floor drops or reduces anything, one summary on
-    stderr gives two counts and their reasons: sessions left out because
-    their project is opted out, and sessions whose text was exported as
-    markers because their project was tightened since ingest. Nothing is
-    printed when both counts are 0.
+- **FR-6: the export says what it changed in the tables it wrote, in counts
+  only.**
+  - By default, for each written table the floor changed, one stderr line
+    gives, with their reasons, the counts of:
+    - rows dropped, because their session's project is opted out;
+    - rows reduced to `metadata-only`, because their session's project was
+      tightened since ingest: the text replaced by the marker, the
+      `redaction_mode` set to `metadata-only`, or both, counting a row once;
+    - `benchmark_results` rows with `session_ref` or `run_dir` emptied,
+      because they pointed at an opted-out project.
+
+    Only counts above 0 are given. A table the floor did not change prints
+    nothing, so `--table kpis` with a tightened project prints nothing: its
+    rows carry no text and no mode.
   - `--raw` always prints one stderr line giving how many sessions of
     opted-out projects and how many of tightened projects it wrote as
-    stored, zeros included.
+    stored, zeros included. It counts only sessions with rows in the written
+    tables that the default export would have dropped or changed, so
+    `--raw --table kpis` with a tightened project reports no tightened
+    session.
   - Neither names a project, a project path or a session: counts only.
     Stdout carries the CSV alone.
 - **FR-7: nothing else changes.** A store with no opted-out or tightened
@@ -107,9 +119,14 @@ turn's `session_id`. The joined id is used to filter and is not written.
 
 **`benchmark_results`**, linked by `session_ref`, which may be empty.
 - Opted out: the row is kept and `session_ref` is emptied (D3). The other
-  sixteen columns, the benchmark's identity and outcome, are as stored.
+  sixteen columns, the benchmark's identity and outcome, are as stored,
+  except `run_dir` (below).
+- `run_dir`, in any row: emptied when it is the path of an opted-out
+  project or sits under it (D3), whatever `session_ref` holds; otherwise as
+  stored. The opted-out paths are the ones the off-machine paths never name
+  (`OutboundPolicy.excluded_projects`), compared by whole path components.
 - Tightened: all seventeen columns as stored.
-- A row with no `session_ref` is as stored under every setting.
+- A row with no `session_ref` is otherwise as stored under every setting.
 
 **`trace_documents`**, linked by `session_ref`.
 - Opted out: the rows are dropped.
