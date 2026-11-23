@@ -166,15 +166,16 @@ class OutboundFloor(unittest.TestCase):
         self.assertEqual(loosened.archived_text(2, "[redacted 9 chars sha256:x]", M), "[redacted 9 chars sha256:x]")
         self.assertFalse(loosened.archive_floors(2, M))
 
-    def test_an_archived_row_with_no_recorded_mode_takes_the_sessions(self):
+    def test_an_archived_row_with_no_or_an_unknown_mode_fails_closed(self):
+        """Not the session's mode: a re-ingest may have made it stricter
+        than the row was written under."""
         from session_analytics.ingest.redaction import OutboundPolicy
 
-        policy = OutboundPolicy(
-            current={1: C.REDACT_METADATA_ONLY}, recorded={1: C.REDACT_NONE},
-            floored={1: (C.REDACT_NONE, C.REDACT_METADATA_ONLY)},
-        )
-        self.assertTrue(policy.archived_text(1, "sk-secret", None).startswith("[redacted"))
-        self.assertTrue(policy.archive_floors(1, None))
+        policy = OutboundPolicy(current={1: C.REDACT_METADATA_ONLY}, recorded={1: C.REDACT_METADATA_ONLY})
+        for row_mode in (None, "", "bogus"):
+            with self.subTest(row_mode=row_mode):
+                self.assertTrue(policy.archived_text(1, "sk-secret", row_mode).startswith("[redacted"))
+                self.assertTrue(policy.archive_floors(1, row_mode))
 
     def test_a_session_the_policy_does_not_know_keeps_the_session_floor(self):
         from session_analytics.ingest.redaction import OutboundPolicy

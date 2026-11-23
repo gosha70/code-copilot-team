@@ -20,8 +20,9 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   analysis, Ask `session_turns` and `search_text`, and MCP
   `get_session_details` then sent that archived text as stored. Archived text
   is now judged by its row's own recorded mode against the project's current
-  mode, so it leaves as the metadata-only marker. Affects 2.1.0. Until you
-  upgrade, run `archive --full` after tightening a project (#514).
+  mode, so it leaves as the metadata-only marker. The upgrade alone closes
+  the gap, with no re-archive needed. Affects 2.1.0; until you upgrade, run
+  `archive --full` after tightening a project (#514).
 
 ### Fixed
 

@@ -290,9 +290,11 @@ class OutboundPolicy:
         current = self._current.get(sid)
         if current is None:
             return None
-        # A row with no recorded mode predates the column: the session's
-        # recorded mode is the best evidence of what it was written under.
-        written = row_mode or self._recorded.get(sid) or current
+        # The column is NOT NULL, but a row with no recorded mode fails
+        # closed: it counts as `none`, the loosest, never as the session's
+        # mode, which a re-ingest may have made stricter than the row. An
+        # unknown mode fails closed in stricter_mode.
+        written = row_mode if row_mode is not None else C.REDACT_NONE
         return written, stricter_mode(written, current)
 
     def archived_text(self, session_id: Any, text: Optional[str], row_mode: Optional[str]) -> Optional[str]:
@@ -302,7 +304,12 @@ class OutboundPolicy:
         floor = self._archived_floor(session_id, row_mode)
         if floor is None:
             return self.text(session_id, text)
-        return outbound_text(text, floor[0], floor[1])
+        written, outbound = floor
+        # Compared directly, not through outbound_text: its `recorded or
+        # outbound` would read an empty recorded mode as "no change".
+        if not text or outbound == written:
+            return text
+        return redact_text(text, C.REDACT_METADATA_ONLY)
 
     def archive_floors(self, session_id: Any, row_mode: Optional[str]) -> bool:
         """Whether an archived row written under ``row_mode`` leaves as a
