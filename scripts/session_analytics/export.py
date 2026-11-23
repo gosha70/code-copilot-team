@@ -3,7 +3,9 @@
 #
 # Read-only over the relational store: it NEVER re-reads raw transcripts, so
 # an export can only ever surface what ingest already wrote — redaction-safe
-# by construction (FR-6). A project opted out under E8 simply has no rows.
+# by construction (FR-6). A project opted out under E8 before ingest has no
+# rows; one opted out or tightened after ingest is handled by the privacy
+# floor below (#487).
 #
 # Each table has a FIXED, documented column order (below) and a deterministic
 # ``ORDER BY``, so two exports of an unchanged store are identical. Row
@@ -16,7 +18,9 @@
 from __future__ import annotations
 
 import csv
-from typing import Any, Iterator
+import os
+from dataclasses import dataclass
+from typing import Any, Iterator, Optional
 
 from . import constants as C
 from .relational.db import Database
@@ -285,6 +289,199 @@ class UnknownExportTableError(ValueError):
     """Raised for a table name outside ``constants.EXPORT_DATA_TABLES``."""
 
 
+# ── the privacy floor (#487) ────────────────────────────────────────────
+#
+# By default `export` applies the floor every off-machine path applies
+# (#457): each session's project is read under its CURRENT settings, with
+# #478's combined check, through one OutboundPolicy per run. The rule for
+# every column is in specs/export-privacy-floor/spec.md ("Column
+# decisions"):
+#
+# * an opted-out project's sessions have no row in any table of session
+#   data; a benchmark outcome linked to one keeps its row with session_ref
+#   empty, and in any benchmark row a run_dir under an opted-out project's
+#   path is emptied;
+# * a tightened project's stored text (turns.content_preview,
+#   trace_documents.content) leaves as the metadata-only marker, and its
+#   redaction_mode reads metadata-only; feedback text stays as stored;
+# * every other column is written as stored.
+#
+# Under ``raw`` every row is written as stored, and the floor only records
+# the sessions it would have dropped or changed, for the one-line notice. A
+# store with nothing opted out or tightened takes the unfiltered path, so
+# its export is byte for byte what it was before.
+
+# heuristic_label has no session column: the session comes from the turn
+# (turn_id is NOT NULL and references copilot_turn), as a trailing column
+# that is used to filter and never written.
+_LABELS_WITH_SESSION_SQL = f"""
+    SELECT {", ".join(f"hl.{c}" for c in LABELS_COLUMNS)}, t.session_id
+    FROM heuristic_label hl
+    JOIN copilot_turn t ON t.id = hl.turn_id
+    ORDER BY hl.turn_id, hl.rubric_name
+"""
+
+_DROPPED, _REDUCED, _EMPTIED = "dropped", "reduced", "emptied"
+
+
+@dataclass(frozen=True)
+class _FloorRule:
+    """Where a table's session id and floored columns are."""
+
+    session_idx: Optional[int]  # None: the session is joined on (labels)
+    text_idx: tuple[int, ...] = ()  # stored text, replaced by the marker
+    mode_idx: Optional[int] = None  # redaction_mode, set to metadata-only
+    keeps_row: bool = False  # benchmark_results: empty the link, keep the row
+    run_dir_idx: Optional[int] = None
+
+
+_FLOOR_RULES: dict[str, _FloorRule] = {
+    C.EXPORT_TABLE_SESSIONS: _FloorRule(
+        session_idx=SESSIONS_COLUMNS.index("id"),
+        mode_idx=SESSIONS_COLUMNS.index("redaction_mode"),
+    ),
+    C.EXPORT_TABLE_TURNS: _FloorRule(
+        session_idx=TURNS_COLUMNS.index("session_id"),
+        text_idx=(TURNS_COLUMNS.index("content_preview"),),
+        mode_idx=TURNS_COLUMNS.index("redaction_mode"),
+    ),
+    C.EXPORT_TABLE_LABELS: _FloorRule(session_idx=None),
+    C.EXPORT_TABLE_KPIS: _FloorRule(session_idx=KPIS_COLUMNS.index("session_id")),
+    C.EXPORT_TABLE_BENCHMARK_RESULTS: _FloorRule(
+        session_idx=BENCHMARK_RESULTS_COLUMNS.index("session_ref"),
+        keeps_row=True,
+        run_dir_idx=BENCHMARK_RESULTS_COLUMNS.index("run_dir"),
+    ),
+    C.EXPORT_TABLE_TRACE_DOCUMENTS: _FloorRule(
+        session_idx=TRACE_DOCUMENTS_COLUMNS.index("session_ref"),
+        text_idx=(TRACE_DOCUMENTS_COLUMNS.index("content"),),
+        mode_idx=TRACE_DOCUMENTS_COLUMNS.index("redaction_mode"),
+    ),
+    C.EXPORT_TABLE_FEEDBACK: _FloorRule(session_idx=FEEDBACK_COLUMNS.index("session_ref")),
+}
+
+
+def _under_any(path: Any, roots: frozenset) -> bool:
+    """Whether ``path`` is one of ``roots`` or inside one, by whole path
+    components (``/a/bc`` is not inside ``/a/b``)."""
+    if not path or not roots:
+        return False
+    p = os.path.normpath(str(path))
+    for root in roots:
+        r = os.path.normpath(str(root))
+        if p == r or p.startswith(r.rstrip(os.sep) + os.sep):
+            return True
+    return False
+
+
+def _count(n: int, noun: str) -> str:
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
+
+
+class ExportFloor:
+    """One ``OutboundPolicy`` applied to every table an export writes.
+
+    ``changes`` counts, per written table, the rows the floor dropped,
+    reduced to metadata-only, or kept with a link emptied. Under ``raw``
+    nothing is changed, and ``raw_opted_out`` / ``raw_tightened`` collect
+    the sessions whose rows in the written tables it would have dropped or
+    changed.
+    """
+
+    def __init__(self, policy: Any, *, raw: bool = False) -> None:
+        self.policy = policy
+        self.raw = raw
+        self.changes: dict[str, dict[str, int]] = {}
+        self.raw_opted_out: set[int] = set()
+        self.raw_tightened: set[int] = set()
+
+    @property
+    def inert(self) -> bool:
+        """Nothing in the store is opted out or tightened."""
+        return not self.policy.skip_ids and not self.policy.any_floored
+
+    def rows(self, db: Database, table: str) -> Iterator[tuple]:
+        """``table``'s rows as the floor lets them leave (as stored under
+        ``raw``), counting what it changed. Complete once exhausted."""
+        rule = _FLOOR_RULES[table]
+        counts = self.changes.setdefault(table, {_DROPPED: 0, _REDUCED: 0, _EMPTIED: 0})
+        joined = rule.session_idx is None
+        if self.inert or (joined and not self.policy.skip_ids):
+            # Nothing in this table can change: the unfiltered path.
+            yield from _ROW_ITERATORS[table](db)
+            return
+        source = _stream(db, _LABELS_WITH_SESSION_SQL, _LABELS_BOOL_IDX) if joined else _ROW_ITERATORS[table](db)
+        for row in source:
+            if joined:
+                sid, row = row[-1], row[:-1]
+            else:
+                sid = row[rule.session_idx]
+            out, change = self._apply(rule, row, sid)
+            if change is not None:
+                counts[change] += 1
+                if self.raw:
+                    self._note_raw(change, sid)
+            if self.raw:
+                yield row
+            elif out is not None:
+                yield out
+
+    def _apply(self, rule: _FloorRule, row: tuple, sid: Any) -> tuple[Optional[tuple], Optional[str]]:
+        """(the row as it may leave, or ``None`` when dropped; what changed)."""
+        policy = self.policy
+        if rule.keeps_row:
+            r = list(row)
+            if sid is not None and not policy.keeps(sid):
+                r[rule.session_idx] = None
+            if _under_any(r[rule.run_dir_idx], policy.excluded_projects):
+                r[rule.run_dir_idx] = None
+            out = tuple(r)
+            return out, (_EMPTIED if out != row else None)
+        if not policy.keeps(sid):
+            return None, _DROPPED
+        if policy.floors(sid):
+            r = list(row)
+            for i in rule.text_idx:
+                r[i] = policy.text(sid, r[i])
+            if rule.mode_idx is not None:
+                r[rule.mode_idx] = C.REDACT_METADATA_ONLY
+            out = tuple(r)
+            return out, (_REDUCED if out != row else None)
+        return row, None
+
+    def _note_raw(self, change: str, sid: Any) -> None:
+        try:
+            sid = int(sid)
+        except (TypeError, ValueError):
+            return  # a run_dir emptied in a row linked to no session
+        if change == _REDUCED:
+            self.raw_tightened.add(sid)
+        elif not self.policy.keeps(sid):  # dropped, or its benchmark link emptied
+            self.raw_opted_out.add(sid)
+
+    def table_summary(self, table: str) -> Optional[str]:
+        """One stderr line of what the floor changed in ``table``, in counts
+        only; ``None`` when it changed nothing, and always under ``raw``."""
+        if self.raw:
+            return None
+        c = self.changes.get(table) or {}
+        parts = []
+        if c.get(_DROPPED):
+            parts.append(f"{_count(c[_DROPPED], 'row')} dropped (project opted out)")
+        if c.get(_REDUCED):
+            parts.append(f"{_count(c[_REDUCED], 'row')} reduced to metadata-only (project tightened since ingest)")
+        if c.get(_EMPTIED):
+            parts.append(f"{_count(c[_EMPTIED], 'row')} with session_ref or run_dir emptied (opted-out project)")
+        return f"export: {table}: " + "; ".join(parts) if parts else None
+
+    def raw_summary(self) -> str:
+        """The one stderr line ``--raw`` prints, zeros included."""
+        return (
+            f"export --raw: wrote {_count(len(self.raw_opted_out), 'session')} of opted-out projects "
+            f"and {_count(len(self.raw_tightened), 'session')} of tightened projects as stored"
+        )
+
+
 def columns_for(table: str) -> tuple[str, ...]:
     """The fixed column order for ``table`` (one of ``EXPORT_DATA_TABLES``)."""
     try:
@@ -293,19 +490,20 @@ def columns_for(table: str) -> tuple[str, ...]:
         raise UnknownExportTableError(f"unknown export table: {table!r}") from None
 
 
-def rows_for(db: Database, table: str) -> Iterator[tuple]:
-    """A streaming row generator for ``table`` (one of ``EXPORT_DATA_TABLES``)."""
+def rows_for(db: Database, table: str, floor: Optional[ExportFloor] = None) -> Iterator[tuple]:
+    """A streaming row generator for ``table`` (one of ``EXPORT_DATA_TABLES``):
+    as ``floor`` lets the rows leave (#487), or as stored without one."""
     try:
         gen = _ROW_ITERATORS[table]
     except KeyError:
         raise UnknownExportTableError(f"unknown export table: {table!r}") from None
-    return gen(db)
+    return gen(db) if floor is None else floor.rows(db, table)
 
 
 # ── CSV writer (stdlib csv, streamed) ───────────────────────────────────
 
 
-def write_csv(db: Database, table: str, fp) -> None:
+def write_csv(db: Database, table: str, fp, floor: Optional[ExportFloor] = None) -> None:
     """Stream ``table`` to ``fp`` (any text-mode writable) as CSV.
 
     Rows are written one at a time as they arrive from the DB-API cursor —
@@ -313,14 +511,14 @@ def write_csv(db: Database, table: str, fp) -> None:
     """
     writer = csv.writer(fp)
     writer.writerow(columns_for(table))
-    for row in rows_for(db, table):
+    for row in rows_for(db, table, floor):
         writer.writerow(row)
 
 
 # ── Parquet writer (pyarrow, lazy import — D-parquet-in-memory) ─────────
 
 
-def write_parquet(db: Database, table: str, path) -> None:
+def write_parquet(db: Database, table: str, path, floor: Optional[ExportFloor] = None) -> None:
     """Write ``table`` to the Parquet file at ``path``; same columns/order as CSV.
 
     ``pyarrow`` is imported lazily here — never at module import time — so
@@ -337,7 +535,7 @@ def write_parquet(db: Database, table: str, path) -> None:
     import pyarrow.parquet as pq
 
     columns = columns_for(table)
-    data = list(rows_for(db, table))
+    data = list(rows_for(db, table, floor))
     by_column: list[list[Any]] = (
         [list(col) for col in zip(*data)] if data else [[] for _ in columns]
     )

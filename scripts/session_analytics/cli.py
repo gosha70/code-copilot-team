@@ -341,6 +341,15 @@ def _build_parser() -> argparse.ArgumentParser:
             "--table all requires --out to be a directory (one <table>.<ext> file each)."
         ),
     )
+    p_exp.add_argument(
+        "--raw",
+        action="store_true",
+        help=(
+            "Write the store as it is. By default export applies each project's "
+            "current settings: no rows for a project opted out since ingest, and "
+            "metadata-only markers for one tightened since (#487)."
+        ),
+    )
 
     p_cor = sub.add_parser(
         "correlate",
@@ -700,16 +709,26 @@ def _cmd_export(args: argparse.Namespace) -> int:
         db = Database.connect(cfg.dsn)
         try:
             apply_ddl(db)
+            # #487: one policy for every table, so --table all's files agree.
+            # Under --raw it is loaded only to count what it would change.
+            from .ingest.redaction import OutboundPolicy
+
+            floor = exp.ExportFloor(OutboundPolicy.load(db, cfg), raw=args.raw)
             if args.table == C.EXPORT_TABLE_ALL:
                 args.out.mkdir(parents=True, exist_ok=True)
                 for table in C.EXPORT_DATA_TABLES:
                     dest = args.out / f"{table}.{args.format}"
-                    _export_one(exp, db, table, args.format, dest)
+                    _export_one(exp, db, table, args.format, dest, floor)
+                    _report_floor(floor, table)
             elif args.out is not None:
                 args.out.parent.mkdir(parents=True, exist_ok=True)
-                _export_one(exp, db, args.table, args.format, args.out)
+                _export_one(exp, db, args.table, args.format, args.out, floor)
+                _report_floor(floor, args.table)
             else:
-                exp.write_csv(db, args.table, sys.stdout)
+                exp.write_csv(db, args.table, sys.stdout, floor)
+                _report_floor(floor, args.table)
+            if args.raw:
+                print(floor.raw_summary(), file=sys.stderr)
         finally:
             db.close()
     except ImportError as exc:
@@ -730,12 +749,20 @@ def _cmd_export(args: argparse.Namespace) -> int:
     return C.EXIT_OK
 
 
-def _export_one(exp, db, table: str, fmt: str, dest: Path) -> None:
+def _export_one(exp, db, table: str, fmt: str, dest: Path, floor=None) -> None:
     if fmt == C.EXPORT_FORMAT_PARQUET:
-        exp.write_parquet(db, table, dest)
+        exp.write_parquet(db, table, dest, floor)
     else:
         with open(dest, "w", newline="", encoding="utf-8") as fp:
-            exp.write_csv(db, table, fp)
+            exp.write_csv(db, table, fp, floor)
+
+
+def _report_floor(floor, table: str) -> None:
+    """#487: what the privacy floor changed in ``table``, on stderr, in
+    counts only (never a project, a path or a session)."""
+    line = floor.table_summary(table)
+    if line:
+        print(line, file=sys.stderr)
 
 
 def _cmd_threads(args: argparse.Namespace) -> int:

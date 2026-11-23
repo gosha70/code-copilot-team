@@ -100,7 +100,7 @@ The inventory behind this spec found a second gap, and the owner ruled it in sco
 
 - No change to what each redaction mode removes. `code` still keeps prose; secret-pattern scanning is not added.
 - Metadata is not content and no mode redacts it: `project_path`, file paths, slash commands, tool names, model names and harness-stamp digests. Canaries are not placed there, and the spec does not change that.
-- On-machine outputs are out of scope, per the owner's coverage ruling: Studio API responses, search snippets shown in Studio, CSV/Parquet export and the hand-labelling CSV.
+- On-machine outputs are out of scope, per the owner's coverage ruling: Studio API responses, search snippets shown in Studio, CSV/Parquet export and the hand-labelling CSV. (#487 later gave CSV/Parquet export the same floor by default: `specs/export-privacy-floor/`.)
 - Project text that is not session content stays out: expectation statements and verifier evidence (from `spec.md` and the ledger), and the auto-build triage report. The gap is recorded as a follow-up.
 - No real network, provider or model in any test.
 - No schema change. Stores ingested before the change need no migration: the floor reads the stored mode.

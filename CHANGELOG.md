@@ -24,6 +24,24 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   the gap, with no re-archive needed. Affects 2.1.0; until you upgrade, run
   `archive --full` after tightening a project (#514).
 
+### Changed
+
+- **`session-analytics export` applies each project's current settings.** A
+  project opted out (`ingest: "off"`) or tightened to a stricter redaction
+  mode after its sessions were ingested was exported as stored, planted
+  secrets included. Export now applies the floor that every path sending
+  session text off the machine applies, reading the settings under both of
+  the project's keys.
+  - An opted-out project's sessions have no row in any table of session data.
+    A linked benchmark outcome stays, with `session_ref` empty and a
+    `run_dir` under the project emptied.
+  - A tightened project's stored text leaves as the metadata-only marker,
+    with `redaction_mode` reading `metadata-only`.
+
+  One stderr line per changed table gives the counts, never a name, and
+  `--raw` writes the store as it is. This supersedes the 2.1.0 upgrade note
+  "`export` still writes what the store holds" (#487).
+
 ### Fixed
 
 - **A routed supervisor that starts while another is taking the run lock
