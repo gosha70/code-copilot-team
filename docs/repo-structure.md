@@ -75,7 +75,7 @@ code-copilot-team/
 │   ├── test-routing-tasks.sh          160 task metadata + floor + task-addressed explain tests (#254 C)
 │   ├── test-routing-packet.sh         102 immutable delegation-packet tests (#254 C T2)
 │   ├── test-routing-delegation.sh     180 route-class + packet execution + reconciliation tests (#254 C T3-T5)
-│   ├── test-routing-recovery.sh       377 probe-state + timing + probe + tick-wake tests (#257 D)
+│   ├── test-routing-recovery.sh       380 probe-state + timing + probe + tick-wake tests (#257 D)
 │   ├── test-pre-pr-check.sh           17 close-keyword audit tests (#408)
 │   ├── test-github-hardening.sh       14 hardening audit tests (classic + ruleset sources)
 │   ├── test-cct-home.sh               146 home resolver + `cct home` tests (#411)

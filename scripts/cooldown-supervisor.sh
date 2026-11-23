@@ -237,6 +237,11 @@ is_nonneg_int() { [[ "$1" =~ ^[0-9]+$ ]]; }
 # before either could refuse. The lock has to cover initialisation,
 # not just the run.
 RUN_LOCK="$LEDGER_DIR/routing-run.lock"
+# #507: how long a supervisor that finds the lock waits for its owner's pid,
+# which the owner writes just after its mkdir: RL_PID_WAIT_TRIES reads,
+# RL_PID_WAIT_STEP_SEC apart, about a second in all.
+RL_PID_WAIT_TRIES=10
+RL_PID_WAIT_STEP_SEC=0.1
 mkdir -p "$LEDGER_DIR"
 run_unlock() {
   [[ -n "${RUN_LOCK:-}" ]] || return 0
@@ -262,7 +267,18 @@ rt_tmp_cleanup() {
 
 if [[ "$ROUTING" == "1" ]]; then
   if ! mkdir "$RUN_LOCK" 2>/dev/null; then
-    RL_OWNER="$(cat "$RUN_LOCK/pid" 2>/dev/null || echo "")"
+    # #507: the owner takes the lock in two steps, the mkdir above and then
+    # its pid below, so a supervisor that loses the mkdir race can arrive
+    # between them. Re-read the pid for about a second before calling the
+    # lock ownerless: "remove it" is the wrong advice while its owner runs.
+    RL_OWNER=""
+    _rl_try=0
+    while (( _rl_try < RL_PID_WAIT_TRIES )); do
+      RL_OWNER="$(cat "$RUN_LOCK/pid" 2>/dev/null || echo "")"
+      [[ "$RL_OWNER" =~ ^[0-9]+$ ]] && break
+      _rl_try=$((_rl_try + 1))
+      if (( _rl_try < RL_PID_WAIT_TRIES )); then sleep "$RL_PID_WAIT_STEP_SEC"; fi
+    done
     if [[ ! "$RL_OWNER" =~ ^[0-9]+$ ]]; then
       err "the run lock $RUN_LOCK exists but its owner is unverifiable (missing/malformed pid)."
       err "Refusing to take it over. Inspect it, and remove it if no supervisor is running."
