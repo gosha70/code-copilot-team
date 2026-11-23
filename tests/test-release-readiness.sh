@@ -61,13 +61,27 @@ check() {
 }
 warn() { echo "  WARN: $1"; WARN=$((WARN + 1)); }
 # A gate that owns its own reporting: run it, judge it by exit code only.
+# A failing gate prints what it printed, so the reason is in this log and
+# not only in a re-run (#519).
 gate() {
   local name="$1"; shift
-  if "$@" >/dev/null 2>&1; then
+  local out rc=0
+  out=$("$@" 2>&1) || rc=$?
+  if [[ "$rc" -eq 0 ]]; then
     echo "  PASS: $name"; PASS=$((PASS + 1))
   else
-    echo "  FAIL: $name (exit $?)"; FAIL=$((FAIL + 1))
+    echo "  FAIL: $name (exit $rc)"; FAIL=$((FAIL + 1))
+    show_output "$out"
   fi
+}
+# Indented under the FAIL line it explains.
+show_output() {
+  if [[ -n "$1" ]]; then printf '%s\n' "$1" | sed 's/^/      | /'; fi
+}
+# This version's CHANGELOG section, as prepare-release.sh extracts it: the
+# lines after `## [X.Y.Z]`, up to the next `## [` heading.
+changelog_section() {
+  awk -v h="## [$1]" 'index($0, h) == 1 { grab = 1; next } grab && /^## \[/ { exit } grab { print }' CHANGELOG.md
 }
 
 # Only processes this script started are ever signalled. Each launcher
@@ -217,12 +231,12 @@ section "cct front door"
 for cmd in "features" "list" "doctor --no-network" "config validate" "help"; do
   gate "cct $cmd" bash scripts/cct $cmd
 done
-# Capture, then match: `grep -q` closes the pipe on its first hit, the
-# producer takes SIGPIPE, and `pipefail` reports 141 for a successful
-# match. The same trap is documented in tests/test-cct-cli.sh.
-FEATURES_OUT=$(bash scripts/cct features 2>/dev/null)
-check "cct features reports this release" \
-  "grep -q '$PI_V' <<<\"\$FEATURES_OUT\"" "no feature marked $PI_V"
+# A release may ship no new feature, so nothing has to carry this version.
+# What a version bump must not leave behind is a feature still marked
+# `since: unreleased`, which would ship under that label (#519).
+UNRELEASED=$(grep -nE "^[[:space:]]*since:[[:space:]]*[\"']?unreleased[\"']?[[:space:]]*\$" shared/features/catalog.yaml)
+check "no catalog entry is since: unreleased" "[[ -z \"\$UNRELEASED\" ]]" \
+  "shared/features/catalog.yaml line $(cut -d: -f1 <<<"$UNRELEASED" | paste -sd, -)"
 RC=0; bash scripts/cct no-such-command >/dev/null 2>&1 || RC=$?
 check "an unknown cct command exits 2" "[[ '$RC' == '2' ]]"
 
@@ -256,15 +270,20 @@ if git rev-parse -q --verify "refs/tags/v$PI_V" >/dev/null; then
 else
   # Removed first, or a previous run's artifacts pass for this one's.
   rm -f dist/RELEASE_NOTES.md dist/SHA256SUMS 2>/dev/null
-  if bash scripts/prepare-release.sh "$PI_V" >/dev/null 2>&1; then
+  PREP_RC=0; PREP_OUT=$(bash scripts/prepare-release.sh "$PI_V" 2>&1) || PREP_RC=$?
+  if [[ "$PREP_RC" -eq 0 ]]; then
     echo "  PASS: prepare-release.sh $PI_V"; PASS=$((PASS + 1))
     check "release notes were written" "[[ -s dist/RELEASE_NOTES.md ]]"
     check "checksums were written" "[[ -s dist/SHA256SUMS ]]"
-    NOTES_HEAD=$(head -40 dist/RELEASE_NOTES.md 2>/dev/null)
-    check "the notes carry this version's CHANGELOG section" \
-      "grep -qiE 'highlights|added|breaking' <<<\"\$NOTES_HEAD\""
+    # Compared whole, not searched for a heading: a release with no
+    # Highlights or Added section passes, and notes that are empty or not
+    # this version's section fail (#519).
+    check "the notes are this version's CHANGELOG section" \
+      "[[ -s dist/RELEASE_NOTES.md ]] && cmp -s dist/RELEASE_NOTES.md <(changelog_section '$PI_V')" \
+      "dist/RELEASE_NOTES.md differs from the [$PI_V] section of CHANGELOG.md"
   else
-    echo "  FAIL: prepare-release.sh $PI_V"; FAIL=$((FAIL + 1))
+    echo "  FAIL: prepare-release.sh $PI_V (exit $PREP_RC)"; FAIL=$((FAIL + 1))
+    show_output "$PREP_OUT"
   fi
 fi
 
