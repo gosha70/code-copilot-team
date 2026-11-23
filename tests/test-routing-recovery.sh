@@ -1418,14 +1418,15 @@ gap_supervisor() { ( set +e; cd "$REPO_DIR"
         CCT_ROUTING_REGISTRY="$TK/reg.toml" CCT_ROUTING_STATE="$WK/gap-state.json" \
         bash "$SUPV" demo-gap --routing --worktree "$WK/gap" --profile unattended 2>&1
     echo "rc=$?" ); }
+GAP_OWNER=$$   # this shell: alive for the whole case
 mkdir -p "$GAP_LOCK"
-( sleep 0.5; printf '%s\n' "$$" > "$GAP_LOCK/pid" ) &
+( sleep 0.5; printf '%s\n' "$GAP_OWNER" > "$GAP_LOCK/pid" ) &
 GAP_WRITER=$!
 GAP_OUT=$(gap_supervisor)
 wait "$GAP_WRITER"
 assert "lock-gap: a supervisor that finds the lock before its pid waits, then names the running owner" \
     bash -c "grep -q 'already running feature' <<< \"\$1\" && ! grep -q 'unverifiable' <<< \"\$1\" && grep -q '^rc=5$' <<< \"\$1\"" _ "$GAP_OUT"
-assert_eq "lock-gap: ...and leaves the owner's lock as it was" "$$" "$(cat "$GAP_LOCK/pid" 2>/dev/null)"
+assert_eq "lock-gap: ...and leaves the owner's lock as it was" "$GAP_OWNER" "$(cat "$GAP_LOCK/pid" 2>/dev/null)"
 # A lock that never gets a pid is still refused as unverifiable, after the wait.
 rm -f "$GAP_LOCK/pid"
 GAP_OUT=$(gap_supervisor)
