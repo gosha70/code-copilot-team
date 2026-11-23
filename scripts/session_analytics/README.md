@@ -399,7 +399,8 @@ the machine does, reading them under both of the project's keys (its
 - A project opted out since ingest has no row in `sessions`, `turns`,
   `labels`, `kpis`, `trace_documents` or `feedback`. A `benchmark_results`
   row linked to one of its sessions keeps its outcome with `session_ref`
-  empty, and a `run_dir` under the project's path is emptied.
+  empty. A `run_dir`, or a session's `benchmark_run_dir`, under the
+  project's path is emptied.
 - A project tightened since ingest exports its sessions' stored text
   (`turns.content_preview`, `trace_documents.content`) as a metadata-only
   marker, and their `redaction_mode` reads `metadata-only`. Feedback text,

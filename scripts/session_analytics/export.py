@@ -299,8 +299,9 @@ class UnknownExportTableError(ValueError):
 #
 # * an opted-out project's sessions have no row in any table of session
 #   data; a benchmark outcome linked to one keeps its row with session_ref
-#   empty, and in any benchmark row a run_dir under an opted-out project's
-#   path is emptied;
+#   empty, and a run directory under an opted-out project's path is
+#   emptied wherever it is written (benchmark_results.run_dir,
+#   sessions.benchmark_run_dir);
 # * a tightened project's stored text (turns.content_preview,
 #   trace_documents.content) leaves as the metadata-only marker, and its
 #   redaction_mode reads metadata-only; feedback text stays as stored;
@@ -332,13 +333,16 @@ class _FloorRule:
     text_idx: tuple[int, ...] = ()  # stored text, replaced by the marker
     mode_idx: Optional[int] = None  # redaction_mode, set to metadata-only
     keeps_row: bool = False  # benchmark_results: empty the link, keep the row
-    run_dir_idx: Optional[int] = None
+    run_dir_idx: Optional[int] = None  # a run directory, emptied under an opted-out path
+    emptied: str = ""  # what the summary says was emptied
 
 
 _FLOOR_RULES: dict[str, _FloorRule] = {
     C.EXPORT_TABLE_SESSIONS: _FloorRule(
         session_idx=SESSIONS_COLUMNS.index("id"),
         mode_idx=SESSIONS_COLUMNS.index("redaction_mode"),
+        run_dir_idx=SESSIONS_COLUMNS.index(C.COL_BENCHMARK_RUN_DIR),
+        emptied=C.COL_BENCHMARK_RUN_DIR,
     ),
     C.EXPORT_TABLE_TURNS: _FloorRule(
         session_idx=TURNS_COLUMNS.index("session_id"),
@@ -351,6 +355,7 @@ _FLOOR_RULES: dict[str, _FloorRule] = {
         session_idx=BENCHMARK_RESULTS_COLUMNS.index("session_ref"),
         keeps_row=True,
         run_dir_idx=BENCHMARK_RESULTS_COLUMNS.index("run_dir"),
+        emptied="session_ref or run_dir",
     ),
     C.EXPORT_TABLE_TRACE_DOCUMENTS: _FloorRule(
         session_idx=TRACE_DOCUMENTS_COLUMNS.index("session_ref"),
@@ -416,8 +421,8 @@ class ExportFloor:
                 sid, row = row[-1], row[:-1]
             else:
                 sid = row[rule.session_idx]
-            out, change = self._apply(rule, row, sid)
-            if change is not None:
+            out, changes = self._apply(rule, row, sid)
+            for change in changes:
                 counts[change] += 1
                 if self.raw:
                     self._note_raw(change, sid)
@@ -426,28 +431,29 @@ class ExportFloor:
             elif out is not None:
                 yield out
 
-    def _apply(self, rule: _FloorRule, row: tuple, sid: Any) -> tuple[Optional[tuple], Optional[str]]:
-        """(the row as it may leave, or ``None`` when dropped; what changed)."""
+    def _apply(self, rule: _FloorRule, row: tuple, sid: Any) -> tuple[Optional[tuple], tuple[str, ...]]:
+        """(the row as it may leave, or ``None`` when dropped; what changed —
+        a kept row can be both reduced and have a link emptied)."""
         policy = self.policy
-        if rule.keeps_row:
-            r = list(row)
-            if sid is not None and not policy.keeps(sid):
-                r[rule.session_idx] = None
-            if _under_any(r[rule.run_dir_idx], policy.excluded_projects):
-                r[rule.run_dir_idx] = None
-            out = tuple(r)
-            return out, (_EMPTIED if out != row else None)
-        if not policy.keeps(sid):
-            return None, _DROPPED
+        if not rule.keeps_row and not policy.keeps(sid):
+            return None, (_DROPPED,)
+        r = list(row)
+        changes: list[str] = []
         if policy.floors(sid):
-            r = list(row)
             for i in rule.text_idx:
                 r[i] = policy.text(sid, r[i])
             if rule.mode_idx is not None:
                 r[rule.mode_idx] = C.REDACT_METADATA_ONLY
-            out = tuple(r)
-            return out, (_REDUCED if out != row else None)
-        return row, None
+            if r != list(row):
+                changes.append(_REDUCED)
+        before = list(r)
+        if rule.keeps_row and sid is not None and not policy.keeps(sid):
+            r[rule.session_idx] = None
+        if rule.run_dir_idx is not None and _under_any(r[rule.run_dir_idx], policy.excluded_projects):
+            r[rule.run_dir_idx] = None
+        if r != before:
+            changes.append(_EMPTIED)
+        return tuple(r), tuple(changes)
 
     def _note_raw(self, change: str, sid: Any) -> None:
         try:
@@ -471,7 +477,7 @@ class ExportFloor:
         if c.get(_REDUCED):
             parts.append(f"{_count(c[_REDUCED], 'row')} reduced to metadata-only (project tightened since ingest)")
         if c.get(_EMPTIED):
-            parts.append(f"{_count(c[_EMPTIED], 'row')} with session_ref or run_dir emptied (opted-out project)")
+            parts.append(f"{_count(c[_EMPTIED], 'row')} with {_FLOOR_RULES[table].emptied} emptied (opted-out project)")
         return f"export: {table}: " + "; ".join(parts) if parts else None
 
     def raw_summary(self) -> str:

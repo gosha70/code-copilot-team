@@ -34,7 +34,8 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   the project's keys.
   - An opted-out project's sessions have no row in any table of session data.
     A linked benchmark outcome stays, with `session_ref` empty and a
-    `run_dir` under the project emptied.
+    `run_dir` under the project emptied, as is a session's
+    `benchmark_run_dir`.
   - A tightened project's stored text leaves as the metadata-only marker,
     with `redaction_mode` reading `metadata-only`.
 

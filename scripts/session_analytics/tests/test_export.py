@@ -379,6 +379,12 @@ class TestExportFloorRules(unittest.TestCase):
         # time instead of having the floor decide its columns; fail here.
         self.assertEqual(set(exp._FLOOR_RULES), set(C.EXPORT_DATA_TABLES))
 
+    def test_a_rule_that_empties_a_link_names_it_for_the_summary(self) -> None:
+        for table, rule in exp._FLOOR_RULES.items():
+            if rule.run_dir_idx is not None or rule.keeps_row:
+                with self.subTest(table=table):
+                    self.assertTrue(rule.emptied)
+
     def test_a_table_joined_to_its_session_carries_no_text_and_no_mode(self) -> None:
         # ExportFloor.rows skips the join when nothing is opted out, which is
         # only safe while a joined table has nothing a tightening would change.
@@ -502,6 +508,31 @@ class TestExportFloorColumns(_TwoProjectStore):
         # The linked row and the unlinked one under the project; the sibling
         # path and the other session's row are kept as they are.
         self.assertEqual(floor.changes[_BENCH], {**_NO_CHANGE, "emptied": 2})
+
+    def test_a_sessions_benchmark_run_dir_under_an_opted_out_project_is_emptied(self) -> None:
+        run_dir = C.COL_BENCHMARK_RUN_DIR
+        self.db.execute(
+            f"UPDATE copilot_session SET {run_dir} = ? WHERE id = ?", (f"{self.project_path}/runs/r1", self.other)
+        )
+        self.db.commit()
+        rows, floor = self.floored(self.opted_out(), _SESSIONS)
+        stored = {r["id"]: r for r in self.stored(_SESSIONS)}
+        self.assertEqual([r["id"] for r in rows], [self.other], "the opted-out session itself is dropped")
+        self.assertIsNone(rows[0][run_dir])
+        rest = set(exp.SESSIONS_COLUMNS) - {run_dir}
+        self.assertEqual({c: rows[0][c] for c in rest}, {c: stored[self.other][c] for c in rest})
+        self.assertEqual(floor.changes[_SESSIONS], {**_NO_CHANGE, "dropped": 1, "emptied": 1})
+        self.assertEqual(
+            floor.table_summary(_SESSIONS),
+            "export: sessions: 1 row dropped (project opted out); "
+            "1 row with benchmark_run_dir emptied (opted-out project)",
+        )
+        # A run directory outside the opted-out project's path is kept.
+        self.db.execute(f"UPDATE copilot_session SET {run_dir} = ? WHERE id = ?", ("/benchmarks/runs/r2", self.other))
+        self.db.commit()
+        rows, floor = self.floored(self.opted_out(), _SESSIONS)
+        self.assertEqual(rows[0][run_dir], "/benchmarks/runs/r2")
+        self.assertEqual(floor.changes[_SESSIONS], {**_NO_CHANGE, "dropped": 1})
 
     def test_a_tightened_projects_text_leaves_as_the_marker_under_metadata_only(self) -> None:
         policy = self.tightened()
