@@ -373,6 +373,13 @@ def _rows(n: int) -> str:
     return f"{n} row" if n == 1 else f"{n} rows"
 
 
+class TestExportFloorRules(unittest.TestCase):
+    def test_every_export_table_has_a_floor_rule(self) -> None:
+        # A table added to the export without a rule would fail at export
+        # time instead of having the floor decide its columns; fail here.
+        self.assertEqual(set(exp._FLOOR_RULES), set(C.EXPORT_DATA_TABLES))
+
+
 class _TwoProjectStore(RegistryResetTestCase):
     """Two sessions of two projects in one store: the canary corpus (project
     ``canaryproj``) and the tiny claude-code fixture (``/repo/demo``). Both
