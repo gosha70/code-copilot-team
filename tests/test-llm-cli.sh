@@ -393,6 +393,15 @@ assert_exit "explain --project: a work tree git will not name still answers to i
 mkdir -p "$TMP/emptygit/.git" "$TMP/emptygit/proj"; printf '[llm]\nallowed = ["m2"]\n' > "$TMP/emptygit/proj/.cct.toml"
 cctx "$BASE_HOME" -- harness explain claude-code --llm m --project "$TMP/emptygit/proj"
 assert_exit "explain --project: with no repository git accepts, the directory's own .cct.toml still applies" 3 "$RC"
+assert_contains "explain --project: ...and the refusal names that file" "$OUT" \
+    "is not allowed in this project: $(cd "$TMP/emptygit/proj" && pwd -P)/.cct.toml [llm].allowed lists m2"
+# Both files apply: the one above refusing, while the directory's own allows.
+mkdir -p "$TMP/emptygit2/.git" "$TMP/emptygit2/proj"
+printf '[llm]\nallowed = ["m2"]\n' > "$TMP/emptygit2/.cct.toml"; printf '[llm]\nallowed = ["m"]\n' > "$TMP/emptygit2/proj/.cct.toml"
+cctx "$BASE_HOME" -- harness explain claude-code --llm m --project "$TMP/emptygit2/proj"
+assert_exit "explain --project: the file above refuses what the directory's own allows" 3 "$RC"
+assert_contains "explain --project: ...and the refusal names the file above, the one that refused" "$OUT" \
+    "is not allowed in this project: $(cd "$TMP/emptygit2" && pwd -P)/.cct.toml [llm].allowed lists m2"
 mkdir -p "$TMP/unreadable-proj"; printf '[llm]\nallowed = ["m"]\n' > "$TMP/unreadable-proj/.cct.toml"; chmod 000 "$TMP/unreadable-proj/.cct.toml"
 cctx "$BASE_HOME" -- harness explain claude-code --llm m --project "$TMP/unreadable-proj"
 assert_exit "explain --project: a .cct.toml that cannot be read refuses, never reads as no restriction" 3 "$RC"
