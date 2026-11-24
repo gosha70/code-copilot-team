@@ -4,6 +4,7 @@ Pick the LLM for one session when you start it, from a catalog of named targets 
 
 ```bash
 cct llm list                       # the targets, and whether each can launch
+cct harness explain claude-code --llm deepseek   # what that launch would set and remove
 cct start --llm deepseek .         # this session only, on DeepSeek
 cct start --llm opus .             # this session only, on Anthropic
 cct start .                        # unchanged: Claude Code as you configured it
@@ -131,6 +132,24 @@ Removed from a launch on an `api` endpoint as well, Claude Code's own credential
 
 A command the launcher types into a new cmux workspace or tmux session carries only the launcher, the target and Claude Code's own flags. The launcher runs again inside that pane, and the credential is read there.
 
+## See a launch before it runs
+
+```bash
+cct llm show deepseek                            # one llm, and what each of its bindings would launch
+cct harness explain claude-code --llm deepseek   # the launch plan: what it sets and removes, by name
+cct llm list --json                              # list, show, validate and explain all take --json
+```
+
+`cct harness explain` asks the resolver the launcher itself uses, so what it prints is what a launch with that target does: each variable it sets, a credential with the variable it is copied from and whether that is set, each variable it removes, the state, and why a launch would be refused (exit 3). No value is ever printed: an endpoint is shown as its origin (`scheme://host[:port]`), and a credential as its variable's name.
+
+It also prints three digests:
+
+- **catalog:** changes when anything declared for the target changes, a display name included;
+- **launch identity:** changes only when what the launch executes as changes: the endpoint's full URL (its path too, which is never shown), the protocol, the auth header, the credential's variable and mode, the model, the quirks;
+- **options:** the tuning keys (`small_fast_model`, `max_output_tokens`, `reasoning_effort`, `auto_compact_window`).
+
+Later slices of #400 key compatibility records and session stamps on them. `shared/schemas/llm-catalog-cli.schema.json` describes the `--json` output. When a command cannot answer (there is no catalog, it has violations, or `show` names an llm it does not define), `--json` still prints the envelope, with an `error` field and nothing else, and exits as the text form does. A harness other than `claude-code`, and `pi-code --llm`, are refused with "not implemented" until their slice of #400 lands.
+
 ## Refusals
 
 Each happens before Claude Code starts, with exit code 3 and the reason.
@@ -164,4 +183,4 @@ Resume a session with the target it was started with (`cct start --llm deepseek 
 
 ## Not in this version
 
-Specified in #400 and not built yet: a compatibility probe (`cct llm test`), so every launchable target reads `unverified`; a record of each session's target, with resume restored or refused from it; `--json` output and a Studio page; a project's own allow-list; and `--llm` on the Codex, Pi and Kiro launchers.
+Specified in #400 and not built yet: a compatibility probe (`cct llm test`), so every launchable target reads `unverified`; a record of each session's target, with resume restored or refused from it; a Studio page; a project's own allow-list; and `--llm` on the Codex, Pi and Kiro launchers.

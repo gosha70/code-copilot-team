@@ -470,7 +470,9 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   `rc_identity_digest` construction, never stored in clear); an
   `options_digest` over the tuning keys that do not change the target
   (`small_fast_model`, `max_output_tokens`, `reasoning_effort`,
-  `thinking`); and `evidence_digest` (launch identity plus options,
+  `thinking`; *amended 2026-11-23, S1, plan amendment 2:* and
+  `auto_compact_window`, a Claude Code binding key since the
+  launch-first slice's departure 8); and `evidence_digest` (launch identity plus options,
   harness version and rule version, the key for probe validity).
   Quirks stay in launch identity because they change the request
   shape. Resume enforcement compares launch identity only, so a

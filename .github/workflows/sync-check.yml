@@ -173,6 +173,10 @@ jobs:
         run: bash tests/test-llm-catalog.sh
       - name: --llm launch tests
         run: bash tests/test-llm-launch.sh
+      # #400 S1: the LaunchPlan, its digests, `cct llm show`, `cct harness
+      # explain` and --json, from the resolver the launcher uses.
+      - name: LLM CLI tests
+        run: bash tests/test-llm-cli.sh
 
       # pre-pr-check.sh audits a PR's commits, body and title for close
       # keywords; `--closes none` is the mode for a PR that closes nothing

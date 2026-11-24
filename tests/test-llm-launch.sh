@@ -589,6 +589,30 @@ assert_not_contains "tmux: ...nor attached" "$(cat "$MUX_LOG.calls")" "attach-se
 # ── Help ──
 assert_contains "help documents --llm" "$(bash "$LAUNCHER" help 2>&1)" "--llm <target>"
 
+# ── A launch and its explanation agree (#400 S1): one resolver ──
+# From a shell carrying another provider's whole configuration: every
+# variable `cct harness explain` says the launch sets reaches claude, and
+# every one it says the launch removes is absent from claude's environment.
+new_logs
+run_launcher "${DIRTY[@]}" -- --llm deepseek -p x
+EXPLAIN_JSON=$(cd "$PROJ" && env -i HOME="$FAKE_HOME" PATH="$MOCK_BIN:$PATH" TEST_DEEPSEEK_KEY="$SECRET" \
+    "${DIRTY[@]}" bash "$REPO_DIR/scripts/cct" harness explain claude-code --llm deepseek --json 2>/dev/null)
+# Each list must be non-empty, so an explanation that failed cannot pass.
+AGREE_SET=0
+while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
+    if [[ "$(claude_env "$name")" == "<unset>" ]]; then AGREE_SET=-1; break; fi
+    AGREE_SET=1
+done <<< "$(jq -r '.env_names[] | select(.set) | .name' <<< "$EXPLAIN_JSON" 2>/dev/null)"
+assert_eq "explain and launch agree: what explain says is set reaches claude" 1 "$AGREE_SET"
+AGREE_CLEAR=0
+while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
+    if [[ "$(claude_env "$name")" != "<unset>" ]]; then AGREE_CLEAR=-1; break; fi
+    AGREE_CLEAR=1
+done <<< "$(jq -r '.env_clear[]' <<< "$EXPLAIN_JSON" 2>/dev/null)"
+assert_eq "explain and launch agree: what explain says is removed is absent from claude" 1 "$AGREE_CLEAR"
+
 echo ""
 echo "========================================="
 echo "  llm-launch tests: $PASS passed, $FAIL failed"

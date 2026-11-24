@@ -65,3 +65,17 @@ re-running it regenerates its record.
 | S0.2 | The Codex capture: nested `-c model_providers.*` (D10), the accepted `wire_api` values, `--profile` layering, the model in `exec --json` and the session file, `exec resume`, the new session's id, ambient `OPENAI_*` | FR-14, FR-17, FR-18, FR-21, FR-30, D10 | `verification/capture-codex.sh`, `verification/codex-capture.md` | [x] |
 | S0.3 | The Pi capture: the three protocols with `$VAR` from the child environment, an unknown `--provider`, `--session-id`, the overlay against the owned merge (FR-22, D11), native resume, ambient credentials, the documented credential variables, how Pi writes its settings | FR-14, FR-17, FR-18, FR-22, FR-30, D9, D11 | `verification/capture-pi.sh`, `verification/pi-capture.md` | [x] |
 | S0.4 | Gates: validate-spec, origin alignment, doc accuracy, `pre-pr-check.sh --closes <S0 issue>`, peer review, PR "Part of #400" that puts D11 to the owner | all S0 | repository gates | [ ] |
+
+## S1 — launch plan and read-only surfaces (#523, plan ruled 2026-11-23)
+
+From A3 (digests), A6, A7 (part) and B6; plan.md, "Remaining slices".
+
+| # | Task | Requirement(s) | File(s) | Done |
+|---|---|---|---|---|
+| S1.1 | The resolver: (harness, target) → the binding, the adapter's plan, the static state and three digests (catalog, launch identity, options) as canonical JSON, names only; every other harness refused "adapter not implemented" | FR-9, FR-21–23 (refusal) | `scripts/lib/llm-resolve.sh` | [x] |
+| S1.2 | The Claude Code launcher resolves through it; its launches (argv, environment, messages) unchanged | FR-9, FR-11, FR-27 | `adapters/claude-code/claude-code` | [x] |
+| S1.3 | `cct llm show`, `cct harness explain`, `--json` for list, show, validate and explain, and the schema | FR-6, FR-7 | `scripts/llm-cli.sh`, `scripts/cct`, `shared/schemas/llm-catalog-cli.schema.json` | [x] |
+| S1.4 | `pi-code --llm` refused as not implemented, never forwarded to pi | FR-22 | `adapters/pi/bin/pi-code` | [x] |
+| S1.5 | Tests: the CLI suite (a planted secret and path token absent everywhere, the digest properties, the schema), a launch and its explanation agreeing, the usage message; pins, repo-structure and the CI step. No supervisor, routing or benchmark code changes, and their suites pass unchanged | FR-6, FR-7, FR-9, FR-27 | `tests/test-llm-cli.sh`, `tests/test-llm-launch.sh`, `tests/test-llm-catalog.sh`, `tests/test-shared-structure.sh`, `tests/test-counts.env`, `docs/repo-structure.md`, `.github/workflows/sync-check.yml` | [x] |
+| S1.6 | The guide, the CHANGELOG, and spec amendment 2 (`auto_compact_window` in the options digest) | FR-28, FR-9 | `docs/llm-catalog.md`, `CHANGELOG.md`, `spec.md` | [x] |
+| S1.7 | Gates: suites, validate-spec, origin alignment, doc accuracy, `pre-pr-check.sh --closes <S1 issue>`, peer review, PR "Part of #400" | all S1 | repository gates | [ ] |

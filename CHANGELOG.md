@@ -10,6 +10,23 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ## [Unreleased]
 
+### Added
+
+- **See a `--llm` launch before it runs.** `cct harness explain claude-code
+  --llm <target>` prints the launch plan from the resolver the launcher
+  itself uses: every variable the launch sets (a credential by the variable
+  it is copied from, and whether that is set), every variable it removes,
+  the state, and why the launch would be refused. It never prints a value:
+  an endpoint is its origin. `cct llm show <llm>` shows one llm and what
+  each of its bindings would launch. `cct llm list`, `show`, `validate` and
+  `cct harness explain` take `--json`, described by
+  `shared/schemas/llm-catalog-cli.schema.json`; a command that cannot
+  answer (no catalog, violations, an unknown llm) still prints the
+  envelope, with an `error` field. The plan carries three
+  digests (catalog, launch identity, options) that later slices key
+  compatibility records and session stamps on. `pi-code --llm` is now
+  refused as not implemented instead of being passed to Pi. Part of #400.
+
 ### Security
 
 - **Archived text follows a project's current settings after a re-ingest.**

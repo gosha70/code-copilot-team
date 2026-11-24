@@ -31,7 +31,7 @@ code-copilot-team/
 │   ├── aider/                           CONVENTIONS.md, setup.sh
 │   └── pi/                              bin/pi-code, runtime/, resources/, docs/, setup.sh
 ├── scripts/
-│   ├── cct                              The `cct` CLI: start, init, templates, sync, build, permissions, playwright, features, list, routing, doctor, config, home, llm
+│   ├── cct                              The `cct` CLI: start, init, templates, sync, build, permissions, playwright, features, list, routing, doctor, config, home, llm, harness
 │   ├── generate.sh                      Builds adapter configs from shared/
 │   ├── session-analytics                Session Analytics launcher (CLI, Studio, MCP); code in session_analytics/
 │   ├── bench                            Terse benchmark comparison driver (wraps benchmark)
@@ -45,9 +45,10 @@ code-copilot-team/
 │   ├── providers-health.sh              Peer provider availability diagnostics
 │   ├── cct-home.sh                      `cct home [show|migrate]`: the one mover between the legacy home and ~/.cct (#411)
 │   ├── lib/cct-home.sh                  The CCT home resolver, ${CCT_HOME:-~/.cct} with the 2.1.x legacy fallback (#411)
-│   ├── llm-cli.sh                       `cct llm list|validate`: read-only views of the LLM catalog (#479)
+│   ├── llm-cli.sh                       `cct llm list|show|validate` and `cct harness explain`: read-only views of the LLM catalog, `--json` (#479, #400)
 │   ├── lib/llm-catalog.sh               The LLM catalog ${CCT_HOME:-~/.cct}/llms.toml: parse, validate, resolve a `--llm` target (#479)
 │   ├── lib/llm-adapters/claude-code.sh  What a catalog binding sets and removes in a Claude Code launch (#479)
+│   ├── lib/llm-resolve.sh               The one resolver for a `--llm` target: the LaunchPlan and its three digests (#400)
 │   ├── lib/cct-toml.sh                  The constrained-TOML line lexer shared by routing.toml and llms.toml (#479)
 │   ├── lib/cct-endpoint.sh              The endpoint origin sanitizer and base-URL rule, shared by routing and the LLM catalog (#479)
 │   ├── setup-reviewer.sh                Copilot independent-reviewer installer (Codex first)
@@ -80,7 +81,8 @@ code-copilot-team/
 │   ├── test-github-hardening.sh       14 hardening audit tests (classic + ruleset sources)
 │   ├── test-cct-home.sh               146 home resolver + `cct home` tests (#411)
 │   ├── test-llm-catalog.sh            116 LLM catalog + `cct llm` tests (#479)
-│   ├── test-llm-launch.sh             186 `claude-code --llm` launch tests (#479)
+│   ├── test-llm-launch.sh             188 `claude-code --llm` launch tests (#479)
+│   ├── test-llm-cli.sh                79 `cct llm show`, `cct harness explain` and `--json` tests (#400)
 │   ├── test-wiki-setup.sh             54 managed wiki-studio install tests (#384)
 │   ├── test-wiki-launcher.sh          24 provenance-bound wiki launcher + alias tests (#384)
 │   ├── test-wiki-schema.sh            20 schema reconciliation + fingerprint tests (needs the managed .venv; #384)

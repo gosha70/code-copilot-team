@@ -17,6 +17,7 @@
 #   cct config <...>       validate the configuration, or explain one key
 #   cct home [migrate]     where CCT keeps this user's files; move a legacy home
 #   cct llm <...>          the LLM catalog: the targets `cct start --llm` accepts
+#   cct harness explain    what a `--llm` launch would set and remove, before it runs
 #   cct help               show this help
 set -euo pipefail
 
@@ -95,7 +96,13 @@ COMMANDS
                   configure once and pick per session with --llm, so no provider
                   or model variable is ever exported in a shell.
                     cct llm list                 the targets, and whether each can launch
+                    cct llm show <llm>           one llm and what each binding launches
                     cct llm validate [file]      check the catalog, by line and name
+                  Each takes --json.
+  harness         What a harness launch would do, before it runs:
+                    cct harness explain <harness> --llm <target> [--json]
+                                                 what it sets and removes, by name,
+                                                 and why it would be refused
   help            Show this help.
 
 EXAMPLES
@@ -182,6 +189,9 @@ case "$cmd" in
   llm)
     exec bash "$SCRIPT_DIR/llm-cli.sh" "$@"
     ;;
+  harness)
+    exec bash "$SCRIPT_DIR/llm-cli.sh" harness "$@"
+    ;;
   help|-h|--help) usage ;;
-  *) echo "cct: unknown command '$cmd'" >&2; echo "Did you mean: features, list, routing, doctor, config, home, llm, start, init, templates, sync, build, permissions, playwright, help?" >&2; usage >&2; exit 2 ;;
+  *) echo "cct: unknown command '$cmd'" >&2; echo "Did you mean: features, list, routing, doctor, config, home, llm, harness, start, init, templates, sync, build, permissions, playwright, help?" >&2; usage >&2; exit 2 ;;
 esac
