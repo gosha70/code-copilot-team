@@ -82,7 +82,7 @@ code-copilot-team/
 │   ├── test-cct-home.sh               146 home resolver + `cct home` tests (#411)
 │   ├── test-llm-catalog.sh            116 LLM catalog + `cct llm` tests (#479)
 │   ├── test-llm-launch.sh             188 `claude-code --llm` launch tests (#479)
-│   ├── test-llm-cli.sh                63 `cct llm show`, `cct harness explain` and `--json` tests (#400)
+│   ├── test-llm-cli.sh                64 `cct llm show`, `cct harness explain` and `--json` tests (#400)
 │   ├── test-wiki-setup.sh             54 managed wiki-studio install tests (#384)
 │   ├── test-wiki-launcher.sh          24 provenance-bound wiki launcher + alias tests (#384)
 │   ├── test-wiki-schema.sh            20 schema reconciliation + fingerprint tests (needs the managed .venv; #384)

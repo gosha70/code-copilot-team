@@ -260,6 +260,7 @@ cmd_show() {
         h=$(lc_get "bindings.$b" harness) || h=""
         target=$(target_of "$id" "$b" "$h")
         lr_resolve "$h" "$target" || true
+        lr_digests || true
         credential_of "$b"
         state="$LR_STATE"
         if [[ -n "$LR_REASON" ]]; then state="$state: $LR_REASON"; fi
@@ -333,6 +334,7 @@ cmd_explain() {
         done <<< "$LLM_CC_ASSIGN"
         echo "  removes"
         printf '%s\n' $LLM_CC_CLEAR | awk 'NF && !seen[$0]++' | while IFS= read -r line; do echo "    $line"; done
+        lr_digests
         echo "  digests   catalog ${LR_DIGEST_CATALOG:0:12}  launch identity ${LR_DIGEST_LAUNCH:0:12}  options ${LR_DIGEST_OPTIONS:0:12}"
     fi
     if [[ $rc -ne 0 || "$LR_STATE" != "unverified" ]]; then return "$EXIT_REFUSED"; fi

@@ -219,6 +219,15 @@ assert_ne "digests: a tuning key changes the options digest" "$(field 3 "$D1")" 
 assert_eq "digests: ...and not the launch identity" "$(field 2 "$D1")" "$(field 2 "$D_TUNE")"
 D_COMPACT=$(digests_of "$(home compact awk '{print} /^llm = "m"$/ {print "auto_compact_window = 120000"}')" m)
 assert_ne "digests: auto_compact_window is a tuning key" "$(field 3 "$D1")" "$(field 3 "$D_COMPACT")"
+# Computed where they are read (explain, show), not by the resolution a
+# launch makes: each digest takes many jq runs.
+LAZY=$(env -u CCT_HOME CCT_HOME="$BASE_HOME" TEST_LLM_KEY="$SECRET" bash -c '
+    source "$1/scripts/lib/llm-catalog.sh"; source "$1/scripts/lib/llm-adapters/claude-code.sh"; source "$1/scripts/lib/llm-resolve.sh"
+    lc_validate "$(lc_catalog_path)" >/dev/null && lr_resolve claude-code m || exit 1
+    printf "%s|" "${LR_DIGEST_CATALOG:-none}"
+    lr_digests && printf "%s %s %s|" "${#LR_DIGEST_CATALOG}" "${#LR_DIGEST_LAUNCH}" "${#LR_DIGEST_OPTIONS}"
+    lr_resolve pi m; lr_digests; printf "%s" "$?"' _ "$REPO_DIR")
+assert_eq "digests: a resolution computes none; lr_digests computes all three, and none without a binding" "none|64 64 64|1" "$LAZY"
 
 # ── list and validate --json ──
 cctx "$BASE_HOME" -- llm list --json

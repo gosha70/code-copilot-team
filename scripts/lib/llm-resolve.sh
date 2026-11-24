@@ -5,11 +5,13 @@
 # read-only commands (`cct harness explain`, `cct llm show`, `--json`) all
 # resolve a target here: (harness, target) -> the binding, the harness
 # adapter's plan (what the launch sets and removes, by NAME), its static
-# state, and three digests. Sourced after llm-catalog.sh and the harness
-# adapters, with a parsed and VALID catalog.
+# state and, on request (lr_digests), three digests. Sourced after
+# llm-catalog.sh and the harness adapters, with a parsed and VALID catalog.
 #
-# The digests (FR-9), each sha256 over canonical JSON. None reads or
-# includes a credential value, as the routing digest never reads
+# The digests (FR-9), each sha256 over canonical JSON. They take many jq
+# runs, so they are computed only where they are read (explain and show;
+# the session stamps of S4), never by a launch that reads none. None reads
+# or includes a credential value, as the routing digest never reads
 # credential_env:
 #   catalog          provenance: the declared binding, llm, provider and
 #                    endpoint tables, as written. Independent of the
@@ -55,37 +57,51 @@ _lr_table_json() {  # <ctx> -> the table as a JSON object, keys sorted
     jq -cS . <<< "$out"
 }
 
-_lr_digests() {  # <binding-id>
-    local b="bindings.$1" l lp e="" ep="" kind model url="" proto="" header="" mode="" cred="" quirks='[]'
+_lr_identity() {  # <binding-id>: what the plan names, without a digest
+    local b="bindings.$1" l e url=""
+    l=$(lc_get "$b" llm) || l=""
+    LR_PROVIDER=$(lc_get "llms.$l" provider) || LR_PROVIDER=""
+    LR_PROVIDER_KIND=$(lc_get "providers.$LR_PROVIDER" kind) || LR_PROVIDER_KIND=""
+    LR_MODEL=$(lc_get "llms.$l" model) || LR_MODEL=""
+    if e=$(lc_get "$b" endpoint); then
+        LR_ENDPOINT_ID="$e"
+        LR_PROTOCOL=$(lc_get "endpoints.$e" protocol) || LR_PROTOCOL=""
+        if lc_endpoint_url "$e"; then url="$LC_URL"; fi
+    fi
+    if [[ -n "$url" ]]; then LR_ORIGIN=$(rt_sanitize_origin "$url"); fi
+    return 0
+}
+
+# lr_digests: the three digests of the binding the last lr_resolve
+# resolved, in LR_DIGEST_CATALOG, LR_DIGEST_LAUNCH and LR_DIGEST_OPTIONS.
+# Returns 1 when that lr_resolve resolved no binding.
+lr_digests() {
+    [[ -n "$LR_BINDING" ]] || return 1
+    local b="bindings.$LR_BINDING" l e="$LR_ENDPOINT_ID" ep="" url="" header="" mode="" cred="" quirks='[]'
     local endpoint_json='null' endpoint_provider_json='null' tuning='{}' key
     l=$(lc_get "$b" llm) || l=""
-    lp=$(lc_get "llms.$l" provider) || lp=""
-    kind=$(lc_get "providers.$lp" kind) || kind=""
-    model=$(lc_get "llms.$l" model) || model=""
-    if e=$(lc_get "$b" endpoint); then
+    if [[ -n "$e" ]]; then
         ep=$(lc_get "endpoints.$e" provider) || ep=""
         endpoint_json=$(jq -nc --arg id "$e" --argjson t "$(_lr_table_json "endpoints.$e")" '{id: $id, table: $t}')
         endpoint_provider_json=$(jq -nc --arg id "$ep" --argjson t "$(_lr_table_json "providers.$ep")" '{id: $id, table: $t}')
-        proto=$(lc_get "endpoints.$e" protocol) || proto=""
         header=$(lc_get "endpoints.$e" auth_header) || header=""
         mode=$(lc_get "providers.$ep" credential_mode) || mode=""
         cred=$(lc_get "providers.$ep" credential_env) || cred=""
         if lc_endpoint_url "$e"; then url="$LC_URL"; fi
         quirks=$(lc_array_elems "endpoints.$e" quirks 2>/dev/null | sort -u | jq -R . | jq -sc .)
     else
-        e=""
-        mode=$(lc_get "providers.$lp" credential_mode) || mode=""
+        mode=$(lc_get "providers.$LR_PROVIDER" credential_mode) || mode=""
     fi
     LR_DIGEST_CATALOG=$(jq -ncS \
-        --arg b "$1" --argjson bt "$(_lr_table_json "$b")" \
+        --arg b "$LR_BINDING" --argjson bt "$(_lr_table_json "$b")" \
         --arg l "$l" --argjson lt "$(_lr_table_json "llms.$l")" \
-        --arg p "$lp" --argjson pt "$(_lr_table_json "providers.$lp")" \
+        --arg p "$LR_PROVIDER" --argjson pt "$(_lr_table_json "providers.$LR_PROVIDER")" \
         --argjson endpoint "$endpoint_json" --argjson endpoint_provider "$endpoint_provider_json" \
         '{binding: {id: $b, table: $bt}, llm: {id: $l, table: $lt}, provider: {id: $p, table: $pt},
           endpoint: $endpoint, endpoint_provider: $endpoint_provider}' | _lr_sha256)
     LR_DIGEST_LAUNCH=$(jq -nc \
-        --arg h "$LR_HARNESS" --arg kind "$kind" --arg url "$url" --arg proto "$proto" --arg header "$header" \
-        --arg mode "$mode" --arg cred "$cred" --arg model "$model" --argjson quirks "$quirks" \
+        --arg h "$LR_HARNESS" --arg kind "$LR_PROVIDER_KIND" --arg url "$url" --arg proto "$LR_PROTOCOL" \
+        --arg header "$header" --arg mode "$mode" --arg cred "$cred" --arg model "$LR_MODEL" --argjson quirks "$quirks" \
         '[$h, $kind, $url, $proto, $header, $mode, $cred, $model, $quirks]' | _lr_sha256)
     for key in $LR_TUNING_KEYS; do
         if lc_type "$b" "$key" >/dev/null; then
@@ -93,13 +109,6 @@ _lr_digests() {  # <binding-id>
         fi
     done
     LR_DIGEST_OPTIONS=$(jq -cS . <<< "$tuning" | _lr_sha256)
-    LR_PROVIDER="$lp"
-    LR_PROVIDER_KIND="$kind"
-    LR_MODEL="$model"
-    LR_ENDPOINT_ID="$e"
-    LR_PROTOCOL="$proto"
-    LR_ORIGIN=""
-    if [[ -n "$url" ]]; then LR_ORIGIN=$(rt_sanitize_origin "$url"); fi
     return 0
 }
 
@@ -107,7 +116,9 @@ _lr_digests() {  # <binding-id>
 # Returns 0 when the target resolves to a binding (LR_STATE then says
 # whether it launches) and 1 when it does not (LR_REFUSAL says why). Sets
 # LR_HARNESS, LR_TARGET, LR_LLM, LR_BINDING, LR_STATE, LR_REASON,
-# LR_REFUSAL, the digests, and through the adapter its LLM_CC_* plan.
+# LR_REFUSAL, the identity (LR_PROVIDER, LR_PROVIDER_KIND, LR_MODEL,
+# LR_ENDPOINT_ID, LR_PROTOCOL, LR_ORIGIN), and through the adapter its
+# LLM_CC_* plan. It clears the digests; lr_digests computes them.
 # Only claude-code has an adapter; every other harness is refused with
 # "adapter not implemented" until its slice lands (FR-21 to FR-23).
 lr_resolve() {
@@ -133,7 +144,7 @@ lr_resolve() {
     llm_cc_plan "$LR_BINDING"
     LR_STATE="$LLM_CC_STATE"
     LR_REASON="$LLM_CC_REASON"
-    _lr_digests "$LR_BINDING"
+    _lr_identity "$LR_BINDING"
     return 0
 }
 
@@ -167,6 +178,7 @@ lr_plan_json() {
         return 0
     fi
     local refusal='null'
+    lr_digests
     if [[ "$LR_STATE" != "unverified" ]]; then
         refusal=$(jq -nc --arg s "$LR_STATE" --arg r "$LR_REASON" '{state: $s, reason: $r}')
     fi
