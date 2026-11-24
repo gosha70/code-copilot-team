@@ -158,6 +158,8 @@ assert_contains "explain: a copied credential is named with its source variable"
 assert_contains "explain: the variables the launch removes, by name" "$OUT" "    ANTHROPIC_API_KEY"
 assert_not_contains "explain: never the credential's value" "$OUT" "$SECRET"
 assert_not_contains "explain: never the endpoint's path" "$OUT" "$PATH_TOKEN"
+assert_eq "explain: the three digests, abbreviated" "1" \
+    "$(grep -cE '^  digests   catalog [0-9a-f]{12}  launch identity [0-9a-f]{12}  options [0-9a-f]{12}$' <<< "$OUT")"
 cctx "$BASE_HOME" TEST_LLM_KEY= -- harness explain claude-code --llm m
 assert_exit "explain: a launch that would be refused exits 3" 3 "$RC"
 assert_contains "explain: ...naming the unset credential" "$OUT" "TEST_LLM_KEY (not set)"
@@ -251,12 +253,17 @@ assert_contains "validate --json: ...and says so" "$(jq -r .error <<< "$OUT")" "
 assert_not_contains "--json: no output carries the credential's value" "$LIST$VALID$BROKEN$PLAN" "$SECRET"
 
 # ── --json when a command cannot answer: the envelope with an error field ──
-# cctx folds stderr into OUT, so a parse of OUT also proves the envelope
-# is all that was printed.
+# cctx folds stderr into OUT, so OUT must be one JSON document and nothing
+# else: text printed before or after the envelope fails the check.
 EMPTY_HOME="$TMP/empty"; mkdir -p "$EMPTY_HOME"
 INVALID_HOME=$(home invalid sed 's/^provider = "native"$/provider = "nope"/')
 UNREADABLE_HOME="$TMP/unreadable"; mkdir -p "$UNREADABLE_HOME/llms.toml"
-json_err() { printf '%s|%s' "$RC" "$(jq -r '"\(.command)|\(.error)"' <<< "$OUT" 2>/dev/null)"; }
+json_err() {
+    local doc
+    doc=$(jq -sc 'if length == 1 then .[0] else empty end' <<< "$OUT" 2>/dev/null)
+    if [[ -n "$doc" && "$doc" == "$OUT" ]]; then printf '%s|%s' "$RC" "$(jq -r '"\(.command)|\(.error)"' <<< "$OUT")"
+    else printf '%s|not one JSON document alone: %s' "$RC" "$OUT"; fi
+}
 cctx "$EMPTY_HOME" -- llm list --json; ERR_MISSING="$OUT"
 assert_eq "list --json, no catalog: exit 2 and the envelope alone" "2|list|no LLM catalog" "$(json_err)"
 assert_eq "list --json, no catalog: ...naming the file" "$EMPTY_HOME/llms.toml" "$(jq -r .catalog <<< "$OUT")"
