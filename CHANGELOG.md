@@ -21,11 +21,21 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   each of its bindings would launch. `cct llm list`, `show`, `validate` and
   `cct harness explain` take `--json`, described by
   `shared/schemas/llm-catalog-cli.schema.json`; a command that cannot
-  answer (no catalog, violations, an unknown llm) still prints the
-  envelope, with an `error` field. The plan carries three
+  answer (a usage error, no catalog, violations, an unknown llm) still
+  prints the envelope, with an `error` field. The plan carries three
   digests (catalog, launch identity, options) that later slices key
   compatibility records and session stamps on. `pi-code --llm` is now
   refused as not implemented instead of being passed to Pi. Part of #400.
+- **Each LLM target's compatibility, and why.** `cct llm compatibility`
+  shows every catalog target as supported, unverified, unavailable,
+  unsupported or incompatible, with the reason, computed from the catalog,
+  the rule table (`shared/llm/compat-rules.json`, versioned), the installed
+  `claude` and the test records under `${CCT_HOME:-~/.cct}/llm-compat/`.
+  When a target was tested and something changed since (its launch identity,
+  its options, the version of `claude`, the rules), it reads unverified and
+  says what changed. `cct doctor` gains an "LLM catalog" section. Records are
+  written privately (`0600` in `0700` directories), atomically and under a
+  lock. Launches do not change yet. Part of #400.
 
 ### Security
 

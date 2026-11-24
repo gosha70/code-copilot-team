@@ -1069,7 +1069,7 @@ assert_ok "test-counts has TEST_REVIEW_LOOP_EXPECTED_PASS numeric value" "$rc"
 COUNT_VARS=$(grep -Ec '^TEST_[A-Z_]+_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env")
 # 15 as of #239 C3 T4 (test-ui-harness.sh). Bump deliberately when a
 # suite is added, so a pin cannot go missing unnoticed.
-assert_eq "test-counts has exactly 31 expected-pass variables (the four wiki suites arrived with #384, cct-home with #411, the two llm suites with #479, llm-cli with slice S1 of #400)" "31" "$COUNT_VARS"
+assert_eq "test-counts has exactly 33 expected-pass variables (the four wiki suites arrived with #384, cct-home with #411, the two llm suites with #479, llm-cli with slice S1 of #400, cct-statefile and llm-compat with slice S2)" "33" "$COUNT_VARS"
 
 # ── #384 FR-10: assistant workflows keep their meaning after the engine swap ──
 # /promote-lesson stays a free-text, manual curator procedure that lints

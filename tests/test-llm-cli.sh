@@ -221,6 +221,41 @@ assert_ne "digests: a tuning key changes the options digest" "$(field 3 "$D1")" 
 assert_eq "digests: ...and not the launch identity" "$(field 2 "$D1")" "$(field 2 "$D_TUNE")"
 D_COMPACT=$(digests_of "$(home compact awk '{print} /^llm = "m"$/ {print "auto_compact_window = 120000"}')" m)
 assert_ne "digests: auto_compact_window is a tuning key" "$(field 3 "$D1")" "$(field 3 "$D_COMPACT")"
+# Each further input of the launch identity moves it; the catalog digest
+# moves with the declared tables, and the options digest never does.
+moves() {  # <digests> <other digests> -> catalog|launch|options, each moved or same
+    local i out=""
+    for i in 1 2 3; do
+        if [[ "$(field "$i" "$1")" == "$(field "$i" "$2")" ]]; then out="$out|same"; else out="$out|moved"; fi
+    done
+    printf '%s' "${out#|}"
+}
+assert_eq "digests: a quirk moves the catalog and the launch identity, not the options" "moved|moved|same" \
+    "$(moves "$D1" "$(digests_of "$(home quirk awk '{print} /^auth_header = "bearer"$/ && !q {print "quirks = [\"rejects-dynamic-tools\"]"; q=1}')" m)")"
+assert_eq "digests: the auth header moves the catalog and the launch identity, not the options" "moved|moved|same" \
+    "$(moves "$D1" "$(digests_of "$(home header awk '/^auth_header = "bearer"$/ && !d {print "auth_header = \"x-api-key\""; d=1; next} {print}')" m)")"
+assert_eq "digests: the credential's variable moves the catalog and the launch identity, not the options" "moved|moved|same" \
+    "$(moves "$D1" "$(digests_of "$(home credvar sed 's/^credential_env = "TEST_LLM_KEY"$/credential_env = "OTHER_LLM_KEY"/')" m)")"
+assert_eq "digests: credential mode none (no variable, no auth header, as the catalog requires) moves both, not the options" "moved|moved|same" \
+    "$(moves "$D1" "$(digests_of "$(home credmode sed -e 's/^credential_mode = "env"$/credential_mode = "none"/' -e '/^credential_env = /d' -e 's/^auth_header = "bearer"$/auth_header = "none"/')" m)")"
+assert_eq "digests: the protocol moves the catalog and the launch identity, not the options" "moved|moved|same" \
+    "$(moves "$D1" "$(digests_of "$(home proto awk '/^protocol = "anthropic-messages"$/ && !d {print "protocol = \"openai-chat\""; d=1; next} {print}')" m)")"
+assert_eq "digests: the model moves the catalog and the launch identity, not the options" "moved|moved|same" \
+    "$(moves "$D1" "$(digests_of "$(home model sed 's/^model = "model-one"$/model = "model-renamed"/')" m)")"
+# The harness is the one input not varied here: this version accepts
+# bindings for claude-code only.
+# A valid catalog ties the provider kind to whether the binding names an
+# endpoint, so the kind is varied in the resolved plan itself.
+KIND=$(env -u CCT_HOME CCT_HOME="$BASE_HOME" bash -c '
+    source "$1/scripts/lib/llm-catalog.sh"; source "$1/scripts/lib/llm-adapters/claude-code.sh"; source "$1/scripts/lib/llm-resolve.sh"
+    lc_validate "$(lc_catalog_path)" >/dev/null && lr_resolve claude-code own || exit 1
+    lr_digests; launch="$LR_DIGEST_LAUNCH" options="$LR_DIGEST_OPTIONS"
+    LR_PROVIDER_KIND=api; lr_digests
+    l=same; o=same
+    [[ "$launch" != "$LR_DIGEST_LAUNCH" ]] && l=moved
+    [[ "$options" != "$LR_DIGEST_OPTIONS" ]] && o=moved
+    printf "%s|%s" "$l" "$o"' _ "$REPO_DIR")
+assert_eq "digests: the provider kind moves the launch identity, not the options" "moved|same" "$KIND"
 # Computed where they are read (explain, show), not by the resolution a
 # launch makes: each digest takes many jq runs.
 LAZY=$(env -u CCT_HOME CCT_HOME="$BASE_HOME" TEST_LLM_KEY="$SECRET" bash -c '
@@ -284,6 +319,27 @@ assert_eq "list --json, a catalog that cannot be read: exit 2 and the envelope a
 cctx "$BASE_HOME" -- llm show ghost --json; ERR_UNKNOWN="$OUT"
 assert_eq "show --json, an unknown llm: exit 2 and the envelope alone" \
     "2|show|unknown llm 'ghost' (cct llm list shows the catalog)" "$(json_err)"
+# A usage error: the same envelope, with no catalog (none was read), and a
+# null command when none was recognized.
+cctx "$BASE_HOME" -- llm list extra --json; ERR_USAGE="$OUT"
+assert_eq "list --json, a usage error: exit 2 and the envelope alone" "2|list|cct llm list takes no arguments" "$(json_err)"
+assert_eq "list --json, a usage error: ...with no catalog" "false" "$(jq 'has("catalog")' <<< "$OUT")"
+cctx "$BASE_HOME" -- llm show --json
+assert_eq "show --json, a usage error: exit 2 and the envelope alone" "2|show|usage: cct llm show <llm> [--json]" "$(json_err)"
+cctx "$BASE_HOME" -- llm validate a b --json
+assert_eq "validate --json, a usage error: exit 2 and the envelope alone" "2|validate|cct llm validate takes at most one file" "$(json_err)"
+cctx "$BASE_HOME" -- llm compatibility --bogus --json
+assert_eq "compatibility --json, a usage error: exit 2 and the envelope alone" \
+    "2|compatibility|cct llm compatibility: unknown option '--bogus'" "$(json_err)"
+cctx "$BASE_HOME" -- harness explain claude-code --json
+assert_eq "explain --json, a usage error: exit 2 and the envelope alone" \
+    "2|explain|usage: cct harness explain <harness> --llm <target> [--json]" "$(json_err)"
+cctx "$BASE_HOME" -- harness bogus --json
+assert_eq "harness --json, an unknown subcommand: a null command" \
+    "2|null|usage: cct harness explain <harness> --llm <target> [--json]" "$(json_err)"
+cctx "$BASE_HOME" -- llm frob --json; ERR_NO_COMMAND="$OUT"
+assert_eq "--json, an unknown command: a null command" \
+    "2|null|cct llm: unknown command 'frob' (list | show | validate | compatibility)" "$(json_err)"
 
 # ── every --json document against the schema ──
 cctx "$BASE_HOME" -- llm show m --json; SHOW="$OUT"
@@ -299,7 +355,7 @@ schema = json.load(open(sys.argv[1]))
 jsonschema.Draft202012Validator.check_schema(schema)
 jsonschema.Draft202012Validator(schema).validate(json.load(sys.stdin))' "$SCHEMA" >/dev/null 2>&1
 }
-SCHEMA_DOCS="LIST SHOW VALID BROKEN PLAN REFUSED ERR_MISSING ERR_INVALID ERR_EXPLAIN ERR_UNKNOWN"
+SCHEMA_DOCS="LIST SHOW VALID BROKEN PLAN REFUSED ERR_MISSING ERR_INVALID ERR_EXPLAIN ERR_UNKNOWN ERR_USAGE ERR_NO_COMMAND"
 if [[ -n "$PY_SCHEMA" ]]; then
     for doc in $SCHEMA_DOCS; do
         if schema_ok "${!doc}"; then PASS=$((PASS+1)); echo "  PASS: schema: the $doc document";

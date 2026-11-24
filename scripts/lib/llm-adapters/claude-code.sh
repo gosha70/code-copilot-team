@@ -33,6 +33,7 @@
 # bash 3.2 compatible, safe under `set -e` and `set -u`.
 
 LLM_CC_HARNESS="claude-code"
+LLM_CC_EXECUTABLE="claude"
 LLM_CC_PROTOCOL="anthropic-messages"
 # Sent as the bearer token when an endpoint takes no credential. Without
 # any credential variable Claude Code would fall back to its own login

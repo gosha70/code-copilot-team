@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cct_home  # noqa: E402 — the CCT home (#411)
 
 OK, WARN, BAD, SKIP = "ok", "warn", "fail", "skip"
+LLM_CLI_TIMEOUT_SEC = 60  # `cct llm validate|compatibility --json`; compatibility runs `claude --version`
 MARK = {OK: "✓", WARN: "!", BAD: "✗", SKIP: "-"}
 COLOR = {OK: "32", WARN: "33", BAD: "31", SKIP: "90"}
 
@@ -395,6 +396,61 @@ def check_repo(repo: Path, report: Report) -> None:
         report.add("Repository", name, OK if (repo / rel).is_file() else BAD, rel)
 
 
+def _no_answer(command: str, code: int) -> str:
+    if code == 124:
+        return f"{command} timed out after {LLM_CLI_TIMEOUT_SEC}s"
+    return f"{command} gave no answer (exit {code})"
+
+
+def _llm_cli_json(cli: Path, *args: str) -> tuple[int, dict | None]:
+    """Run `cct llm <args> --json`; its stdout only, stderr carries prose."""
+    try:
+        proc = subprocess.run(["bash", str(cli), *args, "--json"], capture_output=True, text=True,
+                              timeout=LLM_CLI_TIMEOUT_SEC)
+    except subprocess.TimeoutExpired:
+        return 124, None
+    except FileNotFoundError:
+        return 127, None
+    try:
+        return proc.returncode, json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return proc.returncode, None
+
+
+def check_llm_catalog(repo: Path, report: Report) -> None:
+    """The LLM catalog (#400 FR-28). Delegated: `cct llm` is the authority on it."""
+    section = "LLM catalog"
+    cli = repo / "scripts" / "llm-cli.sh"
+    if not cli.is_file():
+        report.add(section, "catalog", SKIP, "not run from a clone")
+        return
+    code, validate = _llm_cli_json(cli, "validate")
+    if validate is None:
+        report.add(section, "catalog", BAD, _no_answer("cct llm validate --json", code))
+        return
+    if validate.get("error") == "no LLM catalog":
+        report.add(section, "catalog", SKIP, f"none at {validate.get('file')} — optional; docs/llm-catalog.md")
+        return
+    if not validate.get("valid"):
+        detail = validate.get("error") or f"{len(validate.get('violations', []))} violation(s) — cct llm validate"
+        report.add(section, "catalog", BAD, f"{validate.get('file')}: {detail}")
+        return
+    report.add(section, "catalog", OK, str(validate.get("file")))
+    code, compat = _llm_cli_json(cli, "compatibility")
+    if compat is None:
+        report.add(section, "compatibility", BAD, _no_answer("cct llm compatibility --json", code))
+        return
+    if compat.get("error"):
+        report.add(section, "compatibility", BAD, compat["error"])
+        return
+    for target in compat.get("targets", []):
+        status = OK if target.get("state") == "supported" else WARN
+        report.add(section, f"{target.get('target')} on {target.get('harness')}", status,
+                   f"{target.get('state')}: {target.get('reason')}")
+    if code == 2:
+        report.add(section, "test records", BAD, "a record cannot be read — cct llm compatibility names it")
+
+
 def check_adapters(repo: Path, report: Report, only: str | None) -> None:
     """Delegate. An adapter's own diagnostics are the authority on it."""
     probes = {
@@ -424,7 +480,7 @@ def check_adapters(repo: Path, report: Report, only: str | None) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="cct doctor",
-        description="Check this machine: tools, provider profile, repository registries, installed adapters.",
+        description="Check this machine: tools, provider profile, repository registries, the LLM catalog, installed adapters.",
     )
     parser.add_argument("--adapter", metavar="ID", help="only this adapter's diagnostics")
     parser.add_argument("--json", action="store_true", help="machine-readable output")
@@ -446,6 +502,7 @@ def main() -> None:
         else:
             report.add("Providers", "healthchecks", SKIP, "--no-network")
         check_repo(repo, report)
+        check_llm_catalog(repo, report)
     check_adapters(repo, report, args.adapter)
 
     if args.json:

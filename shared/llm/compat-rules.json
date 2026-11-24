@@ -1,0 +1,50 @@
+{
+  "rule_version": 1,
+  "capabilities": [
+    "auth",
+    "model_identity",
+    "streaming",
+    "system_prompt",
+    "tool_call",
+    "tool_result",
+    "output_parsing",
+    "clean_exit",
+    "reasoning_control",
+    "image_input",
+    "limit_controls"
+  ],
+  "harnesses": {
+    "claude-code": {
+      "protocols": ["anthropic-messages"],
+      "managed": true,
+      "quirks": ["rejects-dynamic-tools"],
+      "min_version": null,
+      "required": ["auth", "model_identity", "streaming", "system_prompt", "tool_call", "tool_result", "output_parsing", "clean_exit", "limit_controls"],
+      "conditional": ["reasoning_control", "image_input"]
+    },
+    "codex": {
+      "protocols": ["openai-responses"],
+      "managed": false,
+      "quirks": [],
+      "min_version": null,
+      "required": ["auth", "model_identity", "streaming", "system_prompt", "tool_call", "tool_result", "output_parsing", "clean_exit", "limit_controls"],
+      "conditional": ["reasoning_control", "image_input"]
+    },
+    "pi": {
+      "protocols": ["openai-chat", "openai-responses", "anthropic-messages"],
+      "managed": false,
+      "quirks": [],
+      "min_version": null,
+      "required": ["auth", "model_identity", "streaming", "system_prompt", "tool_call", "tool_result", "output_parsing", "clean_exit", "limit_controls"],
+      "conditional": ["reasoning_control", "image_input"]
+    },
+    "kiro": {
+      "protocols": [],
+      "managed": true,
+      "quirks": [],
+      "min_version": null,
+      "required": ["model_identity", "streaming", "tool_call", "tool_result", "output_parsing", "clean_exit"],
+      "conditional": []
+    }
+  }
+}
