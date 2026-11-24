@@ -37,10 +37,11 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   written privately (`0600` in `0700` directories), atomically and under a
   lock. Launches do not change yet. Part of #400.
 - **A project can narrow which LLMs `--llm` may use on it.** An `[llm]`
-  table with `allowed = ["<llm>", "<llm>@<binding>", ...]` in the project's
-  committed `.cct.toml` refuses any other target with exit 3, for a Claude
-  Code launch and in `cct harness explain` (which gains `--project <dir>`).
-  It only restricts: any other key under `[llm]` is refused by name, and a
+  table with `allowed = ["<llm>", "<llm>@<binding>", ...]`, on one line, in
+  the project's committed `.cct.toml` refuses any other target with exit 3,
+  for a Claude Code launch and in `cct harness explain` (which gains
+  `--project <dir>`). It only restricts: any other key under `[llm]`, and
+  any other form of the list or of its header, is refused by name, and a
   `.cct.toml` that cannot be read refuses the launch. It is
   never read from `.cct.local.toml` or the legacy
   `.code-copilot-team/config.toml`, and a launch without `--llm` reads none

@@ -39,6 +39,16 @@ assert_eq() {
     if [[ "$expected" == "$actual" ]]; then PASS=$((PASS+1)); echo "  PASS: $name";
     else FAIL=$((FAIL+1)); echo "  FAIL: $name (expected '$expected', got '$actual')"; fi
 }
+# A permission fixture tests nothing where chmod cannot take the permission
+# away (run as root, or on a file system without modes). Its assertions are
+# skipped there and counted, so the pin holds; CI runs them.
+SKIPPED=0
+denied() {  # <test flag: -r | -x> <path> <assertion name>...: 0 when chmod took the permission away
+    test "$1" "$2" || return 0
+    local name; shift 2
+    for name in "$@"; do SKIPPED=$((SKIPPED+1)); echo "  SKIP: $name (chmod has no effect here, as when run as root)"; done
+    return 1
+}
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -330,8 +340,8 @@ assert_contains "policy: an inline table at the root is refused too" "$(policy '
     "write the project's LLM restriction as an [llm] table"
 assert_contains "policy: an [llm.<x>] sub-table is refused" "$(policy '[llm.extra]
 x = 1')" "is not accepted: projects restrict, never grant"
-assert_contains "policy: allowed must be an array" "$(policy '[llm]
-allowed = "m"')" "must be an array of llm ids"
+assert_contains "policy: allowed must be a list" "$(policy '[llm]
+allowed = "m"')" "must be one line of double-quoted ids"
 assert_contains "policy: an entry must be an llm id or <llm>@<binding>" "$(policy '[llm]
 allowed = ["m", "not an id"]')" "'not an id' in [llm].allowed is not an llm id"
 assert_contains "policy: allowed given twice is refused" "$(policy '[llm]
@@ -361,22 +371,56 @@ assert_eq "policy: ...and so is one after a byte-order mark" "0|yes|m|" "$(polic
 assert_eq "policy: [[llm]] is refused, never ignored" \
     "1|no||$PROJ/.cct.toml line 1: '[[llm]]' is not accepted: projects restrict, never grant (only [llm] allowed = [...])" "$(policy '[[llm]]
 allowed = ["m"]')"
+# Any other header naming the table is refused, never read as another table.
+assert_eq "policy: text after the [llm] header is refused, never skipped" \
+    "1|no||$PROJ/.cct.toml line 1: '[llm] x' is not accepted: write the header as [llm], alone or followed by a comment" "$(policy '[llm] x
+allowed = ["m"]')"
+assert_contains "policy: ...and so is text inside it" "$(policy '[llm x]
+allowed = ["m"]')" "'[llm x]' is not accepted: write the header as [llm]"
+assert_eq "policy: [llmx] is another table, whose keys are its own" "0|no||" "$(policy '[llmx]
+allowed = ["m"]')"
+# Pi's parser trims Unicode spaces from a line and a header's name, so a
+# table Pi reads is read here too, never skipped.
+assert_eq "policy: a no-break space around or inside the header is a blank" "0|yes|m|" "$(policy "$(printf '\302\240[\302\240llm ]\nallowed = ["m"]')")"
+assert_eq "policy: ...and so is a byte-order mark before a later header" "0|yes|m|" "$(policy "$(printf '[security]\nfail_closed = true\n\357\273\277[llm]\nallowed = ["m"]')")"
+assert_eq "policy: a header's comment in Latin-1 is a comment in any locale" "0|yes|m|" "$(policy "$(printf '[llm] # \351t\351\nallowed = ["m"]')")"
+assert_eq "policy: a refused header is shown only up to an = or a #, since a value may follow" \
+    "1|no||$PROJ/.cct.toml line 1: '[llm] api_key ...' is not accepted: write the header as [llm], alone or followed by a comment" "$(policy '[llm] api_key = "sk-not-a-real-key-0000"
+allowed = ["m"]')"
+# The list is one line of double-quoted ids, the only form the lexer reads:
+# any other TOML form of it is refused, naming that one.
+ONE_LINE='[llm].allowed must be one line of double-quoted ids separated by commas, as in allowed = ["<llm>", "<llm>@<binding>"], with no escapes, no trailing comma and no comment after it'
+assert_eq "policy: a list over several lines is refused, naming the one-line form" "1|no||$PROJ/.cct.toml line 2: $ONE_LINE" "$(policy '[llm]
+allowed = [
+  "m",
+]')"
+assert_eq "policy: ...and so is a trailing comma" "1|no||$PROJ/.cct.toml line 2: $ONE_LINE" "$(policy '[llm]
+allowed = ["m",]')"
+assert_eq "policy: ...and single-quoted ids" "1|no||$PROJ/.cct.toml line 2: $ONE_LINE" "$(policy "[llm]
+allowed = ['m']")"
+assert_eq "policy: ...and a quoted key" \
+    "1|no||$PROJ/.cct.toml line 2: this line is not accepted in [llm], which holds one line: allowed = [\"<llm>\", \"<llm>@<binding>\"]" "$(policy '[llm]
+"allowed" = ["m"]')"
+assert_eq "policy: a line refused in [llm] is not echoed, since its value may be a secret" \
+    "1|no||$PROJ/.cct.toml line 2: this line is not accepted in [llm], which holds one line: allowed = [\"<llm>\", \"<llm>@<binding>\"]" "$(policy '[llm]
+api.key = "sk-not-a-real-key-0000"')"
 # A restriction that cannot be read is never read as none.
 printf '[llm]\nallowed = ["m"]\n' > "$PROJ/.cct.toml"; chmod 000 "$PROJ/.cct.toml"
-assert_eq "policy: a .cct.toml that cannot be read is refused by name" "1|no||cannot read $PROJ/.cct.toml" "$(policy =)"
+T="policy: a .cct.toml that cannot be read is refused by name"
+denied -r "$PROJ/.cct.toml" "$T" && assert_eq "$T" "1|no||cannot read $PROJ/.cct.toml" "$(policy =)"
 rm -f "$PROJ/.cct.toml"; mkdir "$PROJ/.cct.toml"
 assert_eq "policy: a .cct.toml that is not a file is refused" "1|no||cannot read $PROJ/.cct.toml" "$(policy =)"
 rmdir "$PROJ/.cct.toml"; chmod 000 "$PROJ"
-assert_eq "policy: a project directory that cannot be searched is refused" \
-    "1|no||cannot read $PROJ/.cct.toml: the directory cannot be searched" "$(policy =)"
+T="policy: a project directory that cannot be searched is refused"
+denied -x "$PROJ" "$T" && assert_eq "$T" "1|no||cannot read $PROJ/.cct.toml: the directory cannot be searched" "$(policy =)"
 chmod 700 "$PROJ"
 
 echo ""
 echo "========================================="
-echo "  llm-catalog tests: $PASS passed, $FAIL failed"
+echo "  llm-catalog tests: $PASS passed, $FAIL failed$( [[ $SKIPPED -gt 0 ]] && echo ", $SKIPPED skipped")"
 echo "========================================="
-if [[ "$PASS" -ne "${TEST_LLM_CATALOG_EXPECTED_PASS:-0}" ]]; then
-    echo "  FAIL: assertion-count drift (expected ${TEST_LLM_CATALOG_EXPECTED_PASS:-0}, got $PASS)"
+if [[ "$((PASS + SKIPPED))" -ne "${TEST_LLM_CATALOG_EXPECTED_PASS:-0}" ]]; then
+    echo "  FAIL: assertion-count drift (expected ${TEST_LLM_CATALOG_EXPECTED_PASS:-0}, got $PASS passed + $SKIPPED skipped)"
     FAIL=$((FAIL+1))
 fi
 [[ $FAIL -eq 0 ]]

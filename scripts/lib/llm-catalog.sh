@@ -702,21 +702,41 @@ LC_PROJECT_CONFIG=".cct.toml"   # the committed project file (#460); never .cct.
 LC_POLICY_TABLE="llm"
 # The table's name as TOML may write it: bare, or quoted either way.
 LC_POLICY_TABLE_RE="($LC_POLICY_TABLE|\"$LC_POLICY_TABLE\"|'$LC_POLICY_TABLE')"
+# A header naming the table in any form: the bare name followed by anything
+# but a bare-key character ([llmx] is another table), or a quoted name.
+LC_POLICY_NAMED_RE="^\[\[?[[:space:]]*($LC_POLICY_TABLE([^A-Za-z0-9_-]|$)|\"$LC_POLICY_TABLE\"|'$LC_POLICY_TABLE')"
 LC_POLICY_KEY="allowed"
+# The one form of the list the lexer reads, shown in every refusal of another.
+LC_POLICY_FORM="$LC_POLICY_KEY = [\"<llm>\", \"<llm>@<binding>\"]"
+# The Unicode spaces JavaScript's trim() removes: U+00A0, U+1680, U+2000 to
+# U+200A, U+2028, U+2029, U+202F, U+205F, U+3000 and the byte-order mark
+# U+FEFF. Pi's parser trims them from a line and a header's name.
+LC_UNICODE_SPACES=($'\xc2\xa0' $'\xe1\x9a\x80' $'\xe2\x80\x80' $'\xe2\x80\x81' $'\xe2\x80\x82' $'\xe2\x80\x83'
+    $'\xe2\x80\x84' $'\xe2\x80\x85' $'\xe2\x80\x86' $'\xe2\x80\x87' $'\xe2\x80\x88' $'\xe2\x80\x89' $'\xe2\x80\x8a'
+    $'\xe2\x80\xa8' $'\xe2\x80\xa9' $'\xe2\x80\xaf' $'\xe2\x81\x9f' $'\xe3\x80\x80' $'\xef\xbb\xbf')
 LC_TARGET_RE='^[A-Za-z0-9][A-Za-z0-9_-]*(@[A-Za-z0-9][A-Za-z0-9_-]*)?$'
 
 # lc_project_policy <project-root>
 # The [llm] table of <project-root>/.cct.toml, and nothing else of the
 # file, which is Pi's configuration first: a table this lexer does not
-# accept elsewhere in it can never block a launch. Sets LC_POLICY_FILE
+# accept elsewhere in it can never block a launch. The Unicode spaces Pi's
+# parser trims are blanks here too, and the file is read as bytes in every
+# locale, so a table Pi reads is never skipped. Sets LC_POLICY_FILE
 # (empty: the project restricts nothing) and LC_ALLOWED (the allowed llm
 # ids and <llm>@<binding> targets, one per line; empty with a policy file
 # means none). Returns 1 with LC_POLICY_ERR when [llm] holds anything but
-# `allowed = [...]`, in any form: projects restrict, never grant; and when
-# the file cannot be read, or the project directory cannot be searched for
-# it, since a restriction that cannot be read is never read as none.
+# `allowed = [...]`, in any form: projects restrict, never grant; when the
+# list is not one line of double-quoted ids, the only form the lexer reads;
+# when a header names the table in any form but [llm], alone or with a
+# comment; and when the file cannot be read, or the project directory cannot
+# be searched for it, since a restriction that cannot be read is never read
+# as none.
 lc_project_policy() {
-    local file="$1/$LC_PROJECT_CONFIG" raw line lineno=0 in=0 root=1 seen=0 e
+    # Bytes, not characters: in a UTF-8 locale a byte that is not UTF-8, such
+    # as one in a Latin-1 comment, would keep a header from matching at all.
+    # The Unicode spaces are replaced byte by byte below.
+    local LC_ALL=C
+    local file="$1/$LC_PROJECT_CONFIG" raw line lineno=0 in=0 root=1 seen=0 e u shown
     LC_POLICY_FILE="" LC_ALLOWED="" LC_POLICY_ERR=""
     if [[ -d "$1" && ! -x "$1" ]]; then
         LC_POLICY_ERR="cannot read $file: the directory cannot be searched"
@@ -729,7 +749,8 @@ lc_project_policy() {
     fi
     while IFS= read -r raw || [[ -n "$raw" ]]; do
         lineno=$((lineno + 1))
-        [[ "$lineno" -eq 1 ]] && raw="${raw#$'\xef\xbb\xbf'}"   # a UTF-8 byte-order mark
+        # Read as blanks, so a header Pi reads is never skipped here.
+        for u in "${LC_UNICODE_SPACES[@]}"; do raw="${raw//$u/ }"; done
         ct_trim "$raw"
         line="$CT_LINE"
         if [[ -z "$line" || "${line:0:1}" == "#" ]]; then continue; fi
@@ -738,8 +759,20 @@ lc_project_policy() {
             # The header may carry a comment, as TOML allows.
             if [[ "$line" =~ ^\[[[:space:]]*$LC_POLICY_TABLE_RE[[:space:]]*\][[:space:]]*(#.*)?$ ]]; then
                 in=1
-            elif [[ "$line" =~ ^\[\[?[[:space:]]*$LC_POLICY_TABLE_RE[[:space:]]*(\.|\]\]) ]]; then
-                LC_POLICY_ERR="$file line $lineno: '$line' is not accepted: projects restrict, never grant (only [$LC_POLICY_TABLE] $LC_POLICY_KEY = [...])"
+                continue
+            fi
+            # A refused header is shown up to any `=` or `#`: what follows may
+            # be a value or a comment, and either may hold a secret.
+            shown="${line%%[=#]*}"
+            shown="${shown%"${shown##*[![:space:]]}"}"
+            [[ "$shown" == "$line" ]] || shown="$shown ..."
+            if [[ "$line" =~ ^\[\[?[[:space:]]*$LC_POLICY_TABLE_RE[[:space:]]*(\.|\]\]) ]]; then
+                LC_POLICY_ERR="$file line $lineno: '$shown' is not accepted: projects restrict, never grant (only [$LC_POLICY_TABLE] $LC_POLICY_KEY = [...])"
+                return 1
+            elif [[ "$line" =~ $LC_POLICY_NAMED_RE ]]; then
+                # Text after the header, or inside it ([llm] x, [llm x]), would
+                # otherwise leave the list unread: refused, never skipped.
+                LC_POLICY_ERR="$file line $lineno: '$shown' is not accepted: write the header as [$LC_POLICY_TABLE], alone or followed by a comment"
                 return 1
             fi
             continue
@@ -755,7 +788,8 @@ lc_project_policy() {
             continue
         fi
         if ! ct_split_kv "$line"; then
-            LC_POLICY_ERR="$file line $lineno: $CT_ERR"
+            # Not echoed: the line may hold a value, and a value may be a secret.
+            LC_POLICY_ERR="$file line $lineno: this line is not accepted in [$LC_POLICY_TABLE], which holds one line: $LC_POLICY_FORM"
             return 1
         fi
         if [[ "$CT_KEY" != "$LC_POLICY_KEY" ]]; then
@@ -768,7 +802,7 @@ lc_project_policy() {
         fi
         seen=1
         if ! ct_lex_value "$CT_VAL" || [[ "$CT_TYPE" != "array" ]]; then
-            LC_POLICY_ERR="$file line $lineno: [$LC_POLICY_TABLE].$LC_POLICY_KEY must be an array of llm ids or <llm>@<binding> targets"
+            LC_POLICY_ERR="$file line $lineno: [$LC_POLICY_TABLE].$LC_POLICY_KEY must be one line of double-quoted ids separated by commas, as in $LC_POLICY_FORM, with no escapes, no trailing comma and no comment after it"
             return 1
         fi
         LC_POLICY_FILE="$file"
