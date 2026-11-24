@@ -240,6 +240,10 @@ assert_eq "digests: credential mode none (no variable, no auth header, as the ca
     "$(moves "$D1" "$(digests_of "$(home credmode sed -e 's/^credential_mode = "env"$/credential_mode = "none"/' -e '/^credential_env = /d' -e 's/^auth_header = "bearer"$/auth_header = "none"/')" m)")"
 assert_eq "digests: the protocol moves the catalog and the launch identity, not the options" "moved|moved|same" \
     "$(moves "$D1" "$(digests_of "$(home proto awk '/^protocol = "anthropic-messages"$/ && !d {print "protocol = \"openai-chat\""; d=1; next} {print}')" m)")"
+assert_eq "digests: the model moves the catalog and the launch identity, not the options" "moved|moved|same" \
+    "$(moves "$D1" "$(digests_of "$(home model sed 's/^model = "model-one"$/model = "model-renamed"/')" m)")"
+# The harness is the one input not varied here: this version accepts
+# bindings for claude-code only.
 # A valid catalog ties the provider kind to whether the binding names an
 # endpoint, so the kind is varied in the resolved plan itself.
 KIND=$(env -u CCT_HOME CCT_HOME="$BASE_HOME" bash -c '
