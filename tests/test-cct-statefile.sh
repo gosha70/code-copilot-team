@@ -135,6 +135,20 @@ trace_if_failed() {  # <FAIL before the assertions> <trace file>
     [[ "$FAIL" -gt "$1" && -s "$2" ]] || return 0
     echo "        --- lock trace: $2 ---"
     sed 's/^/        | /' "$2"
+    echo "        --- tools: $(mkdir --version 2>&1 | head -1) | $(bash --version | head -1) ---"
+    echo "        --- both of two simultaneous mkdirs of one directory succeeded in $(mkdir_probe) of 50 pairs ---"
+}
+mkdir_probe() {  # -> how many of 50 pairs of simultaneous mkdirs both succeeded (0 when mkdir is atomic)
+    local i both=0
+    for i in $(seq 1 50); do
+        rmdir "$D/probe" 2>/dev/null
+        ( if mkdir "$D/probe" 2>/dev/null; then echo ok; fi > "$D/probe-a" ) &
+        ( if mkdir "$D/probe" 2>/dev/null; then echo ok; fi > "$D/probe-b" ) &
+        wait
+        [[ -s "$D/probe-a" && -s "$D/probe-b" ]] && both=$((both + 1))
+    done
+    rmdir "$D/probe" 2>/dev/null
+    printf '%s' "$both"
 }
 C="$D/count.json"
 sf_write "$C" '0'
