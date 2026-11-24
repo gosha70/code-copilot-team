@@ -12,7 +12,7 @@ Two runs have no overlay: the bare resume in section 5 and the last run in secti
 `-c model_provider=cct-capture` plus `model_providers.cct-capture.{name,base_url,env_key,wire_api}`, `wire_api = "responses"`, base URL stub A:
 
 - exit 0; events: thread.started, item.completed, turn.started, item.completed, turn.completed
-- thread id: `01a20b4c-664d-7461-9c4a-35d074532927`
+- thread id: `01a20b51-6bf4-7382-aa7c-a03a04bab1ca`
 - agent message: 'stub-ok'
 - error item: Model metadata for `capture-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.
 - events with a `model` field: none
@@ -44,7 +44,7 @@ Two runs have no overlay: the bare resume in section 5 and the last run in secti
 ### `-p capture` alone
 
 - exit 0; events: thread.started, item.completed, turn.started, item.completed, turn.completed
-- thread id: `01a20b4c-68f2-7351-a490-5846c1f5551c`
+- thread id: `01a20b51-6e43-7741-a100-5a6d2695b6e1`
 - agent message: 'stub-ok'
 - error item: Model metadata for `profile-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.
 - events with a `model` field: none
@@ -54,7 +54,7 @@ Two runs have no overlay: the bare resume in section 5 and the last run in secti
 ### `-p capture -c model="cli-model"`
 
 - exit 0; events: thread.started, item.completed, turn.started, item.completed, turn.completed
-- thread id: `01a20b4c-6a4b-7720-a770-91cda0dabbba`
+- thread id: `01a20b51-6f95-7481-9fdb-11127794241b`
 - agent message: 'stub-ok'
 - error item: Model metadata for `cli-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.
 - events with a `model` field: none
@@ -64,7 +64,7 @@ Two runs have no overlay: the bare resume in section 5 and the last run in secti
 ### `-p capture` plus the overlay naming stub B
 
 - exit 0; events: thread.started, item.completed, turn.started, item.completed, turn.completed
-- thread id: `01a20b4c-6b9e-7a71-a770-af860ea31bc7`
+- thread id: `01a20b51-715e-7f30-9e0d-83fcfeb59802`
 - agent message: 'stub-ok'
 - error item: Model metadata for `profile-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.
 - events with a `model` field: none
@@ -76,7 +76,7 @@ Two runs have no overlay: the bare resume in section 5 and the last run in secti
 Section 1 lists the `exec --json` events that carry a `model` field. The session file the first run wrote:
 
 - file: `$CODEX_HOME/sessions/2026/11/23/rollout-<time>-<thread id>.jsonl`
-- `session_meta`: id `01a20b4c-664d-7461-9c4a-35d074532927`, model_provider `cct-capture`, cli_version `0.147.0`
+- `session_meta`: id `01a20b51-6bf4-7382-aa7c-a03a04bab1ca`, model_provider `cct-capture`, cli_version `0.147.0`
 - `turn_context`: model `capture-model`
 
 ## 5. `codex exec resume <thread id>`
@@ -84,18 +84,18 @@ Section 1 lists the `exec --json` events that carry a `model` field. The session
 ### Without the overlay
 
 - exit 1; events: thread.started, item.completed, turn.started, error, error, error, error, item.completed, error, error, error, error, error, error, turn.failed
-- thread id: `01a20b4c-664d-7461-9c4a-35d074532927`
+- thread id: `01a20b51-6bf4-7382-aa7c-a03a04bab1ca`
 - error item: This session was recorded with model `capture-model` but is resuming with `gpt-5.6-sol`. Consider switching back to `capture-model` as it may affect Codex perfo
 - error item: Falling back from WebSockets to HTTPS transport. unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: wss://api.openai.com
 - events with a `model` field: none
 - stub A: no request
 - stub B: no request
-- stderr, last line: 2026-11-24T02:04:56.268481Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://api.openai.com/v1/responses
+- stderr, last line: 2026-11-24T02:10:25.327919Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://api.openai.com/v1/responses
 
 ### With the same overlay (stub A)
 
 - exit 0; events: thread.started, item.completed, item.completed, turn.started, item.completed, turn.completed
-- thread id: `01a20b4c-664d-7461-9c4a-35d074532927`
+- thread id: `01a20b51-6bf4-7382-aa7c-a03a04bab1ca`
 - agent message: 'stub-ok'
 - error item: This session was recorded with model `gpt-5.6-sol` but is resuming with `capture-model`. Consider switching back to `gpt-5.6-sol` as it may affect Codex perform
 - error item: Model metadata for `capture-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.
@@ -106,7 +106,7 @@ Section 1 lists the `exec --json` events that carry a `model` field. The session
 ### With an overlay naming stub B
 
 - exit 0; events: thread.started, item.completed, turn.started, item.completed, turn.completed
-- thread id: `01a20b4c-664d-7461-9c4a-35d074532927`
+- thread id: `01a20b51-6bf4-7382-aa7c-a03a04bab1ca`
 - agent message: 'stub-ok'
 - error item: Model metadata for `capture-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.
 - events with a `model` field: none
@@ -124,7 +124,7 @@ No `--session-id` or `--thread-id` option in the help of `codex`, `exec`, `exec 
 ### With the overlay naming stub A
 
 - exit 0; events: thread.started, item.completed, turn.started, item.completed, turn.completed
-- thread id: `01a20b4c-af2b-7371-bd42-d8919ea5fbe3`
+- thread id: `01a20b51-b2f6-7533-bda6-6e87e690bcae`
 - agent message: 'stub-ok'
 - error item: Model metadata for `capture-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.
 - events with a `model` field: none
@@ -134,10 +134,10 @@ No `--session-id` or `--thread-id` option in the help of `codex`, `exec`, `exec 
 ### Without the overlay
 
 - exit 1; events: thread.started, item.completed, turn.started, error, error, error, error, item.completed, error, error, error, error, error, error, turn.failed
-- thread id: `01a20b4c-b191-74d2-9398-69d567879ee8`
+- thread id: `01a20b51-b4a8-71f2-be32-987be20491c7`
 - error item: Model metadata for `capture-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.
 - error item: Falling back from WebSockets to HTTPS transport. unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: wss://api.openai.com
 - events with a `model` field: none
 - stub A: no request
 - stub B: no request
-- stderr, last line: 2026-11-24T02:05:13.881959Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://api.openai.com/v1/responses
+- stderr, last line: 2026-11-24T02:10:41.736538Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://api.openai.com/v1/responses

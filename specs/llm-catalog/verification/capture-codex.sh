@@ -18,13 +18,14 @@ LIMIT="${CAPTURE_TIMEOUT_SEC:-90}"
 
 command -v codex >/dev/null || { echo "codex not found on PATH" >&2; exit 2; }
 command -v python3 >/dev/null || { echo "python3 not found" >&2; exit 2; }
+command -v perl >/dev/null || { echo "perl not found (it sets each run's time limit)" >&2; exit 2; }
 
 W="$(mktemp -d "${TMPDIR:-/tmp}/cct-capture-codex.XXXXXX")"
 case "$W" in */cct-capture-codex.*) ;; *) echo "unexpected work dir: $W" >&2; exit 2 ;; esac
 STUB_PIDS=()
 cleanup() {
   local pid
-  for pid in "${STUB_PIDS[@]}"; do kill "$pid" 2>/dev/null; done
+  for pid in ${STUB_PIDS[@]+"${STUB_PIDS[@]}"}; do kill "$pid" 2>/dev/null; done
   rm -rf -- "$W"
 }
 trap cleanup EXIT
@@ -42,6 +43,7 @@ start_stub() {  # start_stub <name>: sets <name>_PORT
   STUB_PIDS+=("$!")
   disown "$!" 2>/dev/null || true
   for i in $(seq 1 50); do [[ -s "$W/$name.port" ]] && break; sleep 0.1; done
+  [[ -s "$W/$name.port" ]] || { echo "stub $name did not start" >&2; exit 2; }
   : > "$W/$name.jsonl"
   printf -v "${name}_PORT" '%s' "$(cat "$W/$name.port")"
 }

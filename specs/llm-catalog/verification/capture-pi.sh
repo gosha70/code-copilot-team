@@ -20,13 +20,14 @@ LIMIT="${CAPTURE_TIMEOUT_SEC:-90}"
 
 command -v pi >/dev/null || { echo "pi not found on PATH" >&2; exit 2; }
 command -v python3 >/dev/null || { echo "python3 not found" >&2; exit 2; }
+command -v perl >/dev/null || { echo "perl not found (it sets each run's time limit)" >&2; exit 2; }
 
 W="$(mktemp -d "${TMPDIR:-/tmp}/cct-capture-pi.XXXXXX")"
 case "$W" in */cct-capture-pi.*) ;; *) echo "unexpected work dir: $W" >&2; exit 2 ;; esac
 STUB_PIDS=()
 cleanup() {
   local pid
-  for pid in "${STUB_PIDS[@]}"; do kill "$pid" 2>/dev/null; done
+  for pid in ${STUB_PIDS[@]+"${STUB_PIDS[@]}"}; do kill "$pid" 2>/dev/null; done
   rm -rf -- "$W"
 }
 trap cleanup EXIT
@@ -38,6 +39,7 @@ PI_DIR="$(dirname "$(command -v pi)")"
 RUN_PATH="$PI_DIR:/usr/bin:/bin"
 VERSION="$(env -i HOME="$H" PATH="$RUN_PATH" PI_OFFLINE=1 pi --version 2>/dev/null | tail -1)"
 DOCS="$(cd "$PI_DIR" && cd "$(dirname "$(readlink pi)")" && while [[ ! -f package.json && "$PWD" != "/" ]]; do cd ..; done; pwd)/docs"
+[[ -f "$DOCS/../package.json" ]] || { echo "cannot find pi's package from $(command -v pi)" >&2; exit 2; }
 
 start_stub() {  # start_stub <name>: sets <name>_PORT
   local name="$1" i
@@ -45,6 +47,7 @@ start_stub() {  # start_stub <name>: sets <name>_PORT
   STUB_PIDS+=("$!")
   disown "$!" 2>/dev/null || true
   for i in $(seq 1 50); do [[ -s "$W/$name.port" ]] && break; sleep 0.1; done
+  [[ -s "$W/$name.port" ]] || { echo "stub $name did not start" >&2; exit 2; }
   : > "$W/$name.jsonl"
   printf -v "${name}_PORT" '%s' "$(cat "$W/$name.port")"
 }

@@ -11,7 +11,7 @@ The user's own setup in that home: `~/.pi/agent/models.json` has a provider `use
 
 ### `api = "openai-completions"`
 
-- exit 0; session `01a20b4c-fdfc-735b-87ef-b5fca674d141`
+- exit 0; session `01a20b51-fd9a-7130-a832-b1d60669b94f`
 - assistant message: provider `cct-chat`, model `capture-model`, api `openai-completions`
 - reply: 'stub-ok'
 - stub A: POST /v1/chat/completions | protocol openai-chat | model 'capture-model' | auth {'authorization': 'Bearer capture-planted-credential'}
@@ -19,7 +19,7 @@ The user's own setup in that home: `~/.pi/agent/models.json` has a provider `use
 
 ### `api = "openai-responses"`
 
-- exit 0; session `01a20b4d-00c6-7aea-9916-72d11e98ac7d`
+- exit 0; session `01a20b52-0056-7ff6-aa4f-1d325be2c91b`
 - assistant message: provider `cct-responses`, model `capture-model`, api `openai-responses`
 - reply: 'stub-ok'
 - stub A: POST /v1/responses | protocol openai-responses | model 'capture-model' | auth {'authorization': 'Bearer capture-planted-credential'}
@@ -27,7 +27,7 @@ The user's own setup in that home: `~/.pi/agent/models.json` has a provider `use
 
 ### `api = "anthropic-messages"`
 
-- exit 0; session `01a20b4d-0374-7c42-a7dd-9c4f5af0255c`
+- exit 0; session `01a20b52-02e8-7d60-bce1-728fd6220f6d`
 - assistant message: provider `cct-messages`, model `capture-model`, api `anthropic-messages`
 - reply: 'stub-ok'
 - stub A: POST /v1/messages | protocol anthropic-messages | model 'capture-model' | auth {'x-api-key': 'capture-planted-credential'}
@@ -51,7 +51,7 @@ The launcher chose `0c0a1e5e-0000-4000-8000-000000000001`.
 - stub B: no request
 - stderr: Warning: No project session found with id '0c0a1e5e-0000-4000-8000-000000000001'; creating a new session with that id.
 - session files:
-  - <work>/agent-proto/sessions/<cwd>/2026-11-24T02-05-27-547Z_0c0a1e5e-0000-4000-8000-000000000001.jsonl
+  - <work>/agent-proto/sessions/<cwd>/2026-11-24T02-10-55-067Z_0c0a1e5e-0000-4000-8000-000000000001.jsonl
 
 ## 4. A launch-scoped overlay (FR-22, option a)
 
@@ -68,7 +68,7 @@ The launcher chose `0c0a1e5e-0000-4000-8000-000000000001`.
 
 ### Without `--provider`: the user's default through the linked `settings.json`
 
-- exit 0; session `01a20b4d-0de5-727a-8f75-304dfbda5ceb`
+- exit 0; session `01a20b52-0d32-7703-900c-4938e92d7d51`
 - assistant message: provider `user-local`, model `user-model`, api `openai-completions`
 - reply: 'stub-ok'
 - stub A: no request
@@ -76,7 +76,7 @@ The launcher chose `0c0a1e5e-0000-4000-8000-000000000001`.
 
 - overlay entries after both runs: `auth.json models.json sessions settings.json`; `settings.json` still a link; `auth.json` still a link; `sessions` still a link. These headless runs write no setting and no login; a write from `/settings` or `/login` in an interactive overlay session is not exercised here
 - session files under the user's agent directory:
-  - ~/.pi/agent/sessions/<cwd>/2026-11-24T02-05-28-266Z_0c0a1e5e-0000-4000-8000-000000000004.jsonl
+  - ~/.pi/agent/sessions/<cwd>/2026-11-24T02-10-55-770Z_0c0a1e5e-0000-4000-8000-000000000004.jsonl
 - the user's `models.json` after the overlay runs: unchanged
 
 ### Resuming that session natively: `--session-id 0c0a1e5e-0000-4000-8000-000000000004`, no overlay
@@ -97,13 +97,13 @@ The launcher chose `0c0a1e5e-0000-4000-8000-000000000001`.
 
 ### An overlay with `PI_CODING_AGENT_SESSION_DIR` instead of a linked `sessions/`
 
-- exit 0; session `01a20b4d-15b2-7a0a-8123-8430f9f00e69`
+- exit 0; session `01a20b52-14ed-7b0f-a4d8-3801015a8695`
 - assistant message: provider `cct-capture`, model `capture-model`, api `openai-completions`
 - reply: 'stub-ok'
 - stub A: POST /v1/chat/completions | protocol openai-chat | model 'capture-model' | auth {'authorization': 'Bearer capture-planted-credential'}
 - stub B: no request
 - session files under `PI_CODING_AGENT_SESSION_DIR`:
-  - <work>/session-store/2026-11-24T02-05-30-930Z_01a20b4d-15b2-7a0a-8123-8430f9f00e69.jsonl
+  - <work>/session-store/2026-11-24T02-10-58-413Z_01a20b52-14ed-7b0f-a4d8-3801015a8695.jsonl
 - entries of that overlay after the run: `auth.json models.json`
 
 ## 5. An owned merge into the user's `models.json` (FR-22, option b)
@@ -112,7 +112,7 @@ The launcher chose `0c0a1e5e-0000-4000-8000-000000000001`.
 
 ### `--provider cct-capture`
 
-- exit 0; session `01a20b4d-18c0-7886-a88b-a62f826774a3`
+- exit 0; session `01a20b52-17d9-7d42-95ab-857eb429e442`
 - assistant message: provider `cct-capture`, model `capture-model`, api `openai-completions`
 - reply: 'stub-ok'
 - stub A: POST /v1/chat/completions | protocol openai-chat | model 'capture-model' | auth {'authorization': 'Bearer capture-planted-credential'}
@@ -120,7 +120,7 @@ The launcher chose `0c0a1e5e-0000-4000-8000-000000000001`.
 
 ### No `--provider`: the user's default
 
-- exit 0; session `01a20b4d-1b5c-72a6-973e-a95aa396ee8d`
+- exit 0; session `01a20b52-1a5d-7fb0-be5a-90a2f03ef5dc`
 - assistant message: provider `user-local`, model `user-model`, api `openai-completions`
 - reply: 'stub-ok'
 - stub A: no request
@@ -132,7 +132,7 @@ The launcher chose `0c0a1e5e-0000-4000-8000-000000000001`.
 
 ### `OPENAI_API_KEY` beside a CCT entry with `apiKey = $CCT_CAPTURE_KEY`
 
-- exit 0; session `01a20b4d-1e25-77fb-9636-d4d08fd0c6ab`
+- exit 0; session `01a20b52-1cfc-7ccc-b353-db98c1226bb5`
 - assistant message: provider `cct-chat`, model `capture-model`, api `openai-completions`
 - reply: 'stub-ok'
 - stub A: POST /v1/chat/completions | protocol openai-chat | model 'capture-model' | auth {'authorization': 'Bearer capture-planted-credential'}
@@ -140,14 +140,14 @@ The launcher chose `0c0a1e5e-0000-4000-8000-000000000001`.
 
 ### `OPENAI_API_KEY` beside an `openai-completions` entry with no `apiKey`
 
-- exit 1; session `01a20b4d-20cd-71e2-86e3-3b5bf08cc754`
+- exit 1; session `01a20b52-1f9f-7b01-84d1-293f021d8f35`
 - stub A: no request
 - stub B: no request
 - stderr: No API key found for cct-nokey. / Use /login to log into a provider via OAuth or API key. See: / <pi package>/docs/providers.md
 
 ### `ANTHROPIC_API_KEY` beside an `anthropic-messages` entry whose `$CCT_CAPTURE_KEY` is unset
 
-- exit 1; session `01a20b4d-235a-77b0-a17e-ac7655072c4c`
+- exit 1; session `01a20b52-2207-7f95-b627-a9d1b0f2320b`
 - stub A: no request
 - stub B: no request
 - stderr: No API key found for cct-messages. / Use /login to log into a provider via OAuth or API key. See: / <pi package>/docs/providers.md
