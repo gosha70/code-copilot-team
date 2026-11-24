@@ -236,11 +236,16 @@ _lcm_changed_text() {  # <old-evidence> <new-evidence> -> what changed, in words
 # keyed on an empty digest would match all other such evidence. Every
 # evidence digest goes through here, the session stamps of S4 included.
 lcm_evidence() {
+    LCM_EVIDENCE="null"
     lcm_load_rules || return 1
-    if [[ -z "$LR_DIGEST_LAUNCH" || -z "$LR_DIGEST_OPTIONS" ]]; then lr_digests || true; fi
-    if [[ -z "$LR_DIGEST_LAUNCH" || -z "$LR_DIGEST_OPTIONS" ]]; then
-        LCM_EVIDENCE="null"
-        LCM_ERR="no launch-identity and options digests to key the evidence on (${LR_TARGET:-no target} did not resolve to a binding)"
+    if [[ -z "${LR_BINDING:-}" ]]; then
+        if [[ -n "${LR_TARGET:-}" ]]; then LCM_ERR="no evidence: $LR_TARGET did not resolve to a binding"
+        else LCM_ERR="no evidence: no target was resolved"; fi
+        return 1
+    fi
+    if [[ -z "${LR_DIGEST_LAUNCH:-}" || -z "${LR_DIGEST_OPTIONS:-}" ]]; then lr_digests || true; fi
+    if [[ -z "${LR_DIGEST_LAUNCH:-}" || -z "${LR_DIGEST_OPTIONS:-}" ]]; then
+        LCM_ERR="no evidence for $LR_LLM@$LR_BINDING: its digests could not be computed (they need jq, and shasum or sha256sum)"
         return 1
     fi
     LCM_EVIDENCE=$(jq -nc --arg li "$LR_DIGEST_LAUNCH" --arg o "$LR_DIGEST_OPTIONS" \
@@ -253,7 +258,8 @@ lcm_evidence() {
 # array: what changed since the latest conclusive record), LCM_EVIDENCE
 # (the current evidence as JSON, or null when the harness is not
 # installed) and LCM_RECORD; the resolver's LR_* stay set.
-# Returns 0; 1 when the target does not resolve (LCM_ERR says why); 2 when
+# Returns 0; 1 when the target does not resolve or its evidence cannot be
+# computed (LCM_ERR says why); 2 when
 # the rule table or the record is unusable (LCM_ERR names it; the state is
 # still computed, without the record).
 lcm_state() {

@@ -219,6 +219,13 @@ EVID=$(env -i HOME="$HOME_DIR" PATH="$TMP/bin:$PATH" LC_ALL=en_US.UTF-8 TEST_LLM
     lr_resolve pi m; rc=0; lcm_evidence 2.1.331 || rc=$?
     printf "%s|%s|%s" "$ok" "$rc" "$LCM_EVIDENCE"' _ "$REPO_DIR")
 assert_eq "evidence: a fresh resolution gets its digests computed; no binding, no evidence" "yes|1|null" "$EVID"
+EVID=$(env -i HOME="$HOME_DIR" PATH="$TMP/bin:$PATH" LC_ALL=en_US.UTF-8 bash -c '
+    set -u
+    for l in llm-catalog llm-adapters/claude-code llm-resolve cct-statefile llm-compat; do source "$1/scripts/lib/$l.sh"; done
+    LCM_EVIDENCE="{\"stale\": true}"; rc=0; lcm_evidence 2.1.331 || rc=$?
+    printf "%s|%s|%s" "$rc" "$LCM_EVIDENCE" "$LCM_ERR"' _ "$REPO_DIR" 2>&1)
+assert_eq "evidence: called before any resolution, under set -u, it refuses and leaves no stale evidence" \
+    "1|null|no evidence: no target was resolved" "$EVID"
 
 # ── records (FR-16) and the conclusive states ──
 EV_M=$(evidence_of m)
