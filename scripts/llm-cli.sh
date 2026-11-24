@@ -276,7 +276,7 @@ cmd_show() {
         h=$(lc_get "bindings.$b" harness) || h=""
         target=$(target_of "$id" "$b" "$h")
         lr_resolve "$h" "$target" || true
-        lr_digests || true
+        if [[ "$json" == 1 ]]; then lr_digests || true; fi  # only the JSON form shows them
         credential_of "$b"
         state="$LR_STATE"
         if [[ -n "$LR_REASON" ]]; then state="$state: $LR_REASON"; fi
