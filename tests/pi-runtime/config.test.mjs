@@ -483,6 +483,18 @@ test("lint: a typo in a closed section is an unknown-key warning", () => {
   assert.equal(hasErrors(findings), false); // warning, not error
 });
 
+test("lint: [llm].allowed is a known key (#400 FR-24)", () => {
+  assert.deepEqual(lintConfig({ llm: { allowed: ["deepseek", "opus@own"] } }), []);
+});
+
+test("lint: any other [llm] key is refused, an error: projects restrict, never grant", () => {
+  const findings = lintConfig({ llm: { allowed: ["deepseek"], default: "deepseek" } });
+  const f = findings.find((x) => x.key === "llm.default");
+  assert.equal(f.kind, "refused");
+  assert.match(f.message, /projects restrict, never grant/);
+  assert.equal(hasErrors(findings), true);
+});
+
 test("lint: known keys and open sections produce no findings", () => {
   const clean = {
     config_version: 2,

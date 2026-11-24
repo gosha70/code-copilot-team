@@ -102,9 +102,10 @@ COMMANDS
                                                  each target's state, and the evidence
                   Each takes --json.
   harness         What a harness launch would do, before it runs:
-                    cct harness explain <harness> --llm <target> [--json]
+                    cct harness explain <harness> --llm <target> [--project <dir>] [--json]
                                                  what it sets and removes, by name,
-                                                 and why it would be refused
+                                                 and why it would be refused, from
+                                                 that project (default: here)
   help            Show this help.
 
 EXAMPLES

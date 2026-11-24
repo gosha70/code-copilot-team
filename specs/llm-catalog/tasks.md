@@ -94,3 +94,15 @@ change.
 | S2.5 | Pins, repo-structure, the CI steps; the guide, the CHANGELOG; spec amendment 3 and the FR-29 departure for the owner's ruling | FR-28 | `tests/test-counts.env`, `tests/test-shared-structure.sh`, `tests/test-llm-catalog.sh`, `docs/repo-structure.md`, `.github/workflows/sync-check.yml`, `docs/llm-catalog.md`, `CHANGELOG.md`, `spec.md` | [x] |
 | S2.6 | Carried from S1's review (#525): under `--json` a usage error prints the error envelope, and `compatibility` follows S1's rule for a command that cannot answer; digest tests through the quirks, the auth header, the credential's mode and variable, the provider kind and the protocol | FR-6, FR-9 | `scripts/llm-cli.sh`, `scripts/lib/cct_doctor.py`, `shared/schemas/llm-catalog-cli.schema.json`, `tests/test-llm-cli.sh`, `tests/test-llm-compat.sh` | [x] |
 | S2.7 | Gates: suites, validate-spec, origin alignment, doc accuracy, `pre-pr-check.sh --closes <S2 issue>`, peer review, PR "Part of #400" | all S2 | repository gates | [ ] |
+
+## S5 — project policy (#527, plan ruled 2026-11-23)
+
+From A8; plan.md, "Remaining slices". Depends on S1.
+
+| # | Task | Requirement(s) | File(s) | Done |
+|---|---|---|---|---|
+| S5.1 | The reader: the `[llm]` table of `<project root>/.cct.toml` only, `allowed = [<llm ids or <llm>@<binding> targets>]`; any other key, or the table written another way, refused by name; the rest of the file never read | FR-24, D13 | `scripts/lib/llm-catalog.sh`, `tests/test-llm-catalog.sh` | [x] |
+| S5.2 | Applied by the resolver with a project directory: the Claude Code launcher passes its launch directory, `cct harness explain` its `--project` (default: the current directory); a launch without `--llm` reads nothing | FR-24, FR-27 | `scripts/lib/llm-resolve.sh`, `adapters/claude-code/claude-code`, `scripts/llm-cli.sh`, `scripts/cct`, `tests/test-llm-launch.sh`, `tests/test-llm-cli.sh` | [x] |
+| S5.3 | Pi's config lint accepts `llm.allowed` and reports any other `llm.*` key as a `refused` error, which `scripts/validate-cct-config.sh` counts | FR-24 | `adapters/pi/runtime/config/lint.ts`, `scripts/validate-cct-config.sh`, `tests/pi-runtime/config.test.mjs`, `tests/test-pi-adapter.sh`, `tests/fixtures/cct-config/llm-grant.toml` | [x] |
+| S5.4 | Pins, repo-structure; the guide, Pi's configuration reference, the CHANGELOG; spec amendments 1 and 5 | FR-28 | `tests/test-counts.env`, `docs/repo-structure.md`, `docs/llm-catalog.md`, `adapters/pi/docs/configuration-reference.md`, `CHANGELOG.md`, `spec.md` | [x] |
+| S5.5 | Gates: suites, validate-spec, origin alignment, doc accuracy, `pre-pr-check.sh --closes <S5 issue>`, peer review, PR "Part of #400" | all S5 | repository gates | [ ] |

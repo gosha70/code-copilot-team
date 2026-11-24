@@ -305,6 +305,72 @@ USAGE_RC=0; USAGE_OUT=$(bash "$CLI" bogus 2>&1) || USAGE_RC=$?
 assert_exit "an unknown cct llm command exits 2" 2 "$USAGE_RC"
 assert_contains "...and names the four that exist" "$USAGE_OUT" "list | show | validate | compatibility"
 
+# ── a project's [llm] restriction (#400 FR-24, D13; S5) ──
+PROJ="$TMP/policy-proj"; mkdir -p "$PROJ"
+policy() {  # <.cct.toml content, "-" for none, or "=" as it is> -> rc|restricts|allowed|error
+    [[ "$1" == "=" ]] || rm -f "$PROJ/.cct.toml"
+    [[ "$1" == "-" || "$1" == "=" ]] || printf '%s\n' "$1" > "$PROJ/.cct.toml"
+    bash -c 'source "$1/scripts/lib/llm-catalog.sh"; rc=0; lc_project_policy "$2" || rc=$?
+             printf "%s|%s|%s|%s" "$rc" "$([[ -n "$LC_POLICY_FILE" ]] && echo yes || echo no)" \
+                 "$(printf "%s" "$LC_ALLOWED" | paste -sd, -)" "$LC_POLICY_ERR"' _ "$REPO_DIR" "$PROJ"
+}
+assert_eq "policy: no .cct.toml restricts nothing" "0|no||" "$(policy -)"
+assert_eq "policy: a .cct.toml without [llm] restricts nothing" "0|no||" "$(policy '[security]
+fail_closed = true')"
+assert_eq "policy: [llm].allowed lists llm ids and <llm>@<binding> targets" "0|yes|m,own@own-b|" "$(policy '[llm]
+allowed = ["m", "own@own-b"]')"
+assert_eq "policy: an empty list allows nothing" "0|yes||" "$(policy '[llm]
+allowed = []')"
+assert_contains "policy: any other [llm] key is refused by name" "$(policy '[llm]
+allowed = ["m"]
+default = "m"')" "[llm].default is not accepted: projects restrict, never grant"
+assert_contains "policy: a dotted key at the root is refused, never ignored" "$(policy 'llm.allowed = ["m"]')" \
+    "write the project's LLM restriction as an [llm] table"
+assert_contains "policy: an inline table at the root is refused too" "$(policy 'llm = { allowed = ["m"] }')" \
+    "write the project's LLM restriction as an [llm] table"
+assert_contains "policy: an [llm.<x>] sub-table is refused" "$(policy '[llm.extra]
+x = 1')" "is not accepted: projects restrict, never grant"
+assert_contains "policy: allowed must be an array" "$(policy '[llm]
+allowed = "m"')" "must be an array of llm ids"
+assert_contains "policy: an entry must be an llm id or <llm>@<binding>" "$(policy '[llm]
+allowed = ["m", "not an id"]')" "'not an id' in [llm].allowed is not an llm id"
+assert_contains "policy: allowed given twice is refused" "$(policy '[llm]
+allowed = ["m"]
+allowed = ["m2"]')" "given twice"
+assert_eq "policy: a key named llm inside another table is that table's own" "0|no||" "$(policy '[providers.p]
+llm = "x"')"
+assert_eq "policy: the rest of the file may use forms the catalog lexer refuses" "0|yes|m|" "$(policy '[security]
+protected_paths = [
+  ".env",
+]
+[llm]
+allowed = ["m"]')"
+printf '[llm]\nallowed = ["m2"]\n' > "$PROJ/.cct.local.toml"
+mkdir -p "$PROJ/.code-copilot-team"; printf '[llm]\nallowed = ["m2"]\n' > "$PROJ/.code-copilot-team/config.toml"
+assert_eq "policy: .cct.local.toml and the legacy config.toml are never read" "0|no||" "$(policy -)"
+# TOML may quote the table's name: still the [llm] table, read or refused as such.
+assert_eq "policy: a quoted table name is the same [llm] table" "0|yes|m|" "$(policy '["llm"]
+allowed = ["m"]')"
+assert_eq "policy: ...single-quoted and spaced too" "0|yes|m|" "$(policy "[ 'llm' ]
+allowed = [\"m\"]")"
+assert_eq "policy: a quoted dotted key at the top is refused, never ignored" \
+    "1|no||$PROJ/.cct.toml line 1: write the project's LLM restriction as an [llm] table with allowed = [...]" "$(policy '"llm".allowed = ["m"]')"
+assert_eq "policy: a header with a comment is the [llm] table" "0|yes|m|" "$(policy '[llm] # the team restriction
+allowed = ["m"]')"
+assert_eq "policy: ...and so is one after a byte-order mark" "0|yes|m|" "$(policy "$(printf '\357\273\277[llm]\nallowed = ["m"]')")"
+assert_eq "policy: [[llm]] is refused, never ignored" \
+    "1|no||$PROJ/.cct.toml line 1: '[[llm]]' is not accepted: projects restrict, never grant (only [llm] allowed = [...])" "$(policy '[[llm]]
+allowed = ["m"]')"
+# A restriction that cannot be read is never read as none.
+printf '[llm]\nallowed = ["m"]\n' > "$PROJ/.cct.toml"; chmod 000 "$PROJ/.cct.toml"
+assert_eq "policy: a .cct.toml that cannot be read is refused by name" "1|no||cannot read $PROJ/.cct.toml" "$(policy =)"
+rm -f "$PROJ/.cct.toml"; mkdir "$PROJ/.cct.toml"
+assert_eq "policy: a .cct.toml that is not a file is refused" "1|no||cannot read $PROJ/.cct.toml" "$(policy =)"
+rmdir "$PROJ/.cct.toml"; chmod 000 "$PROJ"
+assert_eq "policy: a project directory that cannot be searched is refused" \
+    "1|no||cannot read $PROJ/.cct.toml: the directory cannot be searched" "$(policy =)"
+chmod 700 "$PROJ"
+
 echo ""
 echo "========================================="
 echo "  llm-catalog tests: $PASS passed, $FAIL failed"

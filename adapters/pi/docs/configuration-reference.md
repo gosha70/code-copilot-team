@@ -76,6 +76,9 @@ The linter rejects unknown keys, so its allowlist *is* the schema. Groups:
   `reject_unrestricted_host` (used by subagents/teams + the sandbox gate).
 - **`agents.*`** — `subagents_enabled`, `teams_enabled`.
 - **`integrations.mcp.enabled`**, **`session.ephemeral`**, **`ui.interactive`**.
+- **`llm.allowed`** — a project's restriction on `--llm`, read by the launchers
+  from the committed `.cct.toml` only (`docs/llm-catalog.md`). Any other
+  `llm.*` key is an error: projects restrict, never grant.
 - **Open prefixes** (`profiles.*`, `providers.*`) — user-defined tables.
 
 For each key's default and meaning, run `pi-code config explain <key>` — it

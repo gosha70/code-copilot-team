@@ -308,6 +308,10 @@ if command -v node >/dev/null 2>&1 && [[ "$(node --version | sed 's/^v//' | cut 
 
   RC=0; bash "$REPO_DIR/scripts/validate-cct-config.sh" "$CFG/future-version.toml" >/dev/null 2>&1 || RC=$?
   assert "validator rejects a future schema version (exit 1)" "[[ '$RC' == '1' ]]"
+
+  RC=0; OUT=$(bash "$REPO_DIR/scripts/validate-cct-config.sh" "$CFG/llm-grant.toml" 2>&1) || RC=$?
+  assert "validator rejects an [llm] key that would grant (exit 1)" "[[ '$RC' == '1' ]]"
+  assert "validator says projects restrict, never grant (#400 FR-24)" "echo \"\$OUT\" | grep -q 'llm.default: projects restrict, never grant'"
 else
   echo "  SKIP: config validation (node >= 22.6 unavailable)"
   if [[ -n "${CI:-}" ]]; then echo "  FAIL: node >= 22.6 required in CI"; FAIL=$((FAIL + 1)); fi
@@ -400,12 +404,15 @@ if command -v ruby >/dev/null 2>&1; then
     assert "prepare-release.sh runs offline and produces artifacts" \
       "bash '$REL_REPO/scripts/prepare-release.sh' >/dev/null 2>&1 && [[ -s '$REL_REPO/dist/SHA256SUMS' && -s '$REL_REPO/dist/RELEASE_NOTES.md' ]]"
     REL_PKG=$(ruby -rjson -e 'print JSON.parse(File.read(ARGV[0]))["version"]' "$REL_REPO/adapters/pi/package.json")
-    "${REL_GIT[@]}" tag "v$REL_PKG"
-    "${REL_GIT[@]}" commit -q --allow-empty -m "a commit after the release"
-    REL_RC=0
-    REL_OUT=$(bash "$REL_REPO/scripts/prepare-release.sh" 2>&1) || REL_RC=$?
-    assert "prepare-release.sh refuses v$REL_PKG while its tag is on another commit" \
-      "[[ '$REL_RC' == '1' ]] && grep -q 'a released tag must not move' <<< \"\$REL_OUT\""
+    if "${REL_GIT[@]}" tag "v$REL_PKG" && "${REL_GIT[@]}" commit -q --allow-empty -m "a commit after the release"; then
+      REL_RC=0
+      REL_OUT=$(bash "$REL_REPO/scripts/prepare-release.sh" 2>&1) || REL_RC=$?
+      assert "prepare-release.sh refuses v$REL_PKG while its tag is on another commit" \
+        "[[ '$REL_RC' == '1' ]] && grep -q 'a released tag must not move' <<< \"\$REL_OUT\""
+    else
+      echo "  FAIL: the release fixture could not be tagged (1 assertion not run)"
+      FAIL=$((FAIL + 1))
+    fi
   else
     echo "  FAIL: the release fixture repository could not be built (2 assertions not run):"
     sed 's/^/    /' "$TMP/release-fixture.log"

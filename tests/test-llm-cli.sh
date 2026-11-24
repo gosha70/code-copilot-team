@@ -124,7 +124,9 @@ cctx() {
     while [[ $# -gt 0 && "$1" != "--" ]]; do envs+=("$1"); shift; done
     shift
     RC=0
-    OUT=$(env -u CCT_HOME CCT_HOME="$h" TEST_LLM_KEY="$SECRET" TEST_LLM_URL="https://env.example/$PATH_TOKEN/v1" \
+    # From a directory with no project file: explain reads the current
+    # directory's project unless --project names one (S5).
+    OUT=$(cd "${CLI_RUN_DIR:-$TMP}" && env -u CCT_HOME CCT_HOME="$h" TEST_LLM_KEY="$SECRET" TEST_LLM_URL="https://env.example/$PATH_TOKEN/v1" \
         ${envs[@]+"${envs[@]}"} bash "$CCT" "$@" 2>&1) || RC=$?
 }
 digests_of() {  # <home> <target> [VAR=value ...] -> "catalog launch options"
@@ -333,10 +335,10 @@ assert_eq "compatibility --json, a usage error: exit 2 and the envelope alone" \
     "2|compatibility|cct llm compatibility: unknown option '--bogus'" "$(json_err)"
 cctx "$BASE_HOME" -- harness explain claude-code --json
 assert_eq "explain --json, a usage error: exit 2 and the envelope alone" \
-    "2|explain|usage: cct harness explain <harness> --llm <target> [--json]" "$(json_err)"
+    "2|explain|usage: cct harness explain <harness> --llm <target> [--project <dir>] [--json]" "$(json_err)"
 cctx "$BASE_HOME" -- harness bogus --json
 assert_eq "harness --json, an unknown subcommand: a null command" \
-    "2|null|usage: cct harness explain <harness> --llm <target> [--json]" "$(json_err)"
+    "2|null|usage: cct harness explain <harness> --llm <target> [--project <dir>] [--json]" "$(json_err)"
 cctx "$BASE_HOME" -- llm frob --json; ERR_NO_COMMAND="$OUT"
 assert_eq "--json, an unknown command: a null command" \
     "2|null|cct llm: unknown command 'frob' (list | show | validate | compatibility)" "$(json_err)"
@@ -368,6 +370,41 @@ else
     SKIPPED=$(( $(wc -w <<< "$SCHEMA_DOCS") + 1 ))
     echo "  SKIP: jsonschema not installed — the $SKIPPED schema checks did not run"
 fi
+
+# ── a project's [llm] restriction, through explain (#400 S5) ──
+mkdir -p "$TMP/policy-proj"
+printf '[llm]\nallowed = ["m2"]\n' > "$TMP/policy-proj/.cct.toml"
+cctx "$BASE_HOME" -- harness explain claude-code --llm m --project "$TMP/policy-proj"
+assert_exit "explain --project: a target the project does not list is refused" 3 "$RC"
+assert_contains "...naming the project's list" "$OUT" "is not allowed in this project"
+CLI_RUN_DIR="$TMP/policy-proj" cctx "$BASE_HOME" -- harness explain claude-code --llm m
+assert_exit "explain: the project is the current directory's by default" 3 "$RC"
+cctx "$BASE_HOME" -- harness explain claude-code --llm m --project "$TMP/no-such-dir"
+assert_exit "explain --project: a directory that does not exist is a usage error" 2 "$RC"
+mkdir -p "$TMP/git-proj/sub/deeper"
+git -C "$TMP/git-proj" init -q
+printf '[llm]\nallowed = ["m2"]\n' > "$TMP/git-proj/.cct.toml"
+cctx "$BASE_HOME" -- harness explain claude-code --llm m --project "$TMP/git-proj/sub/deeper"
+assert_exit "explain --project: a subdirectory follows its git top level's .cct.toml" 3 "$RC"
+mkdir -p "$TMP/broken-wt/sub"; printf 'gitdir: %s\n' "$TMP/no-such-gitdir" > "$TMP/broken-wt/.git"
+printf '[llm]\nallowed = ["m2"]\n' > "$TMP/broken-wt/.cct.toml"
+cctx "$BASE_HOME" -- harness explain claude-code --llm m --project "$TMP/broken-wt/sub"
+assert_exit "explain --project: a work tree git will not name still answers to its top level's .cct.toml" 3 "$RC"
+mkdir -p "$TMP/emptygit/.git" "$TMP/emptygit/proj"; printf '[llm]\nallowed = ["m2"]\n' > "$TMP/emptygit/proj/.cct.toml"
+cctx "$BASE_HOME" -- harness explain claude-code --llm m --project "$TMP/emptygit/proj"
+assert_exit "explain --project: with no repository git accepts, the directory's own .cct.toml still applies" 3 "$RC"
+assert_contains "explain --project: ...and the refusal names that file" "$OUT" \
+    "is not allowed in this project: $(cd "$TMP/emptygit/proj" && pwd -P)/.cct.toml [llm].allowed lists m2"
+# Both files apply: the one above refusing, while the directory's own allows.
+mkdir -p "$TMP/emptygit2/.git" "$TMP/emptygit2/proj"
+printf '[llm]\nallowed = ["m2"]\n' > "$TMP/emptygit2/.cct.toml"; printf '[llm]\nallowed = ["m"]\n' > "$TMP/emptygit2/proj/.cct.toml"
+cctx "$BASE_HOME" -- harness explain claude-code --llm m --project "$TMP/emptygit2/proj"
+assert_exit "explain --project: the file above refuses what the directory's own allows" 3 "$RC"
+assert_contains "explain --project: ...and the refusal names the file above, the one that refused" "$OUT" \
+    "is not allowed in this project: $(cd "$TMP/emptygit2" && pwd -P)/.cct.toml [llm].allowed lists m2"
+mkdir -p "$TMP/unreadable-proj"; printf '[llm]\nallowed = ["m"]\n' > "$TMP/unreadable-proj/.cct.toml"; chmod 000 "$TMP/unreadable-proj/.cct.toml"
+cctx "$BASE_HOME" -- harness explain claude-code --llm m --project "$TMP/unreadable-proj"
+assert_exit "explain --project: a .cct.toml that cannot be read refuses, never reads as no restriction" 3 "$RC"
 
 # ── cct help ──
 HELP=$(bash "$CCT" help 2>&1)

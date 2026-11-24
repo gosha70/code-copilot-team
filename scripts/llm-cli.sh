@@ -13,10 +13,12 @@
 #                                      each target's state (supported,
 #                                      unverified, unavailable, unsupported,
 #                                      incompatible) and the evidence for it
-#   cct harness explain <harness> --llm <target> [--json]
-#                                      the launch plan: what a launch would
+#   cct harness explain <harness> --llm <target> [--project <dir>] [--json]
+#                                      the launch plan: what a launch from
+#                                      that project (default: here) would
 #                                      set and remove, by name, its digests,
-#                                      and why it would be refused
+#                                      and why it would be refused, the
+#                                      project's [llm] allow-list included
 #
 # Nothing here starts a harness or reads a credential's value: a credential
 # is reported by its variable's NAME and whether it is set, and an endpoint
@@ -67,9 +69,10 @@ USAGE
                                     it, from the catalog, the rule table and
                                     the test records; a target alone means
                                     its claude-code binding
-  cct harness explain <harness> --llm <target> [--json]
-                                    what a launch would set and remove, by
-                                    name, and why it would be refused
+  cct harness explain <harness> --llm <target> [--project <dir>] [--json]
+                                    what a launch from that project (default:
+                                    here) would set and remove, by name, and
+                                    why it would be refused
 
 Start a session on a target:
   cct start --llm <target> [path]      (or: claude-code --llm <target> [path])
@@ -338,10 +341,10 @@ cmd_show() {
     return 0
 }
 
-cmd_explain() {
-    local h="$1" t="$2" json="$3" rc=0 rec name kind payload line
+cmd_explain() {  # <harness> <target> <json> <project-dir>
+    local h="$1" t="$2" json="$3" project="$4" rc=0 rec name kind payload line
     load_catalog explain "$json" || return $?
-    lr_resolve "$h" "$t" || rc=1
+    lr_resolve "$h" "$t" "$project" || rc=1
     if [[ "$json" == 1 ]]; then
         envelope explain "$(lr_plan_json)"
     elif [[ $rc -ne 0 ]]; then
@@ -502,21 +505,26 @@ case "$cmd" in
         # `cct harness explain <harness> --llm <target>`, dispatched here by scripts/cct.
         sub="${1:-}"; [[ $# -gt 0 ]] && shift
         if [[ "$sub" != "explain" ]]; then
-            usage_error "" "usage: cct harness explain <harness> --llm <target> [--json]"
+            usage_error "" "usage: cct harness explain <harness> --llm <target> [--project <dir>] [--json]"
         fi
-        h="" t=""
+        h="" t="" p="."
         while [[ $# -gt 0 ]]; do
             case "$1" in
-                --llm)   t="${2:-}"; shift; [[ $# -gt 0 ]] && shift ;;
-                --llm=*) t="${1#*=}"; shift ;;
-                -*)      usage_error explain "cct harness explain: unknown option '$1'" ;;
-                *)       if [[ -z "$h" ]]; then h="$1"; shift; else usage_error explain "cct harness explain: one harness"; fi ;;
+                --llm)       t="${2:-}"; shift; [[ $# -gt 0 ]] && shift ;;
+                --llm=*)     t="${1#*=}"; shift ;;
+                --project)   p="${2:-}"; [[ -n "$p" ]] || usage_error explain "cct harness explain: --project needs a directory"; shift 2 ;;
+                --project=*) p="${1#*=}"; [[ -n "$p" ]] || usage_error explain "cct harness explain: --project needs a directory"; shift ;;
+                -*)          usage_error explain "cct harness explain: unknown option '$1'" ;;
+                *)           if [[ -z "$h" ]]; then h="$1"; shift; else usage_error explain "cct harness explain: one harness"; fi ;;
             esac
         done
         if [[ -z "$h" || -z "$t" ]]; then
-            usage_error explain "usage: cct harness explain <harness> --llm <target> [--json]"
+            usage_error explain "usage: cct harness explain <harness> --llm <target> [--project <dir>] [--json]"
         fi
-        cmd_explain "$h" "$t" "$JSON"
+        if [[ ! -d "$p" ]]; then
+            usage_error explain "cct harness explain: no such directory: $p"
+        fi
+        cmd_explain "$h" "$t" "$JSON" "$p"
         ;;
     help|-h|--help) usage ;;
     *)

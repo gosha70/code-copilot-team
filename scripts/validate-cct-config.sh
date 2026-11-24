@@ -85,7 +85,7 @@ for (const file of files) {
   // Lint the file as written: migration removes the legacy keys we report.
   const findings = lintConfig(table);
   for (const f of findings) {
-    const level = f.kind === "obsolete" ? "error" : f.kind === "unknown" ? "warn" : "info";
+    const level = f.kind === "obsolete" || f.kind === "refused" ? "error" : f.kind === "unknown" ? "warn" : "info";
     console.log(`  [${level}] ${f.key}: ${f.message}`);
     if (level === "error") errors++;
     else if (level === "warn") warnings++;

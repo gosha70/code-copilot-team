@@ -168,6 +168,19 @@ Each target is in one of five states:
 
 The state is computed from the catalog, the rule table, the environment and the test records in `${CCT_HOME:-~/.cct}/llm-compat/`, and nothing is sent anywhere. A test that could not reach a verdict, for example one that timed out, never replaces a conclusive result. Launches do not use these states yet: an `unverified` target still launches with a notice, and the test that writes the records arrives with a later slice of #400.
 
+## A project's allow-list
+
+A project can narrow which targets `--llm` may use on it, in its committed `.cct.toml`:
+
+```toml
+[llm]
+allowed = ["deepseek", "opus@opus-claude"]
+```
+
+An entry is an llm id, which allows each of its bindings, or `<llm>@<binding>`, which allows that binding only. A target the list does not name is refused with exit 3, and `allowed = []` allows none. The list only restricts: any other key under `[llm]`, or the same table written another way (`llm.allowed = [...]` or `llm = {...}` at the top of the file, an `[llm.<x>]` or `[[llm]]` table), is refused by name, because a project never chooses a model for you. A quoted name (`["llm"]`) is the same table. `bash scripts/validate-cct-config.sh .cct.toml`, run from your checkout, reports another key under `[llm]` as an error too.
+
+It is read from `.cct.toml` at the project root, the git top level of the launch directory. When git names none, the directory's own `.cct.toml` applies, and so does that of the nearest directory at or above it holding `.git`, if there is one: git may be refusing a work tree there, and a project only restricts, so both lists apply. It is read from there only: never from `.cct.local.toml`, so a personal file cannot change what the team committed, and never from the legacy `.code-copilot-team/config.toml`. Only the `[llm]` table is read, so the rest of the file never affects a launch, and a launch without `--llm` reads none of it. A `.cct.toml` that cannot be read, or a project directory that cannot be searched for one, refuses a `--llm` launch: a restriction that cannot be read is never taken as none. `cct harness explain` applies the same list, from the current directory's project or the one `--project <dir>` names.
+
 ## Refusals
 
 Each happens before Claude Code starts, with exit code 3 and the reason.
@@ -201,4 +214,4 @@ Resume a session with the target it was started with (`cct start --llm deepseek 
 
 ## Not in this version
 
-Specified in #400 and not built yet: a compatibility probe (`cct llm test`), so no test records exist yet and every launchable target reads `unverified`; launches gated on the compatibility state; a record of each session's target, with resume restored or refused from it; a Studio page; a project's own allow-list; and `--llm` on the Codex, Pi and Kiro launchers.
+Specified in #400 and not built yet: a compatibility probe (`cct llm test`), so no test records exist yet and every launchable target reads `unverified`; launches gated on the compatibility state; a record of each session's target, with resume restored or refused from it; a Studio page; and `--llm` on the Codex, Pi and Kiro launchers.

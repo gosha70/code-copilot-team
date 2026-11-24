@@ -20,7 +20,7 @@
 
 import type { TomlTable, TomlValue } from "./toml.ts";
 
-export type FindingKind = "obsolete" | "legacy" | "unknown";
+export type FindingKind = "obsolete" | "legacy" | "unknown" | "refused";
 
 export interface LintFinding {
   kind: FindingKind;
@@ -96,6 +96,9 @@ const KNOWN_KEYS = new Set([
   "autonomy.reject_unrestricted_host",
   "agents.teams_enabled",
   "agents.subagents_enabled",
+  // A project's restriction on `--llm` (#400 FR-24, D13), read by the
+  // launchers from .cct.toml; every other [llm] key is refused below.
+  "llm.allowed",
   // Per-phase policy leaves (T4.3), generated below so a typo in a phase name
   // or leaf is still caught rather than waved through under a `phases.` prefix.
   ...["research", "plan", "build", "review"].flatMap((phase) =>
@@ -112,6 +115,10 @@ const KNOWN_KEYS = new Set([
  * unknown leaves.
  */
 const OPEN_PREFIXES = ["profiles.", "providers."];
+
+/** The [llm] table may only restrict (#400 D13): any key but `allowed` is an error. */
+const LLM_TABLE = "llm";
+const LLM_REFUSAL = "projects restrict, never grant: [llm] accepts only allowed = [<llm ids or <llm>@<binding> targets>]";
 
 function isTable(v: TomlValue | undefined): v is TomlTable {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -149,6 +156,10 @@ export function lintConfig(table: TomlTable): LintFinding[] {
       findings.push({ kind: "legacy", key, message: LEGACY_KEYS[key] });
       continue;
     }
+    if (key.startsWith(`${LLM_TABLE}.`) && !KNOWN_KEYS.has(key)) {
+      findings.push({ kind: "refused", key, message: LLM_REFUSAL });
+      continue;
+    }
     if (!isKnown(key)) {
       findings.push({
         kind: "unknown",
@@ -162,5 +173,5 @@ export function lintConfig(table: TomlTable): LintFinding[] {
 
 /** Findings that should fail a validation run. */
 export function hasErrors(findings: LintFinding[]): boolean {
-  return findings.some((f) => f.kind === "obsolete");
+  return findings.some((f) => f.kind === "obsolete" || f.kind === "refused");
 }

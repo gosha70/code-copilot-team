@@ -613,6 +613,34 @@ while IFS= read -r name; do
 done <<< "$(jq -r '.env_clear[]' <<< "$EXPLAIN_JSON" 2>/dev/null)"
 assert_eq "explain and launch agree: what explain says is removed is absent from claude" 1 "$AGREE_CLEAR"
 
+# ── a project's [llm] restriction (#400 FR-24, D13; S5) ──
+PROJ_ROOT=$(cd "$PROJ" && pwd -P)   # the launcher names the physical path
+printf '[llm]\nallowed = ["opus"]\n' > "$PROJ/.cct.toml"
+refused "project policy: a target the project does not list is refused" \
+    "--llm deepseek is not allowed in this project: $PROJ_ROOT/.cct.toml [llm].allowed lists opus" -- --llm deepseek -p x
+new_logs; run_launcher -- --llm opus -p x
+assert_eq "project policy: a listed target launches" "0:1" "$RC:$(claude_ran)"
+refused "project policy: the interactive path refuses before any multiplexer" "is not allowed in this project" \
+    -- --shell cmux --llm deepseek "$PROJ"
+assert_eq "project policy: ...nothing was typed" "" "$(cat "$MUX_LOG")"
+printf '[llm]\nallowed = ["opus"]\ndefault = "opus"\n' > "$PROJ/.cct.toml"
+refused "project policy: a key that would grant is refused by name" \
+    "[llm].default is not accepted: projects restrict, never grant" -- --llm opus -p x
+new_logs; run_launcher -- -p "native"
+assert_eq "project policy: a launch without --llm never reads it" "0:1" "$RC:$(claude_ran)"
+rm -f "$PROJ/.cct.toml"; printf '[llm]\nallowed = ["opus"]\n' > "$PROJ/.cct.local.toml"
+new_logs; run_launcher -- --llm deepseek -p x
+assert_eq "project policy: .cct.local.toml is never read" "0:1" "$RC:$(claude_ran)"
+printf '[llm]\nallowed = ["opus"]\n' > "$PROJ/.cct.toml"; printf '[llm]\nallowed = ["deepseek"]\n' > "$PROJ/.cct.local.toml"
+refused "project policy: ...so a personal file cannot widen the committed list" \
+    "--llm deepseek is not allowed in this project" -- --llm deepseek -p x
+rm -f "$PROJ/.cct.toml" "$PROJ/.cct.local.toml"
+LOCKED="$TMP/locked-proj"; mkdir -p "$LOCKED"; chmod 000 "$LOCKED"
+refused "project policy: an interactive launch into a directory it cannot enter is refused" \
+    "cannot enter $LOCKED, so its project's restriction cannot be read" -- --shell cmux --llm deepseek "$LOCKED"
+assert_eq "project policy: ...nothing was typed" "" "$(cat "$MUX_LOG")"
+chmod 700 "$LOCKED"
+
 echo ""
 echo "========================================="
 echo "  llm-launch tests: $PASS passed, $FAIL failed"
