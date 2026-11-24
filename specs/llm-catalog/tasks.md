@@ -80,7 +80,7 @@ From A3 (digests), A6, A7 (part) and B6; plan.md, "Remaining slices".
 | S1.6 | The guide, the CHANGELOG, and spec amendment 2 (`auto_compact_window` in the options digest) | FR-28, FR-9 | `docs/llm-catalog.md`, `CHANGELOG.md`, `spec.md` | [x] |
 | S1.7 | Gates: suites, validate-spec, origin alignment, doc accuracy, `pre-pr-check.sh --closes <S1 issue>`, peer review, PR "Part of #400" | all S1 | repository gates | [ ] |
 
-## S2 — compatibility, read-only (plan ruled 2026-11-23)
+## S2 — compatibility, read-only (#526, plan ruled 2026-11-23)
 
 From A2, A4 and A9 (doctor); plan.md, "Remaining slices". Launches do not
 change.
@@ -92,4 +92,5 @@ change.
 | S2.3 | The five states keyed by the evidence digest (launch identity, options, harness version, rule version), with what changed when a record no longer applies; two-part records through the state-file primitives; a malformed record refused by name | FR-13, FR-16, FR-29 | `scripts/lib/llm-compat.sh`, `tests/test-llm-compat.sh` | [x] |
 | S2.4 | `cct llm compatibility [<target>] [--harness <h>] [--json]` and its schema; `cct doctor`'s LLM catalog section | FR-6, FR-28 | `scripts/llm-cli.sh`, `scripts/cct`, `shared/schemas/llm-catalog-cli.schema.json`, `scripts/lib/cct_doctor.py` | [x] |
 | S2.5 | Pins, repo-structure, the CI steps; the guide, the CHANGELOG; spec amendment 3 and the FR-29 departure for the owner's ruling | FR-28 | `tests/test-counts.env`, `tests/test-shared-structure.sh`, `tests/test-llm-catalog.sh`, `docs/repo-structure.md`, `.github/workflows/sync-check.yml`, `docs/llm-catalog.md`, `CHANGELOG.md`, `spec.md` | [x] |
-| S2.6 | Gates: suites, validate-spec, origin alignment, doc accuracy, `pre-pr-check.sh --closes <S2 issue>`, peer review, PR "Part of #400" | all S2 | repository gates | [ ] |
+| S2.6 | Carried from S1's review (#525): under `--json` a usage error prints the error envelope, and `compatibility` follows S1's rule for a command that cannot answer; digest tests through the quirks, the auth header, the credential's mode and variable, the provider kind and the protocol | FR-6, FR-9 | `scripts/llm-cli.sh`, `scripts/lib/cct_doctor.py`, `shared/schemas/llm-catalog-cli.schema.json`, `tests/test-llm-cli.sh`, `tests/test-llm-compat.sh` | [x] |
+| S2.7 | Gates: suites, validate-spec, origin alignment, doc accuracy, `pre-pr-check.sh --closes <S2 issue>`, peer review, PR "Part of #400" | all S2 | repository gates | [ ] |
