@@ -12,6 +12,9 @@
 #            directory), when it is older than ten minutes. A stale lock is
 #            removed under a guard (<file>.lock.reclaim) after its staleness
 #            is judged again, so of two writers taking it at once, one wins.
+#            One case is left: another host's writer that held its lock for
+#            more than ten minutes and releases it while that lock is being
+#            reclaimed can let a third writer's new lock be removed too.
 #            The lock directory is used everywhere, never flock: a host
 #            holding flock and a host using a lock directory would not
 #            exclude each other.
@@ -31,6 +34,7 @@
 SF_LOCK_WAIT_SEC="${CCT_STATEFILE_LOCK_WAIT_SEC:-30}"   # how long a writer waits for a live lock
 SF_FOREIGN_LOCK_STALE_SEC=600   # FR-29: another host's lock is reclaimed only after ten minutes
 SF_RECLAIM_SUFFIX=".reclaim"    # <file>.lock.reclaim: the guard a stale lock is removed under
+SF_LOCK_CREATE_TRIES=3          # a lock neither there nor creatable after this many tries is an error, not a wait
 SF_ERR=""
 
 _sf_host() { uname -n 2>/dev/null || echo unknown; }
@@ -104,24 +108,32 @@ _sf_reclaim() {  # <lock>
     return "$rc"
 }
 _sf_lock() {  # <file>
-    local lock="$1.lock" waited=0 holder rc
-    while ! mkdir -- "$lock" 2>/dev/null; do
+    local lock="$1.lock" waited=0 holder rc stale mkerr="" gone=0
+    while ! mkerr=$(mkdir -- "$lock" 2>&1); do
         if [[ -L "$lock" ]]; then SF_ERR="refusing a symlinked lock: $lock"; return 1; fi
         if [[ ! -d "$lock" ]]; then
-            # Gone between the two calls (released), or never creatable.
+            # Gone between the two calls (released): try again at once. A
+            # lock that stays neither there nor creatable is an error.
             [[ -e "$lock" ]] && { SF_ERR="not a lock directory: $lock"; return 1; }
             [[ -d "$(dirname "$lock")" ]] || { SF_ERR="no directory for $lock"; return 1; }
+            gone=$((gone + 1))
+            if [[ "$gone" -ge "$SF_LOCK_CREATE_TRIES" ]]; then
+                SF_ERR="cannot create the lock $lock: ${mkerr#mkdir: }"
+                return 1
+            fi
             continue
         fi
+        stale=0
         if _sf_lock_stale "$lock"; then
+            stale=1
             rc=0; _sf_reclaim "$lock" || rc=$?
             [[ "$rc" -eq 0 ]] && continue    # reclaimed: try again at once
             [[ "$rc" -eq 2 ]] && return 1
             # Held again, or another reclaimer is at it: wait like for any live lock.
         fi
         if [[ "$waited" -ge "$SF_LOCK_WAIT_SEC" ]]; then
-            if [[ -d "$lock$SF_RECLAIM_SUFFIX" ]]; then
-                SF_ERR="$lock cannot be reclaimed while $lock$SF_RECLAIM_SUFFIX exists; remove it if no writer is reclaiming"
+            if [[ "$stale" -eq 1 && ( -e "$lock$SF_RECLAIM_SUFFIX" || -L "$lock$SF_RECLAIM_SUFFIX" ) ]]; then
+                SF_ERR="$lock is stale, but cannot be reclaimed while $lock$SF_RECLAIM_SUFFIX exists; remove it if no writer is reclaiming"
                 return 1
             fi
             holder=$(cat -- "$lock/owner" 2>/dev/null) || holder="unknown"

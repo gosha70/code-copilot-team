@@ -196,35 +196,48 @@ assert_eq "...the file is untouched" '{"ownerless":true}' "$(cat "$L")"
 
 # Two takers at once: exactly one wins. Each waits at a start line, takes
 # the lock with no wait, and a winner holds it until both have answered.
-GO="$D/go"
-race() {  # <file> <1: pause a second after judging the lock stale> -> won | lost
+# For a dead writer's lock the interleaving that once let both win is
+# forced: the second judges the lock stale and marks it, then pauses; the
+# first starts only once that mark is there.
+GO="$D/go"; MARK="$D/judged"
+race() {  # <file> <plain | first | second> -> won | lost
     bash -c '
         source "$1"; SF_LOCK_WAIT_SEC=0
-        if [[ "$3" == 1 ]]; then
+        if [[ "$3" == second ]]; then
             eval "$(declare -f _sf_lock_stale | sed "1s/_sf_lock_stale/_sf_lock_stale_judged/")"
-            _sf_lock_stale() { _sf_lock_stale_judged "$@" || return 1; sleep 1; }
+            _sf_lock_stale() { _sf_lock_stale_judged "$@" || return 1; : > "$MARK"; sleep 1; }
         fi
         while [[ ! -e "$4" ]]; do :; done
+        if [[ "$3" == first ]]; then while [[ ! -e "$MARK" ]]; do :; done; fi
         if _sf_lock "$2"; then echo won; sleep 2; _sf_unlock "$2"; else echo lost; fi
     ' _ "$LIB" "$1" "$2" "$GO"
 }
-racers() {  # <file> <pause of the first> <pause of the second> -> the two answers, sorted
-    rm -f "$GO"
-    race "$1" "$2" > "$D/race-1" & local p1=$!
-    race "$1" "$3" > "$D/race-2" & local p2=$!
+racers() {  # <file> <role of one> <role of the other> -> the two answers, sorted, and whether a guard is left
+    rm -f "$GO" "$MARK"
+    MARK="$MARK" race "$1" "$2" > "$D/race-1" & local p1=$!
+    MARK="$MARK" race "$1" "$3" > "$D/race-2" & local p2=$!
     sleep 0.3; : > "$GO"; wait "$p1" "$p2"
     printf '%s|%s' "$(sort "$D/race-1" "$D/race-2" | paste -sd' ' -)" "$( [[ -e "$1.lock.reclaim" ]] && echo guard-left || echo clean )"
 }
-assert_eq "two takers of a free lock at once: exactly one wins" "lost won|clean" "$(racers "$D/race-free.json" 0 0)"
+export MARK
+assert_eq "two takers of a free lock at once: exactly one wins" "lost won|clean" "$(racers "$D/race-free.json" plain plain)"
 R="$D/race-dead.json"
 mkdir "$R.lock"; printf '%s %s %s\n' "$GONE" "$HOST" "$(date -u +%s)" > "$R.lock/owner"
-assert_eq "two takers of a dead writer's lock, the second pausing after judging it stale: exactly one wins" \
-    "lost won|clean" "$(racers "$R" 0 1)"
+assert_eq "two takers of a dead writer's lock, one taking it after the other judged it stale: exactly one wins" \
+    "lost won|clean" "$(racers "$R" first second)"
 mkdir "$R.lock" "$R.lock.reclaim"; printf '%s %s %s\n' "$GONE" "$HOST" "$(date -u +%s)" > "$R.lock/owner"
 OUT=$( { sf_write "$R" '{}'; echo "rc=$? $SF_ERR"; } 2>&1 )
 assert_contains "a guard left by an interrupted reclaim is waited for and named, never removed by guesswork" \
-    "$OUT|$([[ -d "$R.lock.reclaim" ]] && echo kept)" "rc=1 $R.lock cannot be reclaimed while $R.lock.reclaim exists; remove it if no writer is reclaiming|kept"
+    "$OUT|$([[ -d "$R.lock.reclaim" ]] && echo kept)" "rc=1 $R.lock is stale, but cannot be reclaimed while $R.lock.reclaim exists; remove it if no writer is reclaiming|kept"
 rm -f "$R.lock/owner"; rmdir "$R.lock" "$R.lock.reclaim"
+# A lock that cannot be created (here, a name one past the file system's
+# limit once .lock is added) is an error at once, never an endless retry.
+LONG="$D/$(printf 'a%.0s' $(seq 1 247)).json"
+( sf_write "$LONG" '{}' >/dev/null 2>&1; echo "rc=$? $SF_ERR" > "$D/long-rc" ) & LP=$!
+for _ in $(seq 1 50); do kill -0 "$LP" 2>/dev/null || break; sleep 0.1; done
+if kill -0 "$LP" 2>/dev/null; then kill "$LP" 2>/dev/null; echo "rc=hung" > "$D/long-rc"; fi
+wait "$LP" 2>/dev/null
+assert_contains "a lock that cannot be created is an error, not an endless retry" "$(cat "$D/long-rc")" "rc=1 cannot create the lock $LONG.lock"
 
 echo ""
 echo "========================================="
