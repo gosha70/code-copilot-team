@@ -208,16 +208,19 @@ assert_fails "another host's recent lock is not taken, whatever its pid" "$RC"
 printf '%s %s %s\n' "$GONE" "other-host.example" "$(( $(date -u +%s) - 601 ))" > "$L.lock/owner"
 sf_write "$L" '{"foreign":true}'; assert_ok "another host's lock older than ten minutes is reclaimed" $?
 
+# The owner file is the lock: an empty lock directory is nobody's.
 mkdir "$L.lock"
+sf_write "$L" '{"empty":true}'; assert_ok "an empty lock directory holds nothing: it is taken" $?
+mkdir "$L.lock"; : > "$L.lock/owner"
 sf_write "$L" '{}'; RC=$?
-assert_fails "a fresh lock with no owner recorded is not taken" "$RC"
-touch -t "$(date -v-11M +%Y%m%d%H%M.%S 2>/dev/null || date -d '-11 minutes' +%Y%m%d%H%M.%S)" "$L.lock"
+assert_fails "a fresh owner file not yet written is not taken" "$RC"
+touch -t "$(date -v-11M +%Y%m%d%H%M.%S 2>/dev/null || date -d '-11 minutes' +%Y%m%d%H%M.%S)" "$L.lock/owner"
 sf_write "$L" '{"ownerless":true}'; assert_ok "...but is reclaimed once older than ten minutes" $?
 assert_eq "...and the write lands" '{"ownerless":true}' "$(cat "$L")"
 mkdir "$L.lock"; printf '%s %s %s\n' "$GONE" "$HOST" "$(date -u +%s)" > "$L.lock/owner"; : > "$L.lock/stray"
-OUT=$( { sf_write "$L" '{}'; echo "rc=$? $SF_ERR"; } 2>&1 )
-assert_contains "a stale lock holding a stray file is refused by name, not spun on" "$OUT" "rc=1 cannot reclaim the stale lock $L.lock"
-assert_eq "...the file is untouched" '{"ownerless":true}' "$(cat "$L")"
+sf_write "$L" '{"stray":true}'; assert_ok "a stale lock holding a stray file is still reclaimed: only its owner file is the lock" $?
+assert_eq "...and the stray file is left where it was" "yes" "$([[ -e "$L.lock/stray" ]] && echo yes || echo no)"
+rm -f "$L.lock/stray"; rmdir "$L.lock"
 
 # Two takers at once: exactly one wins. Each waits at a start line, takes
 # the lock with no wait, and a winner holds it until both have answered.
@@ -255,11 +258,11 @@ assert_eq "two takers of a dead writer's lock, one taking it after the other jud
     "lost won|clean" "$(racers "$R" first second)"
 trace_if_failed "$FAIL_BEFORE" "$CCT_STATEFILE_TRACE"
 unset CCT_STATEFILE_TRACE
-mkdir "$R.lock" "$R.lock.reclaim"; printf '%s %s %s\n' "$GONE" "$HOST" "$(date -u +%s)" > "$R.lock/owner"
+mkdir "$R.lock"; : > "$R.lock.reclaim"; printf '%s %s %s\n' "$GONE" "$HOST" "$(date -u +%s)" > "$R.lock/owner"
 OUT=$( { sf_write "$R" '{}'; echo "rc=$? $SF_ERR"; } 2>&1 )
 assert_contains "a guard left by an interrupted reclaim is waited for and named, never removed by guesswork" \
-    "$OUT|$([[ -d "$R.lock.reclaim" ]] && echo kept)" "rc=1 $R.lock is stale, but cannot be reclaimed while $R.lock.reclaim exists; remove it if no writer is reclaiming|kept"
-rm -f "$R.lock/owner"; rmdir "$R.lock" "$R.lock.reclaim"
+    "$OUT|$([[ -e "$R.lock.reclaim" ]] && echo kept)" "rc=1 $R.lock is stale, but cannot be reclaimed while $R.lock.reclaim exists; remove it if no writer is reclaiming|kept"
+rm -f "$R.lock/owner" "$R.lock.reclaim"; rmdir "$R.lock"
 # A lock that cannot be created (here, a name one past the file system's
 # limit once .lock is added) is an error at once, never an endless retry.
 LONG="$D/$(printf 'a%.0s' $(seq 1 247)).json"

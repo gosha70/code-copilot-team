@@ -6,16 +6,21 @@
 #            is CCT's own), a file this library writes 0600.
 #   ATOMIC   a write goes to a temporary file in the file's own directory and
 #            is renamed into place, so a reader never sees a partial file.
-#   LOCKED   writers take <file>.lock, a directory recording pid, host and
-#            time. It is reclaimed when it was written on this host and its
-#            pid is gone, or, written on another host (a shared home
-#            directory), when it is older than ten minutes. A stale lock is
-#            removed under a guard (<file>.lock.reclaim) after its staleness
-#            is judged again, so of two writers taking it at once, one wins.
-#            One case is left: another host's writer that held its lock for
-#            more than ten minutes and releases it while that lock is being
-#            reclaimed can let a third writer's new lock be removed too.
-#            The lock directory is used everywhere, never flock: a host
+#   LOCKED   writers take <file>.lock, a directory whose owner file records
+#            pid, host and time; whoever creates that file holds the lock.
+#            The create is exclusive (_sf_create, bash's noclobber, O_EXCL);
+#            mkdir is never trusted to exclude, since uutils' mkdir tells
+#            two simultaneous callers both that it made the directory. A
+#            lock is reclaimed when it was written on this host and its pid
+#            is gone, or, written on another host (a shared home directory),
+#            when it is older than ten minutes; an owner file never written
+#            likewise after ten minutes. A stale lock is freed under a guard
+#            (<file>.lock.reclaim, created the same way) after its
+#            staleness is judged again, so of two writers taking it at once,
+#            one wins. One case is left: another host's writer that held its
+#            lock for more than ten minutes and releases it while that lock
+#            is being reclaimed can let a third writer's new lock be freed
+#            too. The lock directory is used everywhere, never flock: a host
 #            holding flock and a host using a lock directory would not
 #            exclude each other.
 #   NO SYMLINKS  a symlink at a file, its lock or a directory passed to
@@ -34,7 +39,7 @@
 SF_LOCK_WAIT_SEC="${CCT_STATEFILE_LOCK_WAIT_SEC:-30}"   # how long a writer waits for a live lock
 SF_FOREIGN_LOCK_STALE_SEC=600   # FR-29: another host's lock is reclaimed only after ten minutes
 SF_RECLAIM_SUFFIX=".reclaim"    # <file>.lock.reclaim: the guard a stale lock is removed under
-SF_LOCK_CREATE_TRIES=3          # a lock neither there nor creatable after this many tries is an error, not a wait
+SF_LOCK_CREATE_TRIES=10         # a lock neither held nor takeable this many times in a row is an error, not a wait
 SF_ERR=""
 
 _sf_host() { uname -n 2>/dev/null || echo unknown; }
@@ -86,67 +91,82 @@ _sf_lock_stale() {
             [[ "$age" -ge "$SF_FOREIGN_LOCK_STALE_SEC" ]] && verdict=stale
         fi
     else
-        # No readable owner: a writer between mkdir and writing it, or killed
-        # there. Judged by the directory's own age, like another host's lock.
+        # An owner file not yet written (its writer between creating and
+        # writing it), or left so by a writer killed there: judged by the
+        # file's own age, like another host's lock.
         # GNU first: BSD stat rejects -c, while GNU's -f means a filesystem query.
-        why="no owner"
-        mtime=$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null) || mtime=""
+        why="owner not written"
+        mtime=$(stat -c %Y "$1/owner" 2>/dev/null || stat -f %m "$1/owner" 2>/dev/null) || mtime=""
         if [[ "$mtime" =~ ^[0-9]+$ ]]; then
             age=$((now - mtime))
             [[ "$age" -ge "$SF_FOREIGN_LOCK_STALE_SEC" ]] && verdict=stale
         fi
     fi
     if [[ -n "${CCT_STATEFILE_TRACE:-}" ]]; then
-        [[ -n "$mtime" ]] || mtime=$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null) || mtime=none
-        _sf_trace "judged $1: $verdict ($why) owner='$owner' local_host='$(_sf_host)' now=$now dir_mtime=$mtime"
+        _sf_trace "judged $1: $verdict ($why) owner='$owner' local_host='$(_sf_host)' now=$now dir_mtime=$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo none) owner_mtime=$(stat -c %Y "$1/owner" 2>/dev/null || stat -f %m "$1/owner" 2>/dev/null || echo none)"
     fi
     [[ "$verdict" == stale ]]
 }
 
-# Remove a stale lock, one reclaimer at a time. Its staleness is judged
-# again under the guard, so a lock that another writer reclaimed and took
-# in between is never removed: of two takers, one wins. A guard left by a
+# _sf_create <path> [<line>]: create <path> holding <line>, only if
+# nothing is at <path> yet. The one exclusive step in this library: bash's
+# noclobber opens a new file O_EXCL, so of two creators exactly one
+# succeeds. mkdir is never trusted for that: uutils' mkdir (Ubuntu's
+# coreutils since 25.10) tells two simultaneous callers both that it made
+# the directory.
+_sf_create() {
+    ( set -C; printf '%s' "${2:-}" > "$1" ) 2>/dev/null
+}
+
+# Free a stale lock, one reclaimer at a time. Its staleness is judged again
+# under the guard, so a lock that another writer reclaimed and took in
+# between is never freed: of two takers, one wins. A guard left by a
 # reclaimer killed inside it is waited for and named, never removed by
-# guesswork. Returns 0 removed, 1 not (held again, or another reclaimer is
-# at it), 2 cannot (SF_ERR).
+# guesswork. Returns 0 freed, 1 not (held again, or another reclaimer is at
+# it).
 _sf_reclaim() {  # <lock>
     local guard="$1$SF_RECLAIM_SUFFIX" rc=1
-    mkdir -- "$guard" 2>/dev/null || return 1
+    _sf_create "$guard" || return 1
     if _sf_lock_stale "$1"; then
         rm -f -- "$1/owner"
-        if rmdir -- "$1" 2>/dev/null; then
-            rc=0
-            _sf_trace "reclaimed $1"
-        elif ls -A "$1" 2>/dev/null | grep -qvx owner; then
-            SF_ERR="cannot reclaim the stale lock $1 (it holds more than its owner file); remove it"
-            rc=2
-        fi
+        rc=0
+        _sf_trace "reclaimed $1"
     fi
-    rmdir -- "$guard" 2>/dev/null || true
+    rm -f -- "$guard"
     return "$rc"
 }
+# _sf_lock <file>: take <file>.lock. The lock directory holds an owner file
+# (pid host time), and whoever creates that file holds the lock.
 _sf_lock() {  # <file>
-    local lock="$1.lock" waited=0 holder rc stale mkerr="" gone=0
-    while ! mkerr=$(mkdir -- "$lock" 2>&1); do
+    local lock="$1.lock" waited=0 holder stale mkerr="" tries=0
+    while :; do
         if [[ -L "$lock" ]]; then SF_ERR="refusing a symlinked lock: $lock"; return 1; fi
         if [[ ! -d "$lock" ]]; then
-            # Gone between the two calls (released): try again at once. A
-            # lock that stays neither there nor creatable is an error.
             [[ -e "$lock" ]] && { SF_ERR="not a lock directory: $lock"; return 1; }
             [[ -d "$(dirname "$lock")" ]] || { SF_ERR="no directory for $lock"; return 1; }
-            gone=$((gone + 1))
-            if [[ "$gone" -ge "$SF_LOCK_CREATE_TRIES" ]]; then
-                SF_ERR="cannot create the lock $lock: ${mkerr#mkdir: }"
+            mkerr=$(mkdir -- "$lock" 2>&1) || mkerr="${mkerr:-mkdir failed}"
+        fi
+        if [[ -d "$lock" && ! -L "$lock" ]] \
+            && _sf_create "$lock/owner" "$$ $(_sf_host) $(_sf_now)"$'\n'; then
+            _sf_trace "took $lock"
+            return 0
+        fi
+        if [[ ! -e "$lock/owner" && ! -L "$lock/owner" ]]; then
+            # Neither held nor taken: released or removed in between, so try
+            # again at once. A lock that stays so is an error, never a wait.
+            tries=$((tries + 1))
+            if [[ "$tries" -ge "$SF_LOCK_CREATE_TRIES" ]]; then
+                if [[ -d "$lock" ]]; then SF_ERR="cannot record the owner of $lock"
+                else SF_ERR="cannot create the lock $lock: ${mkerr#mkdir: }"; fi
                 return 1
             fi
             continue
         fi
+        tries=0
         stale=0
         if _sf_lock_stale "$lock"; then
             stale=1
-            rc=0; _sf_reclaim "$lock" || rc=$?
-            [[ "$rc" -eq 0 ]] && continue    # reclaimed: try again at once
-            [[ "$rc" -eq 2 ]] && return 1
+            _sf_reclaim "$lock" && continue    # freed: take it at once
             # Held again, or another reclaimer is at it: wait like for any live lock.
         fi
         if [[ "$waited" -ge "$SF_LOCK_WAIT_SEC" ]]; then
@@ -162,12 +182,6 @@ _sf_lock() {  # <file>
         sleep 1
         waited=$((waited + 1))
     done
-    if ! printf '%s %s %s\n' "$$" "$(_sf_host)" "$(_sf_now)" > "$lock/owner"; then
-        rmdir -- "$lock" 2>/dev/null || true
-        SF_ERR="cannot record the owner of $lock"
-        return 1
-    fi
-    _sf_trace "took $lock"
 }
 
 _sf_unlock() {  # <file>: remove the lock only when this process recorded it

@@ -793,7 +793,12 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   the owner's ruling:* `scripts/lib/cct-statefile.sh` uses the lock
   directory on every host, never `flock`: on a shared home directory a
   host holding `flock` and a host using the lock directory would not
-  exclude each other.
+  exclude each other. *S2 note (2026-11-24):* the lock is the
+  directory's owner file, and exclusion is that file's exclusive
+  creation (bash's noclobber, `O_EXCL`), never `mkdir`: on CI's Ubuntu
+  26.04, whose `mkdir` is uutils coreutils 0.10.0, both of two
+  simultaneous `mkdir`s of one directory succeeded in 14 to 26 of 50
+  pairs.
 - **FR-30 Competing variables cleared.** A selected launch removes
   from the child environment every credential, base-URL,
   custom-header and provider-switch variable of the harness that the
