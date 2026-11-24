@@ -250,6 +250,34 @@ assert_exit "validate --json: an unreadable file exits 2" 2 "$RC"
 assert_contains "validate --json: ...and says so" "$(jq -r .error <<< "$OUT")" "cannot read the LLM catalog"
 assert_not_contains "--json: no output carries the credential's value" "$LIST$VALID$BROKEN$PLAN" "$SECRET"
 
+# ── --json when a command cannot answer: the envelope with an error field ──
+# cctx folds stderr into OUT, so a parse of OUT also proves the envelope
+# is all that was printed.
+EMPTY_HOME="$TMP/empty"; mkdir -p "$EMPTY_HOME"
+INVALID_HOME=$(home invalid sed 's/^provider = "native"$/provider = "nope"/')
+UNREADABLE_HOME="$TMP/unreadable"; mkdir -p "$UNREADABLE_HOME/llms.toml"
+json_err() { printf '%s|%s' "$RC" "$(jq -r '"\(.command)|\(.error)"' <<< "$OUT" 2>/dev/null)"; }
+cctx "$EMPTY_HOME" -- llm list --json; ERR_MISSING="$OUT"
+assert_eq "list --json, no catalog: exit 2 and the envelope alone" "2|list|no LLM catalog" "$(json_err)"
+assert_eq "list --json, no catalog: ...naming the file" "$EMPTY_HOME/llms.toml" "$(jq -r .catalog <<< "$OUT")"
+cctx "$EMPTY_HOME" -- llm show m --json
+assert_eq "show --json, no catalog: exit 2 and the envelope alone" "2|show|no LLM catalog" "$(json_err)"
+cctx "$EMPTY_HOME" -- harness explain claude-code --llm m --json
+assert_eq "explain --json, no catalog: exit 2 and the envelope alone" "2|explain|no LLM catalog" "$(json_err)"
+VIOLATION="$INVALID_HOME/llms.toml has 1 violation(s); fix them first (cct llm validate)"
+cctx "$INVALID_HOME" -- llm list --json; ERR_INVALID="$OUT"
+assert_eq "list --json, an invalid catalog: exit 1 and the envelope alone" "1|list|$VIOLATION" "$(json_err)"
+cctx "$INVALID_HOME" -- llm show m --json
+assert_eq "show --json, an invalid catalog: exit 1 and the envelope alone" "1|show|$VIOLATION" "$(json_err)"
+cctx "$INVALID_HOME" -- harness explain claude-code --llm m --json; ERR_EXPLAIN="$OUT"
+assert_eq "explain --json, an invalid catalog: exit 1 and the envelope alone" "1|explain|$VIOLATION" "$(json_err)"
+cctx "$UNREADABLE_HOME" -- llm list --json
+assert_eq "list --json, a catalog that cannot be read: exit 2 and the envelope alone" \
+    "2|list|cannot read the LLM catalog: $UNREADABLE_HOME/llms.toml" "$(json_err)"
+cctx "$BASE_HOME" -- llm show ghost --json; ERR_UNKNOWN="$OUT"
+assert_eq "show --json, an unknown llm: exit 2 and the envelope alone" \
+    "2|show|unknown llm 'ghost' (cct llm list shows the catalog)" "$(json_err)"
+
 # ── every --json document against the schema ──
 cctx "$BASE_HOME" -- llm show m --json; SHOW="$OUT"
 cctx "$BASE_HOME" -- harness explain pi --llm m --json; REFUSED="$OUT"
@@ -264,14 +292,18 @@ schema = json.load(open(sys.argv[1]))
 jsonschema.Draft202012Validator.check_schema(schema)
 jsonschema.Draft202012Validator(schema).validate(json.load(sys.stdin))' "$SCHEMA" >/dev/null 2>&1
 }
+SCHEMA_DOCS="LIST SHOW VALID BROKEN PLAN REFUSED ERR_MISSING ERR_INVALID ERR_EXPLAIN ERR_UNKNOWN"
 if [[ -n "$PY_SCHEMA" ]]; then
-    for doc in LIST SHOW VALID BROKEN PLAN REFUSED; do
+    for doc in $SCHEMA_DOCS; do
         if schema_ok "${!doc}"; then PASS=$((PASS+1)); echo "  PASS: schema: the $doc document";
         else FAIL=$((FAIL+1)); echo "  FAIL: schema: the $doc document does not match $SCHEMA"; fi
     done
+    if schema_ok "$(jq -c '. + {targets: []}' <<< "$ERR_MISSING")"; then
+        FAIL=$((FAIL+1)); echo "  FAIL: schema: an error envelope that also lists targets must match no form"
+    else PASS=$((PASS+1)); echo "  PASS: schema: an error envelope that also lists targets matches no form"; fi
 else
-    SKIPPED=6
-    echo "  SKIP: jsonschema not installed — the six documents were not validated against the schema"
+    SKIPPED=$(( $(wc -w <<< "$SCHEMA_DOCS") + 1 ))
+    echo "  SKIP: jsonschema not installed — the $SKIPPED schema checks did not run"
 fi
 
 # ── cct help ──

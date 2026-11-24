@@ -20,7 +20,9 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   an endpoint is its origin. `cct llm show <llm>` shows one llm and what
   each of its bindings would launch. `cct llm list`, `show`, `validate` and
   `cct harness explain` take `--json`, described by
-  `shared/schemas/llm-catalog-cli.schema.json`. The plan carries three
+  `shared/schemas/llm-catalog-cli.schema.json`; a command that cannot
+  answer (no catalog, violations, an unknown llm) still prints the
+  envelope, with an `error` field. The plan carries three
   digests (catalog, launch identity, options) that later slices key
   compatibility records and session stamps on. `pi-code --llm` is now
   refused as not implemented instead of being passed to Pi. Part of #400.

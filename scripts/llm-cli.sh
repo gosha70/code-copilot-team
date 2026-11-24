@@ -19,7 +19,10 @@
 # by its origin (scheme://host[:port]) alone. A target is planned by the
 # resolver the launcher uses (lib/llm-resolve.sh), so an explanation and a
 # launch cannot disagree. `--json` output is described by
-# shared/schemas/llm-catalog-cli.schema.json.
+# shared/schemas/llm-catalog-cli.schema.json. A command that cannot answer
+# (no catalog, a catalog with violations, an llm the catalog does not
+# define) prints under --json the envelope with an error field, alone, and
+# exits as its text form does.
 #
 # Exit codes: 0 ok; 1 the catalog has violations; 2 usage, or no readable
 # catalog; 3 `explain` of a launch that would be refused.
@@ -34,6 +37,7 @@ source "$SCRIPT_DIR/lib/llm-adapters/claude-code.sh"
 source "$SCRIPT_DIR/lib/llm-resolve.sh"
 
 LLM_EXAMPLE_REL="shared/templates/llm/llms.toml.example"
+LLM_NO_CATALOG="no LLM catalog"
 EXIT_REFUSED=3
 
 usage() {
@@ -65,24 +69,35 @@ no_catalog() {  # <path>
     echo "Copy $LLM_EXAMPLE_REL from your checkout there and edit it; docs/llm-catalog.md describes the file." >&2
 }
 
-# The catalog in the CCT home, parsed and valid, or a message and the exit
-# code: 2 when there is none, 1 when it has violations.
-load_catalog() {
-    local rc=0
-    CATALOG="$(lc_catalog_path)"
-    if [[ ! -e "$CATALOG" ]]; then no_catalog "$CATALOG"; return 2; fi
-    lc_validate "$CATALOG" >&2 || rc=$?
-    if [[ $rc -eq 1 ]]; then
-        echo "cct llm: $CATALOG has $LC_VIOLATIONS violation(s); fix them first (cct llm validate)" >&2
-        return 1
-    elif [[ $rc -ne 0 ]]; then
-        return 2
-    fi
-    return 0
-}
-
 envelope() {  # <command> <json object> -> the object with schema_version and command first
     jq -c --argjson v "$LR_PLAN_SCHEMA_VERSION" --arg c "$1" '{schema_version: $v, command: $c} + .' <<< "$2"
+}
+
+json_error() {  # <command> <message>: the envelope of a command that cannot answer
+    envelope "$1" "$(jq -nc --arg f "$CATALOG" --arg e "$2" '{catalog: $f, error: $e}')"
+}
+
+# The catalog in the CCT home, parsed and valid (in THIS shell, for the
+# resolver), or the exit code: 2 when there is none or it cannot be read,
+# 1 when it has violations. Said on stderr, or under --json by the error
+# envelope alone.
+load_catalog() {  # <command> <json>
+    local rc=0 msg=""
+    CATALOG="$(lc_catalog_path)"
+    if [[ ! -e "$CATALOG" ]]; then
+        if [[ "$2" == 1 ]]; then json_error "$1" "$LLM_NO_CATALOG"; else no_catalog "$CATALOG"; fi
+        return 2
+    fi
+    if [[ "$2" == 1 ]]; then lc_validate "$CATALOG" >/dev/null || rc=$?; else lc_validate "$CATALOG" >&2 || rc=$?; fi
+    case "$rc" in
+        0) return 0 ;;
+        1) msg="$CATALOG has $LC_VIOLATIONS violation(s); fix them first (cct llm validate)" ;;
+        *) rc=2; if [[ "$2" == 1 ]]; then msg=$(lc_validate "$CATALOG"); fi ;;  # its words, from a second run
+    esac
+    if [[ "$2" == 1 ]]; then json_error "$1" "$msg"
+    elif [[ -n "$msg" ]]; then echo "cct llm: $msg" >&2
+    fi
+    return "$rc"
 }
 
 null_if_empty() { if [[ -z "$1" ]]; then printf 'null'; else jq -nc --arg v "$1" '$v'; fi; }
@@ -93,7 +108,7 @@ cmd_validate() {
         file="$(lc_catalog_path)"
         if [[ ! -e "$file" ]]; then
             if [[ "$json" == 1 ]]; then
-                envelope validate "$(jq -nc --arg f "$file" '{file: $f, valid: false, violations: [], error: "no LLM catalog"}')"
+                envelope validate "$(jq -nc --arg f "$file" --arg e "$LLM_NO_CATALOG" '{file: $f, valid: false, violations: [], error: $e}')"
             else
                 no_catalog "$file"
             fi
@@ -161,7 +176,7 @@ _row() {  # target harness model endpoint credential state
 
 cmd_list() {
     local json="$1" l b bl h model target endpoint state n rc=0 jrows='[]'
-    load_catalog || return $?
+    load_catalog list "$json" || return $?
 
     ROWS=""
     while IFS= read -r l; do
@@ -242,10 +257,11 @@ _print_rows() {
 }
 
 cmd_show() {
-    local id="$1" json="$2" lp kind display model b bl h target state n=0 jb='[]' text=""
-    load_catalog || return $?
+    local id="$1" json="$2" lp kind display model b bl h target state msg n=0 jb='[]' text=""
+    load_catalog show "$json" || return $?
     if ! lc_has "llms.$id"; then
-        echo "cct llm: unknown llm '$id' (cct llm list shows the catalog)" >&2
+        msg="unknown llm '$id' (cct llm list shows the catalog)"
+        if [[ "$json" == 1 ]]; then json_error show "$msg"; else echo "cct llm: $msg" >&2; fi
         return 2
     fi
     lp=$(lc_get "llms.$id" provider) || lp=""
@@ -296,7 +312,7 @@ cmd_show() {
 
 cmd_explain() {
     local h="$1" t="$2" json="$3" rc=0 rec name kind payload line
-    load_catalog || return $?
+    load_catalog explain "$json" || return $?
     lr_resolve "$h" "$t" || rc=1
     if [[ "$json" == 1 ]]; then
         envelope explain "$(lr_plan_json)"

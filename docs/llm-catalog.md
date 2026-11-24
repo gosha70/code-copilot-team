@@ -148,7 +148,7 @@ It also prints three digests:
 - **launch identity:** changes only when what the launch executes as changes: the endpoint's full URL (its path too, which is never shown), the protocol, the auth header, the credential's variable and mode, the model, the quirks;
 - **options:** the tuning keys (`small_fast_model`, `max_output_tokens`, `reasoning_effort`, `auto_compact_window`).
 
-Later slices of #400 key compatibility records and session stamps on them. `shared/schemas/llm-catalog-cli.schema.json` describes the `--json` output. A harness other than `claude-code`, and `pi-code --llm`, are refused with "not implemented" until their slice of #400 lands.
+Later slices of #400 key compatibility records and session stamps on them. `shared/schemas/llm-catalog-cli.schema.json` describes the `--json` output. When a command cannot answer (there is no catalog, it has violations, or `show` names an llm it does not define), `--json` still prints the envelope, with an `error` field and nothing else, and exits as the text form does. A harness other than `claude-code`, and `pi-code --llm`, are refused with "not implemented" until their slice of #400 lands.
 
 ## Refusals
 

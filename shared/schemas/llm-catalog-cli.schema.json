@@ -9,7 +9,8 @@
     {"$ref": "#/$defs/list"},
     {"$ref": "#/$defs/show"},
     {"$ref": "#/$defs/validate"},
-    {"$ref": "#/$defs/explain"}
+    {"$ref": "#/$defs/explain"},
+    {"$ref": "#/$defs/error"}
   ],
   "$defs": {
     "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"},
@@ -204,6 +205,18 @@
       },
       "if": {"properties": {"binding": {"type": "string"}}},
       "then": {"required": ["executable", "argv", "env_names", "env_clear", "overlay", "identity", "compatibility", "digests"]}
+    },
+    "error": {
+      "description": "A list, show or explain that cannot answer: no catalog, a catalog with violations, or (show) an llm the catalog does not define. The exit code is the text form's: 2, or 1 for violations. validate reports these in its own form.",
+      "type": "object",
+      "required": ["schema_version", "command", "catalog", "error"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {"const": 1},
+        "command": {"enum": ["list", "show", "explain"]},
+        "catalog": {"type": "string"},
+        "error": {"type": "string", "minLength": 1}
+      }
     }
   }
 }
