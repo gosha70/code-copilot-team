@@ -307,9 +307,9 @@ assert_contains "...and names the four that exist" "$USAGE_OUT" "list | show | v
 
 # ── a project's [llm] restriction (#400 FR-24, D13; S5) ──
 PROJ="$TMP/policy-proj"; mkdir -p "$PROJ"
-policy() {  # <.cct.toml content, or "-" for none> -> rc|restricts|allowed|error
-    rm -f "$PROJ/.cct.toml"
-    [[ "$1" == "-" ]] || printf '%s\n' "$1" > "$PROJ/.cct.toml"
+policy() {  # <.cct.toml content, "-" for none, or "=" as it is> -> rc|restricts|allowed|error
+    [[ "$1" == "=" ]] || rm -f "$PROJ/.cct.toml"
+    [[ "$1" == "-" || "$1" == "=" ]] || printf '%s\n' "$1" > "$PROJ/.cct.toml"
     bash -c 'source "$1/scripts/lib/llm-catalog.sh"; rc=0; lc_project_policy "$2" || rc=$?
              printf "%s|%s|%s|%s" "$rc" "$([[ -n "$LC_POLICY_FILE" ]] && echo yes || echo no)" \
                  "$(printf "%s" "$LC_ALLOWED" | paste -sd, -)" "$LC_POLICY_ERR"' _ "$REPO_DIR" "$PROJ"
@@ -348,6 +348,15 @@ allowed = ["m"]')"
 printf '[llm]\nallowed = ["m2"]\n' > "$PROJ/.cct.local.toml"
 mkdir -p "$PROJ/.code-copilot-team"; printf '[llm]\nallowed = ["m2"]\n' > "$PROJ/.code-copilot-team/config.toml"
 assert_eq "policy: .cct.local.toml and the legacy config.toml are never read" "0|no||" "$(policy -)"
+# A restriction that cannot be read is never read as none.
+printf '[llm]\nallowed = ["m"]\n' > "$PROJ/.cct.toml"; chmod 000 "$PROJ/.cct.toml"
+assert_eq "policy: a .cct.toml that cannot be read is refused by name" "1|no||cannot read $PROJ/.cct.toml" "$(policy =)"
+rm -f "$PROJ/.cct.toml"; mkdir "$PROJ/.cct.toml"
+assert_eq "policy: a .cct.toml that is not a file is refused" "1|no||cannot read $PROJ/.cct.toml" "$(policy =)"
+rmdir "$PROJ/.cct.toml"; chmod 000 "$PROJ"
+assert_eq "policy: a project directory that cannot be searched is refused" \
+    "1|no||cannot read $PROJ/.cct.toml: the directory cannot be searched" "$(policy =)"
+chmod 700 "$PROJ"
 
 echo ""
 echo "========================================="

@@ -386,6 +386,9 @@ git -C "$TMP/git-proj" init -q
 printf '[llm]\nallowed = ["m2"]\n' > "$TMP/git-proj/.cct.toml"
 cctx "$BASE_HOME" -- harness explain claude-code --llm m --project "$TMP/git-proj/sub/deeper"
 assert_exit "explain --project: a subdirectory follows its git top level's .cct.toml" 3 "$RC"
+mkdir -p "$TMP/unreadable-proj"; printf '[llm]\nallowed = ["m"]\n' > "$TMP/unreadable-proj/.cct.toml"; chmod 000 "$TMP/unreadable-proj/.cct.toml"
+cctx "$BASE_HOME" -- harness explain claude-code --llm m --project "$TMP/unreadable-proj"
+assert_exit "explain --project: a .cct.toml that cannot be read refuses, never reads as no restriction" 3 "$RC"
 
 # ── cct help ──
 HELP=$(bash "$CCT" help 2>&1)

@@ -710,11 +710,21 @@ LC_TARGET_RE='^[A-Za-z0-9][A-Za-z0-9_-]*(@[A-Za-z0-9][A-Za-z0-9_-]*)?$'
 # (empty: the project restricts nothing) and LC_ALLOWED (the allowed llm
 # ids and <llm>@<binding> targets, one per line; empty with a policy file
 # means none). Returns 1 with LC_POLICY_ERR when [llm] holds anything but
-# `allowed = [...]`, in any form: projects restrict, never grant.
+# `allowed = [...]`, in any form: projects restrict, never grant; and when
+# the file cannot be read, or the project directory cannot be searched for
+# it, since a restriction that cannot be read is never read as none.
 lc_project_policy() {
     local file="$1/$LC_PROJECT_CONFIG" raw line lineno=0 in=0 root=1 seen=0 e
     LC_POLICY_FILE="" LC_ALLOWED="" LC_POLICY_ERR=""
-    [[ -f "$file" ]] || return 0
+    if [[ -d "$1" && ! -x "$1" ]]; then
+        LC_POLICY_ERR="cannot read $file: the directory cannot be searched"
+        return 1
+    fi
+    [[ -e "$file" || -L "$file" ]] || return 0
+    if [[ ! -f "$file" || ! -r "$file" ]]; then
+        LC_POLICY_ERR="cannot read $file"
+        return 1
+    fi
     while IFS= read -r raw || [[ -n "$raw" ]]; do
         lineno=$((lineno + 1))
         ct_trim "$raw"

@@ -40,7 +40,8 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   table with `allowed = ["<llm>", "<llm>@<binding>", ...]` in the project's
   committed `.cct.toml` refuses any other target with exit 3, for a Claude
   Code launch and in `cct harness explain` (which gains `--project <dir>`).
-  It only restricts: any other key under `[llm]` is refused by name. It is
+  It only restricts: any other key under `[llm]` is refused by name, and a
+  `.cct.toml` that cannot be read refuses the launch. It is
   never read from `.cct.local.toml` or the legacy
   `.code-copilot-team/config.toml`, and a launch without `--llm` reads none
   of it. Pi's config lint accepts the table. Part of #400.
