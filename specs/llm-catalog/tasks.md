@@ -53,7 +53,7 @@ slice leaves to them.
 | L12 | Second review ruling of 2026-11-20: the typed-command check refuses control characters only (C0, DEL, C1 as UTF-8) and types printable non-ASCII; an api endpoint also loses `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`, `CLAUDE_CODE_GATEWAY_TOKEN` and the three file-descriptor forms, which a managed provider keeps; tests for each; the capture extended | FR-10, FR-20, FR-30 | `adapters/claude-code/claude-code`, `scripts/lib/llm-adapters/claude-code.sh`, `tests/test-llm-launch.sh`, `verification/claude-code-capture.md` | [x] |
 | L13 | Third review ruling of 2026-11-20, after #480 merged, as its own small PR: an api endpoint also loses `ANTHROPIC_IDENTITY_TOKEN` and `ANTHROPIC_IDENTITY_TOKEN_FILE`, which a managed provider keeps; tests; the capture extended (section 7) | FR-20, FR-30 | `scripts/lib/llm-adapters/claude-code.sh`, `tests/test-llm-launch.sh`, `docs/llm-catalog.md`, `verification/claude-code-capture.md` | [x] |
 
-## S0 — captures: Codex and Pi (plan ruled 2026-11-23)
+## S0 — captures: Codex and Pi (#522, plan ruled 2026-11-23)
 
 From task 0 of C and D; plan.md, "Remaining slices". Facts only: no
 product code. Each script stamps the CLI version it ran against, and
