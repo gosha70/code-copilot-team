@@ -299,6 +299,8 @@ compat nope >/dev/null 2>"$TMP/err"; RC=$?
 assert_eq "an unknown target is a usage error" "2" "$RC"
 compat --harness vim >/dev/null 2>&1; RC=$?
 assert_eq "an unknown harness is a usage error" "2" "$RC"
+compat --harness= >/dev/null 2>&1; RC=$?
+assert_eq "an empty --harness= is a usage error, as --harness '' is" "2" "$RC"
 # --json when it cannot answer: the error envelope, one JSON document and
 # nothing else (stdout and stderr together), and the text form's exit code.
 lone() { printf '%s|%s|%s' "$RC" "$(jq -r '"\(.command)|\(.error)"' <<< "$OUT" 2>/dev/null)" "$(jq -s length <<< "$OUT" 2>/dev/null)"; }

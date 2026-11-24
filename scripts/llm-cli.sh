@@ -487,7 +487,7 @@ case "$cmd" in
         while [[ $# -gt 0 ]]; do
             case "$1" in
                 --harness)   h="${2:-}"; [[ -n "$h" ]] || usage_error compatibility "cct llm compatibility: --harness needs a harness"; shift 2 ;;
-                --harness=*) h="${1#*=}"; shift ;;
+                --harness=*) h="${1#*=}"; [[ -n "$h" ]] || usage_error compatibility "cct llm compatibility: --harness needs a harness"; shift ;;
                 -*)          usage_error compatibility "cct llm compatibility: unknown option '$1'" ;;
                 *)           if [[ -z "$t" ]]; then t="$1"; shift; else usage_error compatibility "cct llm compatibility: one target"; fi ;;
             esac
