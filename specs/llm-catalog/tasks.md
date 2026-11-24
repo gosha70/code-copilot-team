@@ -53,6 +53,19 @@ slice leaves to them.
 | L12 | Second review ruling of 2026-11-20: the typed-command check refuses control characters only (C0, DEL, C1 as UTF-8) and types printable non-ASCII; an api endpoint also loses `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`, `CLAUDE_CODE_GATEWAY_TOKEN` and the three file-descriptor forms, which a managed provider keeps; tests for each; the capture extended | FR-10, FR-20, FR-30 | `adapters/claude-code/claude-code`, `scripts/lib/llm-adapters/claude-code.sh`, `tests/test-llm-launch.sh`, `verification/claude-code-capture.md` | [x] |
 | L13 | Third review ruling of 2026-11-20, after #480 merged, as its own small PR: an api endpoint also loses `ANTHROPIC_IDENTITY_TOKEN` and `ANTHROPIC_IDENTITY_TOKEN_FILE`, which a managed provider keeps; tests; the capture extended (section 7) | FR-20, FR-30 | `scripts/lib/llm-adapters/claude-code.sh`, `tests/test-llm-launch.sh`, `docs/llm-catalog.md`, `verification/claude-code-capture.md` | [x] |
 
+## S0 — captures: Codex and Pi (#522, plan ruled 2026-11-23)
+
+From task 0 of C and D; plan.md, "Remaining slices". Facts only: no
+product code. Each script stamps the CLI version it ran against, and
+re-running it regenerates its record.
+
+| # | Task | Requirement(s) | File(s) | Done |
+|---|---|---|---|---|
+| S0.1 | The stub endpoint both captures share: OpenAI Responses, Chat Completions and Anthropic Messages, streamed or not; it logs header names, and an auth value only when it is a planted sentinel | FR-7, FR-14 | `verification/capture-stub.py` | [x] |
+| S0.2 | The Codex capture: nested `-c model_providers.*` (D10), the accepted `wire_api` values, `--profile` layering, the model in `exec --json` and the session file, `exec resume`, the new session's id, ambient `OPENAI_*` | FR-14, FR-17, FR-18, FR-21, FR-30, D10 | `verification/capture-codex.sh`, `verification/codex-capture.md` | [x] |
+| S0.3 | The Pi capture: the three protocols with `$VAR` from the child environment, an unknown `--provider`, `--session-id`, the overlay against the owned merge (FR-22, D11), native resume, ambient credentials, the documented credential variables, how Pi writes its settings | FR-14, FR-17, FR-18, FR-22, FR-30, D9, D11 | `verification/capture-pi.sh`, `verification/pi-capture.md` | [x] |
+| S0.4 | Gates: validate-spec, origin alignment, doc accuracy, `pre-pr-check.sh --closes <S0 issue>`, peer review, PR "Part of #400" that puts D11 to the owner | all S0 | repository gates | [ ] |
+
 ## S1 — launch plan and read-only surfaces (#523, plan ruled 2026-11-23)
 
 From A3 (digests), A6, A7 (part) and B6; plan.md, "Remaining slices".
