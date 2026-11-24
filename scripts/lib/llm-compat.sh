@@ -17,6 +17,10 @@
 #   unverified    otherwise: never tested, or tested under other evidence
 #                 (the reason says what changed)
 #
+# Precedence: unsupported, then unavailable, then the record. A static
+# verdict is reported even when a record exists, and the record is still
+# read, so a malformed one is refused by name.
+#
 # The evidence digest is FR-9's: launch identity, options, harness version
 # and rule version. Nothing here performs network I/O; lcm_record_attempt is
 # the only writer, for the probe.

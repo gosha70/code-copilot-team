@@ -184,6 +184,8 @@ assert_eq "rules: every protocol named is one the catalog accepts" "" \
     "$(jq -r '[.harnesses[].protocols[]] | unique | .[]' "$RULES" | grep -vxF -f <(tr ' ' '\n' <<< "$LC_PROTOCOLS") || true)"
 assert_eq "rules: every required capability is one the table defines" "[]" \
     "$(jq -c '.capabilities as $c | [.harnesses[] | (.required + .conditional)[] | select(IN($c[]) | not)] | unique' "$RULES")"
+assert_eq "rules: every min_version is unset or a dotted version" "[]" \
+    "$(jq -c '[.harnesses | to_entries[] | select(.value.min_version != null and ((.value.min_version | tostring) | test("^[0-9]+(\\.[0-9]+)*$") | not)) | .key]' "$RULES")"
 
 # ── static states (FR-13) ──
 OUT=$(compat --json); RC=$?

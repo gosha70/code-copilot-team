@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cct_home  # noqa: E402 — the CCT home (#411)
 
 OK, WARN, BAD, SKIP = "ok", "warn", "fail", "skip"
+LLM_CLI_TIMEOUT_SEC = 60  # `cct llm validate|compatibility --json`; compatibility runs `claude --version`
 MARK = {OK: "✓", WARN: "!", BAD: "✗", SKIP: "-"}
 COLOR = {OK: "32", WARN: "33", BAD: "31", SKIP: "90"}
 
@@ -395,12 +396,21 @@ def check_repo(repo: Path, report: Report) -> None:
         report.add("Repository", name, OK if (repo / rel).is_file() else BAD, rel)
 
 
+def _no_answer(command: str, code: int) -> str:
+    if code == 124:
+        return f"{command} timed out after {LLM_CLI_TIMEOUT_SEC}s"
+    return f"{command} gave no answer (exit {code})"
+
+
 def _llm_cli_json(cli: Path, *args: str) -> tuple[int, dict | None]:
     """Run `cct llm <args> --json`; its stdout only, stderr carries prose."""
     try:
-        proc = subprocess.run(["bash", str(cli), *args, "--json"], capture_output=True, text=True, timeout=60)
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+        proc = subprocess.run(["bash", str(cli), *args, "--json"], capture_output=True, text=True,
+                              timeout=LLM_CLI_TIMEOUT_SEC)
+    except subprocess.TimeoutExpired:
         return 124, None
+    except FileNotFoundError:
+        return 127, None
     try:
         return proc.returncode, json.loads(proc.stdout)
     except json.JSONDecodeError:
@@ -414,9 +424,9 @@ def check_llm_catalog(repo: Path, report: Report) -> None:
     if not cli.is_file():
         report.add(section, "catalog", SKIP, "not run from a clone")
         return
-    _, validate = _llm_cli_json(cli, "validate")
+    code, validate = _llm_cli_json(cli, "validate")
     if validate is None:
-        report.add(section, "catalog", BAD, "cct llm validate --json gave no answer")
+        report.add(section, "catalog", BAD, _no_answer("cct llm validate --json", code))
         return
     if validate.get("error") == "no LLM catalog":
         report.add(section, "catalog", SKIP, f"none at {validate.get('file')} — optional; docs/llm-catalog.md")
@@ -428,7 +438,7 @@ def check_llm_catalog(repo: Path, report: Report) -> None:
     report.add(section, "catalog", OK, str(validate.get("file")))
     code, compat = _llm_cli_json(cli, "compatibility")
     if compat is None:
-        report.add(section, "compatibility", BAD, "cct llm compatibility --json gave no answer")
+        report.add(section, "compatibility", BAD, _no_answer("cct llm compatibility --json", code))
         return
     for target in compat.get("targets", []):
         status = OK if target.get("state") == "supported" else WARN

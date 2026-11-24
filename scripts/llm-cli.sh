@@ -64,7 +64,8 @@ USAGE
   cct llm compatibility [<target>] [--harness <h>] [--json]
                                     each target's state and the evidence for
                                     it, from the catalog, the rule table and
-                                    the test records
+                                    the test records; a target alone means
+                                    its claude-code binding
   cct harness explain <harness> --llm <target> [--json]
                                     what a launch would set and remove, by
                                     name, and why it would be refused

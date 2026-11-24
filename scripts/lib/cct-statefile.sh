@@ -2,7 +2,8 @@
 # cct-statefile.sh — how CCT writes the files it keeps for a user: LLM
 # compatibility records, session stamps, ownership manifests (#400 FR-29).
 #
-#   PRIVATE  a directory this library creates is 0700, a file it writes 0600.
+#   PRIVATE  a directory passed to sf_dir is made 0700 (created or not; it
+#            is CCT's own), a file this library writes 0600.
 #   ATOMIC   a write goes to a temporary file in the file's own directory and
 #            is renamed into place, so a reader never sees a partial file.
 #   LOCKED   writers take <file>.lock, a directory recording pid, host and
@@ -92,11 +93,14 @@ _sf_lock() {  # <file>
         fi
         if _sf_lock_stale "$lock"; then
             rm -f -- "$lock/owner"
-            if ! rmdir -- "$lock" 2>/dev/null && [[ -d "$lock" ]]; then
+            if rmdir -- "$lock" 2>/dev/null || [[ ! -d "$lock" ]]; then
+                continue    # reclaimed: try again at once
+            fi
+            if ls -A "$lock" 2>/dev/null | grep -qvx owner; then
                 SF_ERR="cannot reclaim the stale lock $lock (it holds more than its owner file); remove it"
                 return 1
             fi
-            continue
+            # Another writer took it in between: wait for it like any live lock.
         fi
         if [[ "$waited" -ge "$SF_LOCK_WAIT_SEC" ]]; then
             holder=$(cat -- "$lock/owner" 2>/dev/null) || holder="unknown"

@@ -154,7 +154,7 @@ Later slices of #400 key compatibility records and session stamps on them. `shar
 
 ```bash
 cct llm compatibility                  # every target's state, and why
-cct llm compatibility deepseek --json  # one target, with its evidence
+cct llm compatibility deepseek --json  # one target (its claude-code binding), with its evidence
 cct doctor                             # its "LLM catalog" section shows the same
 ```
 
