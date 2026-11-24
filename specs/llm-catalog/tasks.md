@@ -95,7 +95,7 @@ change.
 | S2.6 | Carried from S1's review (#525): under `--json` a usage error prints the error envelope, and `compatibility` follows S1's rule for a command that cannot answer; digest tests through the quirks, the auth header, the credential's mode and variable, the provider kind and the protocol | FR-6, FR-9 | `scripts/llm-cli.sh`, `scripts/lib/cct_doctor.py`, `shared/schemas/llm-catalog-cli.schema.json`, `tests/test-llm-cli.sh`, `tests/test-llm-compat.sh` | [x] |
 | S2.7 | Gates: suites, validate-spec, origin alignment, doc accuracy, `pre-pr-check.sh --closes <S2 issue>`, peer review, PR "Part of #400" | all S2 | repository gates | [ ] |
 
-## S5 — project policy (plan ruled 2026-11-23)
+## S5 — project policy (#527, plan ruled 2026-11-23)
 
 From A8; plan.md, "Remaining slices". Depends on S1.
 
