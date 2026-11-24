@@ -229,6 +229,26 @@ _lcm_changed_text() {  # <old-evidence> <new-evidence> -> what changed, in words
         | join(", ")'
 }
 
+# lcm_evidence <harness-version>: LCM_EVIDENCE, the evidence (FR-9) of the
+# binding the last lr_resolve resolved, as JSON with its digest. It
+# computes the launch-identity and options digests itself when they are
+# not computed yet, and returns 1 (LCM_ERR) when there are none: evidence
+# keyed on an empty digest would match all other such evidence. Every
+# evidence digest goes through here, the session stamps of S4 included.
+lcm_evidence() {
+    lcm_load_rules || return 1
+    if [[ -z "$LR_DIGEST_LAUNCH" || -z "$LR_DIGEST_OPTIONS" ]]; then lr_digests || true; fi
+    if [[ -z "$LR_DIGEST_LAUNCH" || -z "$LR_DIGEST_OPTIONS" ]]; then
+        LCM_EVIDENCE="null"
+        LCM_ERR="no launch-identity and options digests to key the evidence on (${LR_TARGET:-no target} did not resolve to a binding)"
+        return 1
+    fi
+    LCM_EVIDENCE=$(jq -nc --arg li "$LR_DIGEST_LAUNCH" --arg o "$LR_DIGEST_OPTIONS" \
+        --arg hv "$1" --argjson rv "$(lcm_rule_version)" \
+        '{launch_identity: $li, options: $o, harness_version: $hv, rule_version: $rv}')
+    LCM_EVIDENCE=$(jq -c --arg d "$(jq -cS . <<< "$LCM_EVIDENCE" | _lr_sha256)" '. + {digest: $d}' <<< "$LCM_EVIDENCE")
+}
+
 # lcm_state <harness> <target>: LCM_STATE, LCM_REASON, LCM_DEGRADED (a JSON
 # array: what changed since the latest conclusive record), LCM_EVIDENCE
 # (the current evidence as JSON, or null when the harness is not
@@ -237,7 +257,7 @@ _lcm_changed_text() {  # <old-evidence> <new-evidence> -> what changed, in words
 # the rule table or the record is unusable (LCM_ERR names it; the state is
 # still computed, without the record).
 lcm_state() {
-    local h="$1" conclusive outcome at changed failed missing c rv min
+    local h="$1" conclusive outcome at changed failed missing c min
     LCM_STATE="" LCM_REASON="" LCM_DEGRADED="[]" LCM_EVIDENCE="null" LCM_RECORD="" LCM_ERR="" LCM_EXE=""
     lcm_load_rules || return 2
     if ! lr_resolve "$h" "$2"; then LCM_ERR="$LR_REFUSAL"; return 1; fi
@@ -248,12 +268,7 @@ lcm_state() {
         LCM_REASON="$LR_REASON"
     fi
     if lcm_harness_version "$h"; then
-        rv=$(lcm_rule_version)
-        lr_digests
-        LCM_EVIDENCE=$(jq -nc --arg li "$LR_DIGEST_LAUNCH" --arg o "$LR_DIGEST_OPTIONS" \
-            --arg hv "$LCM_HV" --argjson rv "$rv" \
-            '{launch_identity: $li, options: $o, harness_version: $hv, rule_version: $rv}')
-        LCM_EVIDENCE=$(jq -c --arg d "$(jq -cS . <<< "$LCM_EVIDENCE" | _lr_sha256)" '. + {digest: $d}' <<< "$LCM_EVIDENCE")
+        lcm_evidence "$LCM_HV" || return 1
         min=$(jq -r --arg h "$h" '.harnesses[$h].min_version // empty' <<< "$LCM_RULES")
         if [[ -z "$LCM_STATE" && -n "$min" && "$LCM_HV" != "unknown" ]] && _lcm_version_lt "$LCM_HV" "$min"; then
             LCM_STATE="unavailable"

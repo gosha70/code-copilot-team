@@ -210,6 +210,16 @@ assert_eq "claude older than the table's minimum: unavailable" \
     "unavailable|claude 2.1.331 is older than 2.1.400, the oldest version claude-code supports" \
     "$(field m '"\(.state)|\(.reason)"' <<< "$OUT")"
 
+# ── the evidence (FR-9): computed with its own digests, never keyed on none ──
+EVID=$(env -i HOME="$HOME_DIR" PATH="$TMP/bin:$PATH" LC_ALL=en_US.UTF-8 TEST_LLM_KEY="$SECRET" bash -c '
+    for l in llm-catalog llm-adapters/claude-code llm-resolve cct-statefile llm-compat; do source "$1/scripts/lib/$l.sh"; done
+    lc_validate "$(lc_catalog_path)" >/dev/null && lr_resolve claude-code m || exit 1
+    ok=no
+    if lcm_evidence 2.1.331 && jq -e "[.launch_identity, .options, .digest] | all(test(\"^[0-9a-f]{64}$\"))" >/dev/null <<< "$LCM_EVIDENCE"; then ok=yes; fi
+    lr_resolve pi m; rc=0; lcm_evidence 2.1.331 || rc=$?
+    printf "%s|%s|%s" "$ok" "$rc" "$LCM_EVIDENCE"' _ "$REPO_DIR")
+assert_eq "evidence: a fresh resolution gets its digests computed; no binding, no evidence" "yes|1|null" "$EVID"
+
 # ── records (FR-16) and the conclusive states ──
 EV_M=$(evidence_of m)
 OUT=$(record m b "$(attempt pass "$MATRIX" "$EV_M")"); assert_eq "the probe's writer records a pass" "" "$OUT"
