@@ -43,6 +43,16 @@ assert_eq() {
     if [[ "$expected" == "$actual" ]]; then PASS=$((PASS+1)); echo "  PASS: $name";
     else FAIL=$((FAIL+1)); echo "  FAIL: $name (expected '$expected', got '$actual')"; fi
 }
+# A permission fixture tests nothing where chmod cannot take the permission
+# away (run as root, or on a file system without modes). Its assertions are
+# skipped there and counted, so the pin holds; CI runs them.
+SKIPPED=0
+denied() {  # <test flag: -r | -x> <path> <assertion name>...: 0 when chmod took the permission away
+    test "$1" "$2" || return 0
+    local name; shift 2
+    for name in "$@"; do SKIPPED=$((SKIPPED+1)); echo "  SKIP: $name (chmod has no effect here, as when run as root)"; done
+    return 1
+}
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -636,17 +646,20 @@ refused "project policy: ...so a personal file cannot widen the committed list" 
     "--llm deepseek is not allowed in this project" -- --llm deepseek -p x
 rm -f "$PROJ/.cct.toml" "$PROJ/.cct.local.toml"
 LOCKED="$TMP/locked-proj"; mkdir -p "$LOCKED"; chmod 000 "$LOCKED"
-refused "project policy: an interactive launch into a directory it cannot enter is refused" \
-    "cannot enter $LOCKED, so its project's restriction cannot be read" -- --shell cmux --llm deepseek "$LOCKED"
-assert_eq "project policy: ...nothing was typed" "" "$(cat "$MUX_LOG")"
+T1="project policy: an interactive launch into a directory it cannot enter is refused"
+T2="project policy: ...nothing was typed"
+if denied -x "$LOCKED" "$T1" "$T2"; then
+    refused "$T1" "cannot enter $LOCKED, so its project's restriction cannot be read" -- --shell cmux --llm deepseek "$LOCKED"
+    assert_eq "$T2" "" "$(cat "$MUX_LOG")"
+fi
 chmod 700 "$LOCKED"
 
 echo ""
 echo "========================================="
-echo "  llm-launch tests: $PASS passed, $FAIL failed"
+echo "  llm-launch tests: $PASS passed, $FAIL failed$( [[ $SKIPPED -gt 0 ]] && echo ", $SKIPPED skipped")"
 echo "========================================="
-if [[ "$PASS" -ne "${TEST_LLM_LAUNCH_EXPECTED_PASS:-0}" ]]; then
-    echo "  FAIL: assertion-count drift (expected ${TEST_LLM_LAUNCH_EXPECTED_PASS:-0}, got $PASS)"
+if [[ "$((PASS + SKIPPED))" -ne "${TEST_LLM_LAUNCH_EXPECTED_PASS:-0}" ]]; then
+    echo "  FAIL: assertion-count drift (expected ${TEST_LLM_LAUNCH_EXPECTED_PASS:-0}, got $PASS passed + $SKIPPED skipped)"
     FAIL=$((FAIL+1))
 fi
 [[ $FAIL -eq 0 ]]

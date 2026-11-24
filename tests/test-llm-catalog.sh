@@ -39,6 +39,16 @@ assert_eq() {
     if [[ "$expected" == "$actual" ]]; then PASS=$((PASS+1)); echo "  PASS: $name";
     else FAIL=$((FAIL+1)); echo "  FAIL: $name (expected '$expected', got '$actual')"; fi
 }
+# A permission fixture tests nothing where chmod cannot take the permission
+# away (run as root, or on a file system without modes). Its assertions are
+# skipped there and counted, so the pin holds; CI runs them.
+SKIPPED=0
+denied() {  # <test flag: -r | -x> <path> <assertion name>...: 0 when chmod took the permission away
+    test "$1" "$2" || return 0
+    local name; shift 2
+    for name in "$@"; do SKIPPED=$((SKIPPED+1)); echo "  SKIP: $name (chmod has no effect here, as when run as root)"; done
+    return 1
+}
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -396,20 +406,21 @@ assert_eq "policy: a line refused in [llm] is not echoed, since its value may be
 api.key = "sk-not-a-real-key-0000"')"
 # A restriction that cannot be read is never read as none.
 printf '[llm]\nallowed = ["m"]\n' > "$PROJ/.cct.toml"; chmod 000 "$PROJ/.cct.toml"
-assert_eq "policy: a .cct.toml that cannot be read is refused by name" "1|no||cannot read $PROJ/.cct.toml" "$(policy =)"
+T="policy: a .cct.toml that cannot be read is refused by name"
+denied -r "$PROJ/.cct.toml" "$T" && assert_eq "$T" "1|no||cannot read $PROJ/.cct.toml" "$(policy =)"
 rm -f "$PROJ/.cct.toml"; mkdir "$PROJ/.cct.toml"
 assert_eq "policy: a .cct.toml that is not a file is refused" "1|no||cannot read $PROJ/.cct.toml" "$(policy =)"
 rmdir "$PROJ/.cct.toml"; chmod 000 "$PROJ"
-assert_eq "policy: a project directory that cannot be searched is refused" \
-    "1|no||cannot read $PROJ/.cct.toml: the directory cannot be searched" "$(policy =)"
+T="policy: a project directory that cannot be searched is refused"
+denied -x "$PROJ" "$T" && assert_eq "$T" "1|no||cannot read $PROJ/.cct.toml: the directory cannot be searched" "$(policy =)"
 chmod 700 "$PROJ"
 
 echo ""
 echo "========================================="
-echo "  llm-catalog tests: $PASS passed, $FAIL failed"
+echo "  llm-catalog tests: $PASS passed, $FAIL failed$( [[ $SKIPPED -gt 0 ]] && echo ", $SKIPPED skipped")"
 echo "========================================="
-if [[ "$PASS" -ne "${TEST_LLM_CATALOG_EXPECTED_PASS:-0}" ]]; then
-    echo "  FAIL: assertion-count drift (expected ${TEST_LLM_CATALOG_EXPECTED_PASS:-0}, got $PASS)"
+if [[ "$((PASS + SKIPPED))" -ne "${TEST_LLM_CATALOG_EXPECTED_PASS:-0}" ]]; then
+    echo "  FAIL: assertion-count drift (expected ${TEST_LLM_CATALOG_EXPECTED_PASS:-0}, got $PASS passed + $SKIPPED skipped)"
     FAIL=$((FAIL+1))
 fi
 [[ $FAIL -eq 0 ]]

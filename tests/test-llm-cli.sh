@@ -43,6 +43,15 @@ assert_ne() {
     if [[ "$a" != "$b" ]]; then PASS=$((PASS+1)); echo "  PASS: $name";
     else FAIL=$((FAIL+1)); echo "  FAIL: $name (both are '$a')"; fi
 }
+# A permission fixture tests nothing where chmod cannot take the permission
+# away (run as root, or on a file system without modes). Its assertions are
+# skipped there and counted, so the pin holds; CI runs them.
+denied() {  # <test flag: -r | -x> <path> <assertion name>...: 0 when chmod took the permission away
+    test "$1" "$2" || return 0
+    local name; shift 2
+    for name in "$@"; do SKIPPED=$((SKIPPED+1)); echo "  SKIP: $name (chmod has no effect here, as when run as root)"; done
+    return 1
+}
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -367,8 +376,9 @@ if [[ -n "$PY_SCHEMA" ]]; then
         FAIL=$((FAIL+1)); echo "  FAIL: schema: an error envelope that also lists targets must match no form"
     else PASS=$((PASS+1)); echo "  PASS: schema: an error envelope that also lists targets matches no form"; fi
 else
-    SKIPPED=$(( $(wc -w <<< "$SCHEMA_DOCS") + 1 ))
-    echo "  SKIP: jsonschema not installed — the $SKIPPED schema checks did not run"
+    SCHEMA_SKIPPED=$(( $(wc -w <<< "$SCHEMA_DOCS") + 1 ))
+    SKIPPED=$((SKIPPED + SCHEMA_SKIPPED))
+    echo "  SKIP: jsonschema not installed — the $SCHEMA_SKIPPED schema checks did not run"
 fi
 
 # ── a project's [llm] restriction, through explain (#400 S5) ──
@@ -403,8 +413,11 @@ assert_exit "explain --project: the file above refuses what the directory's own 
 assert_contains "explain --project: ...and the refusal names the file above, the one that refused" "$OUT" \
     "is not allowed in this project: $(cd "$TMP/emptygit2" && pwd -P)/.cct.toml [llm].allowed lists m2"
 mkdir -p "$TMP/unreadable-proj"; printf '[llm]\nallowed = ["m"]\n' > "$TMP/unreadable-proj/.cct.toml"; chmod 000 "$TMP/unreadable-proj/.cct.toml"
-cctx "$BASE_HOME" -- harness explain claude-code --llm m --project "$TMP/unreadable-proj"
-assert_exit "explain --project: a .cct.toml that cannot be read refuses, never reads as no restriction" 3 "$RC"
+T="explain --project: a .cct.toml that cannot be read refuses, never reads as no restriction"
+if denied -r "$TMP/unreadable-proj/.cct.toml" "$T"; then
+    cctx "$BASE_HOME" -- harness explain claude-code --llm m --project "$TMP/unreadable-proj"
+    assert_exit "$T" 3 "$RC"
+fi
 
 # ── cct help ──
 HELP=$(bash "$CCT" help 2>&1)
@@ -413,10 +426,10 @@ assert_contains "cct help documents harness explain" "$HELP" "cct harness explai
 
 echo ""
 echo "========================================="
-echo "  llm-cli tests: $PASS passed, $FAIL failed$( [[ $SKIPPED -gt 0 ]] && echo ", $SKIPPED skipped (jsonschema not installed)")"
+echo "  llm-cli tests: $PASS passed, $FAIL failed$( [[ $SKIPPED -gt 0 ]] && echo ", $SKIPPED skipped")"
 echo "========================================="
-# A skipped schema check is not a missing assertion: CI installs jsonschema
-# and runs all of them.
+# A skipped check is not a missing assertion: CI installs jsonschema and
+# does not run as root, so it runs all of them.
 if [[ "$((PASS + SKIPPED))" -ne "${TEST_LLM_CLI_EXPECTED_PASS:-0}" ]]; then
     echo "  FAIL: assertion-count drift (expected ${TEST_LLM_CLI_EXPECTED_PASS:-0}, got $PASS passed + $SKIPPED skipped)"
     FAIL=$((FAIL+1))
