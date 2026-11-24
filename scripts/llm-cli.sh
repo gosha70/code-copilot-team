@@ -25,8 +25,9 @@
 # launch cannot disagree. `--json` output is described by
 # shared/schemas/llm-catalog-cli.schema.json. A command that cannot answer
 # (a usage error, no catalog, a catalog with violations, an llm the catalog
-# does not define, a rule table that cannot be read) prints under --json
-# the envelope with an error field, alone, and exits as its text form does.
+# does not define, a rule table that cannot be read, a target that does not
+# resolve) prints under --json the envelope with an error field, alone, and
+# exits as its text form does.
 #
 # Exit codes: 0 ok; 1 the catalog has violations; 2 usage, no readable
 # catalog, or a compatibility record that cannot be read (named); 3
