@@ -381,6 +381,11 @@ CLI_RUN_DIR="$TMP/policy-proj" cctx "$BASE_HOME" -- harness explain claude-code 
 assert_exit "explain: the project is the current directory's by default" 3 "$RC"
 cctx "$BASE_HOME" -- harness explain claude-code --llm m --project "$TMP/no-such-dir"
 assert_exit "explain --project: a directory that does not exist is a usage error" 2 "$RC"
+mkdir -p "$TMP/git-proj/sub/deeper"
+git -C "$TMP/git-proj" init -q
+printf '[llm]\nallowed = ["m2"]\n' > "$TMP/git-proj/.cct.toml"
+cctx "$BASE_HOME" -- harness explain claude-code --llm m --project "$TMP/git-proj/sub/deeper"
+assert_exit "explain --project: a subdirectory follows its git top level's .cct.toml" 3 "$RC"
 
 # ── cct help ──
 HELP=$(bash "$CCT" help 2>&1)

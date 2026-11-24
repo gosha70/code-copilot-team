@@ -631,7 +631,10 @@ assert_eq "project policy: a launch without --llm never reads it" "0:1" "$RC:$(c
 rm -f "$PROJ/.cct.toml"; printf '[llm]\nallowed = ["opus"]\n' > "$PROJ/.cct.local.toml"
 new_logs; run_launcher -- --llm deepseek -p x
 assert_eq "project policy: .cct.local.toml is never read" "0:1" "$RC:$(claude_ran)"
-rm -f "$PROJ/.cct.local.toml"
+printf '[llm]\nallowed = ["opus"]\n' > "$PROJ/.cct.toml"; printf '[llm]\nallowed = ["deepseek"]\n' > "$PROJ/.cct.local.toml"
+refused "project policy: ...so a personal file cannot widen the committed list" \
+    "--llm deepseek is not allowed in this project" -- --llm deepseek -p x
+rm -f "$PROJ/.cct.toml" "$PROJ/.cct.local.toml"
 
 echo ""
 echo "========================================="

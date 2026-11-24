@@ -513,7 +513,7 @@ case "$cmd" in
                 --llm)       t="${2:-}"; shift; [[ $# -gt 0 ]] && shift ;;
                 --llm=*)     t="${1#*=}"; shift ;;
                 --project)   p="${2:-}"; [[ -n "$p" ]] || usage_error explain "cct harness explain: --project needs a directory"; shift 2 ;;
-                --project=*) p="${1#*=}"; shift ;;
+                --project=*) p="${1#*=}"; [[ -n "$p" ]] || usage_error explain "cct harness explain: --project needs a directory"; shift ;;
                 -*)          usage_error explain "cct harness explain: unknown option '$1'" ;;
                 *)           if [[ -z "$h" ]]; then h="$1"; shift; else usage_error explain "cct harness explain: one harness"; fi ;;
             esac
