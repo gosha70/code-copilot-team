@@ -129,17 +129,28 @@ assert_eq "...and leaves the old file whole" '{"v":"old"}' "$(cat "$T")"
 sf_write "$T" '{"v":"after"}'; assert_ok "...and the next writer succeeds" $?
 
 # ── concurrent writers ──
+# The lock decisions are traced (CCT_STATEFILE_TRACE), and printed when an
+# assertion over them fails.
+trace_if_failed() {  # <FAIL before the assertions> <trace file>
+    [[ "$FAIL" -gt "$1" && -s "$2" ]] || return 0
+    echo "        --- lock trace: $2 ---"
+    sed 's/^/        | /' "$2"
+}
 C="$D/count.json"
 sf_write "$C" '0'
+export CCT_STATEFILE_TRACE="$D/trace-count"
+FAIL_BEFORE=$FAIL
 PIDS=""
 for i in 1 2 3 4 5 6 7 8; do
-    bash -c 'source "$1"; increment() { local n; n=$(cat); printf "%s" "$((n + 1))"; }; sf_update "$2" increment' _ "$LIB" "$C" &
+    bash -c 'source "$1"; increment() { local n; n=$(cat); _sf_trace "read $n, writing $((n + 1))"; printf "%s" "$((n + 1))"; }; sf_update "$2" increment' _ "$LIB" "$C" &
     PIDS="$PIDS $!"
 done
 RCS=0
 for p in $PIDS; do wait "$p" || RCS=$((RCS + 1)); done
 assert_eq "eight concurrent read-modify-writes all succeed" "0" "$RCS"
 assert_eq "...and none is lost" "8" "$(cat "$C")"
+trace_if_failed "$FAIL_BEFORE" "$CCT_STATEFILE_TRACE"
+unset CCT_STATEFILE_TRACE
 assert_eq "...no temporary file or lock left" "0:no" "$(temps_in "$D"):$([[ -e "$C.lock" ]] && echo yes || echo no)"
 
 W="$D/race.json"
@@ -220,11 +231,16 @@ racers() {  # <file> <role of one> <role of the other> -> the two answers, sorte
     printf '%s|%s' "$(sort "$D/race-1" "$D/race-2" | paste -sd' ' -)" "$( [[ -e "$1.lock.reclaim" ]] && echo guard-left || echo clean )"
 }
 export MARK
+export CCT_STATEFILE_TRACE="$D/trace-free"; FAIL_BEFORE=$FAIL
 assert_eq "two takers of a free lock at once: exactly one wins" "lost won|clean" "$(racers "$D/race-free.json" plain plain)"
+trace_if_failed "$FAIL_BEFORE" "$CCT_STATEFILE_TRACE"
 R="$D/race-dead.json"
 mkdir "$R.lock"; printf '%s %s %s\n' "$GONE" "$HOST" "$(date -u +%s)" > "$R.lock/owner"
+export CCT_STATEFILE_TRACE="$D/trace-dead"; FAIL_BEFORE=$FAIL
 assert_eq "two takers of a dead writer's lock, one taking it after the other judged it stale: exactly one wins" \
     "lost won|clean" "$(racers "$R" first second)"
+trace_if_failed "$FAIL_BEFORE" "$CCT_STATEFILE_TRACE"
+unset CCT_STATEFILE_TRACE
 mkdir "$R.lock" "$R.lock.reclaim"; printf '%s %s %s\n' "$GONE" "$HOST" "$(date -u +%s)" > "$R.lock/owner"
 OUT=$( { sf_write "$R" '{}'; echo "rc=$? $SF_ERR"; } 2>&1 )
 assert_contains "a guard left by an interrupted reclaim is waited for and named, never removed by guesswork" \

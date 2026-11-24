@@ -40,6 +40,14 @@ SF_ERR=""
 _sf_host() { uname -n 2>/dev/null || echo unknown; }
 _sf_now() { date -u +%s; }
 
+# Tests only: with CCT_STATEFILE_TRACE naming a file, every lock decision
+# (each staleness verdict, take, reclaim and release) is appended to it as
+# one line, with the time and both $$ and BASHPID.
+_sf_trace() {  # <event>
+    [[ -n "${CCT_STATEFILE_TRACE:-}" ]] || return 0
+    printf '%s pid=%s bashpid=%s %s\n' "${EPOCHREALTIME:-$(date -u +%s)}" "$$" "${BASHPID:-?}" "$1" >> "$CCT_STATEFILE_TRACE"
+}
+
 # sf_dir <dir>: create it (0700) when absent; refuse a symlink.
 sf_dir() {
     SF_ERR=""
@@ -64,26 +72,35 @@ sf_read() {
 
 # _sf_lock_stale <lock>: 0 when the lock may be reclaimed.
 _sf_lock_stale() {
-    local owner="" pid="" host="" when="" now age
+    local owner="" pid="" host="" when="" now age mtime="" verdict=live why
     now=$(_sf_now)
     owner=$(cat -- "$1/owner" 2>/dev/null) || owner=""
     read -r pid host when <<< "$owner"
     if [[ "$pid" =~ ^[0-9]+$ && -n "$host" && "$when" =~ ^[0-9]+$ ]]; then
         if [[ "$host" == "$(_sf_host)" ]]; then
-            kill -0 "$pid" 2>/dev/null && return 1
-            return 0
+            why="this host"
+            kill -0 "$pid" 2>/dev/null || verdict=stale
+        else
+            why="another host"
+            age=$((now - when))
+            [[ "$age" -ge "$SF_FOREIGN_LOCK_STALE_SEC" ]] && verdict=stale
         fi
-        age=$((now - when))
-        [[ "$age" -ge "$SF_FOREIGN_LOCK_STALE_SEC" ]]
-        return
+    else
+        # No readable owner: a writer between mkdir and writing it, or killed
+        # there. Judged by the directory's own age, like another host's lock.
+        # GNU first: BSD stat rejects -c, while GNU's -f means a filesystem query.
+        why="no owner"
+        mtime=$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null) || mtime=""
+        if [[ "$mtime" =~ ^[0-9]+$ ]]; then
+            age=$((now - mtime))
+            [[ "$age" -ge "$SF_FOREIGN_LOCK_STALE_SEC" ]] && verdict=stale
+        fi
     fi
-    # No readable owner: a writer between mkdir and writing it, or killed
-    # there. Judged by the directory's own age, like another host's lock.
-    # GNU first: BSD stat rejects -c, while GNU's -f means a filesystem query.
-    when=$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null) || return 1
-    [[ "$when" =~ ^[0-9]+$ ]] || return 1
-    age=$((now - when))
-    [[ "$age" -ge "$SF_FOREIGN_LOCK_STALE_SEC" ]]
+    if [[ -n "${CCT_STATEFILE_TRACE:-}" ]]; then
+        [[ -n "$mtime" ]] || mtime=$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null) || mtime=none
+        _sf_trace "judged $1: $verdict ($why) owner='$owner' local_host='$(_sf_host)' now=$now dir_mtime=$mtime"
+    fi
+    [[ "$verdict" == stale ]]
 }
 
 # Remove a stale lock, one reclaimer at a time. Its staleness is judged
@@ -99,6 +116,7 @@ _sf_reclaim() {  # <lock>
         rm -f -- "$1/owner"
         if rmdir -- "$1" 2>/dev/null; then
             rc=0
+            _sf_trace "reclaimed $1"
         elif ls -A "$1" 2>/dev/null | grep -qvx owner; then
             SF_ERR="cannot reclaim the stale lock $1 (it holds more than its owner file); remove it"
             rc=2
@@ -138,6 +156,7 @@ _sf_lock() {  # <file>
             fi
             holder=$(cat -- "$lock/owner" 2>/dev/null) || holder="unknown"
             SF_ERR="$lock is held (pid host time: $holder); remove it if that writer is gone"
+            _sf_trace "gave up on $lock: held by '$holder'"
             return 1
         fi
         sleep 1
@@ -148,14 +167,22 @@ _sf_lock() {  # <file>
         SF_ERR="cannot record the owner of $lock"
         return 1
     fi
+    _sf_trace "took $lock"
 }
 
 _sf_unlock() {  # <file>: remove the lock only when this process recorded it
     local lock="$1.lock" pid="" rest
-    read -r pid rest 2>/dev/null < "$lock/owner" || return 0
-    [[ "$pid" == "$$" ]] || return 0
+    if ! read -r pid rest 2>/dev/null < "$lock/owner"; then
+        _sf_trace "did not release $lock: no owner to read"
+        return 0
+    fi
+    if [[ "$pid" != "$$" ]]; then
+        _sf_trace "did not release $lock: its owner is $pid $rest"
+        return 0
+    fi
     rm -f -- "$lock/owner"
     rmdir -- "$lock" 2>/dev/null || true
+    _sf_trace "released $lock"
 }
 
 # Under the lock: the temporary files a killed writer left.
