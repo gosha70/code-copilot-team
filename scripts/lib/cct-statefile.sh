@@ -9,18 +9,18 @@
 #   LOCKED   writers take <file>.lock, a directory recording pid, host and
 #            time. It is reclaimed when it was written on this host and its
 #            pid is gone, or, written on another host (a shared home
-#            directory), when it is older than ten minutes. The lock
-#            directory is used everywhere, never flock: a host holding flock
-#            and a host using a lock directory would not exclude each other.
+#            directory), when it is older than ten minutes. A stale lock is
+#            removed under a guard (<file>.lock.reclaim) after its staleness
+#            is judged again, so of two writers taking it at once, one wins.
+#            The lock directory is used everywhere, never flock: a host
+#            holding flock and a host using a lock directory would not
+#            exclude each other.
 #   NO SYMLINKS  a symlink at a file, its lock or a directory passed to
 #            sf_dir is refused, for reads as well as writes.
 #   CLEAN    a write interrupted by INT or TERM removes its temporary file;
 #            one left by a killed writer is removed by the next writer, under
 #            the lock, since only the lock holder ever creates one.
 #
-# Two waiters reclaiming the same dead lock at the same moment can both
-# proceed, as with the routing state store's lock: each still renames a
-# whole file into place, so the cost is a lost update, never a torn file.
 # The lock records $$, so a write made from a subshell is attributed to the
 # script that started it.
 #
@@ -30,6 +30,7 @@
 
 SF_LOCK_WAIT_SEC="${CCT_STATEFILE_LOCK_WAIT_SEC:-30}"   # how long a writer waits for a live lock
 SF_FOREIGN_LOCK_STALE_SEC=600   # FR-29: another host's lock is reclaimed only after ten minutes
+SF_RECLAIM_SUFFIX=".reclaim"    # <file>.lock.reclaim: the guard a stale lock is removed under
 SF_ERR=""
 
 _sf_host() { uname -n 2>/dev/null || echo unknown; }
@@ -81,8 +82,29 @@ _sf_lock_stale() {
     [[ "$age" -ge "$SF_FOREIGN_LOCK_STALE_SEC" ]]
 }
 
+# Remove a stale lock, one reclaimer at a time. Its staleness is judged
+# again under the guard, so a lock that another writer reclaimed and took
+# in between is never removed: of two takers, one wins. A guard left by a
+# reclaimer killed inside it is waited for and named, never removed by
+# guesswork. Returns 0 removed, 1 not (held again, or another reclaimer is
+# at it), 2 cannot (SF_ERR).
+_sf_reclaim() {  # <lock>
+    local guard="$1$SF_RECLAIM_SUFFIX" rc=1
+    mkdir -- "$guard" 2>/dev/null || return 1
+    if _sf_lock_stale "$1"; then
+        rm -f -- "$1/owner"
+        if rmdir -- "$1" 2>/dev/null; then
+            rc=0
+        elif ls -A "$1" 2>/dev/null | grep -qvx owner; then
+            SF_ERR="cannot reclaim the stale lock $1 (it holds more than its owner file); remove it"
+            rc=2
+        fi
+    fi
+    rmdir -- "$guard" 2>/dev/null || true
+    return "$rc"
+}
 _sf_lock() {  # <file>
-    local lock="$1.lock" waited=0 holder
+    local lock="$1.lock" waited=0 holder rc
     while ! mkdir -- "$lock" 2>/dev/null; do
         if [[ -L "$lock" ]]; then SF_ERR="refusing a symlinked lock: $lock"; return 1; fi
         if [[ ! -d "$lock" ]]; then
@@ -92,17 +114,16 @@ _sf_lock() {  # <file>
             continue
         fi
         if _sf_lock_stale "$lock"; then
-            rm -f -- "$lock/owner"
-            if rmdir -- "$lock" 2>/dev/null || [[ ! -d "$lock" ]]; then
-                continue    # reclaimed: try again at once
-            fi
-            if ls -A "$lock" 2>/dev/null | grep -qvx owner; then
-                SF_ERR="cannot reclaim the stale lock $lock (it holds more than its owner file); remove it"
-                return 1
-            fi
-            # Another writer took it in between: wait for it like any live lock.
+            rc=0; _sf_reclaim "$lock" || rc=$?
+            [[ "$rc" -eq 0 ]] && continue    # reclaimed: try again at once
+            [[ "$rc" -eq 2 ]] && return 1
+            # Held again, or another reclaimer is at it: wait like for any live lock.
         fi
         if [[ "$waited" -ge "$SF_LOCK_WAIT_SEC" ]]; then
+            if [[ -d "$lock$SF_RECLAIM_SUFFIX" ]]; then
+                SF_ERR="$lock cannot be reclaimed while $lock$SF_RECLAIM_SUFFIX exists; remove it if no writer is reclaiming"
+                return 1
+            fi
             holder=$(cat -- "$lock/owner" 2>/dev/null) || holder="unknown"
             SF_ERR="$lock is held (pid host time: $holder); remove it if that writer is gone"
             return 1

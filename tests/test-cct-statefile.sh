@@ -194,6 +194,38 @@ OUT=$( { sf_write "$L" '{}'; echo "rc=$? $SF_ERR"; } 2>&1 )
 assert_contains "a stale lock holding a stray file is refused by name, not spun on" "$OUT" "rc=1 cannot reclaim the stale lock $L.lock"
 assert_eq "...the file is untouched" '{"ownerless":true}' "$(cat "$L")"
 
+# Two takers at once: exactly one wins. Each waits at a start line, takes
+# the lock with no wait, and a winner holds it until both have answered.
+GO="$D/go"
+race() {  # <file> <1: pause a second after judging the lock stale> -> won | lost
+    bash -c '
+        source "$1"; SF_LOCK_WAIT_SEC=0
+        if [[ "$3" == 1 ]]; then
+            eval "$(declare -f _sf_lock_stale | sed "1s/_sf_lock_stale/_sf_lock_stale_judged/")"
+            _sf_lock_stale() { _sf_lock_stale_judged "$@" || return 1; sleep 1; }
+        fi
+        while [[ ! -e "$4" ]]; do :; done
+        if _sf_lock "$2"; then echo won; sleep 2; _sf_unlock "$2"; else echo lost; fi
+    ' _ "$LIB" "$1" "$2" "$GO"
+}
+racers() {  # <file> <pause of the first> <pause of the second> -> the two answers, sorted
+    rm -f "$GO"
+    race "$1" "$2" > "$D/race-1" & local p1=$!
+    race "$1" "$3" > "$D/race-2" & local p2=$!
+    sleep 0.3; : > "$GO"; wait "$p1" "$p2"
+    printf '%s|%s' "$(sort "$D/race-1" "$D/race-2" | paste -sd' ' -)" "$( [[ -e "$1.lock.reclaim" ]] && echo guard-left || echo clean )"
+}
+assert_eq "two takers of a free lock at once: exactly one wins" "lost won|clean" "$(racers "$D/race-free.json" 0 0)"
+R="$D/race-dead.json"
+mkdir "$R.lock"; printf '%s %s %s\n' "$GONE" "$HOST" "$(date -u +%s)" > "$R.lock/owner"
+assert_eq "two takers of a dead writer's lock, the second pausing after judging it stale: exactly one wins" \
+    "lost won|clean" "$(racers "$R" 0 1)"
+mkdir "$R.lock" "$R.lock.reclaim"; printf '%s %s %s\n' "$GONE" "$HOST" "$(date -u +%s)" > "$R.lock/owner"
+OUT=$( { sf_write "$R" '{}'; echo "rc=$? $SF_ERR"; } 2>&1 )
+assert_contains "a guard left by an interrupted reclaim is waited for and named, never removed by guesswork" \
+    "$OUT|$([[ -d "$R.lock.reclaim" ]] && echo kept)" "rc=1 $R.lock cannot be reclaimed while $R.lock.reclaim exists; remove it if no writer is reclaiming|kept"
+rm -f "$R.lock/owner"; rmdir "$R.lock" "$R.lock.reclaim"
+
 echo ""
 echo "========================================="
 echo "  cct-statefile tests: $PASS passed, $FAIL failed"
