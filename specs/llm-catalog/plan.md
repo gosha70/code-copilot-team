@@ -26,6 +26,7 @@ origin:
   transcripts:
     - specs/llm-catalog/origin/2026-11-10-issue-400-origin.md
     - specs/llm-catalog/origin/2026-11-19-launch-first-ruling.md
+    - specs/llm-catalog/origin/2026-11-23-replan-rulings.md
   origin_claim: |
     Configure multiple named LLM targets once in a user-level catalog
     (providers, endpoints, llms, bindings; credentials as references),
@@ -41,6 +42,10 @@ origin:
 ---
 
 # Plan: harness-agnostic LLM catalog and `--llm` selection
+
+Revision 7 (proposed 2026-11-23, awaiting the owner's approval): the
+slices still owed after the launch-first slice are re-planned in
+"Remaining slices"; nothing else in this plan changes.
 
 Revision 6 (2026-11-10, after the fifth review).
 
@@ -151,6 +156,122 @@ printed and logged. A launch without `--llm` is compared with master's
 launcher. The real Claude Code binary is run through `--llm` against
 local stub endpoints, in a throwaway home, and what it sends is
 recorded under `verification/`.
+
+## Remaining slices (proposed 2026-11-23)
+
+**Where #400 stands.** The launch-first slice (#479, PR #480, and the
+rulings of 2026-11-20 in L11–L13) shipped the catalog file, `cct llm
+list` and `validate`, and `--llm` for Claude Code with child-side
+resolution, the clear-list and the static refusals. Everything the
+spec's "Deferred, unchanged" paragraph lists is still owed, and two
+departures are still in force: unverified targets launch with a notice
+(1), and resume is not enforced (2). Installed on the build machine on
+2026-11-23: `claude` 2.1.331 (the capture used 2.1.329), `codex-cli`
+0.147.0, `pi` 0.83.0, `kiro-cli` 2.36.0.
+
+**Ruled by the owner on 2026-11-23** (`origin/2026-11-23-replan-rulings.md`):
+
+- The order is S0, S1, S2, then S4 before S3; S5 any time after S1.
+- Codex and Pi are captured in S0, and Kiro at the start of S8.
+- Every capture is a re-runnable script, stamped with the version of
+  the CLI it ran against.
+- `[llm].allowed` is read from `.cct.toml` only: not from
+  `.cct.local.toml`, and not from the legacy
+  `.code-copilot-team/config.toml`. S5 also teaches Pi's config lint
+  the `[llm]` table.
+- This plan goes to review as a plan-only PR, "Part of #400", closing
+  nothing; the S0 and S1 issues are filed after it merges. Nothing
+  merges until the owner says whether 2.1.1 ships first.
+
+**The slices.** Each is its own issue and PR, says "Part of #400", and
+adds its task rows to `tasks.md` when its issue opens. Only S10's PR
+closes #400. The letters are the approved plan's.
+
+| Slice | From | Delivers | Depends on | Size |
+|---|---|---|---|---|
+| S0 Captures: Codex and Pi | Task 0 of C and D | Facts only, from two re-runnable scripts that stamp the CLI version. Codex: nested `-c model_providers.*`, `wire_api` values, `--profile` layering, `codex resume`, the model field of `exec --json`. Pi: overlay versus owned merge for FR-22, an unknown `--provider`, `--session-id`, `$VAR` interpolation from the child environment. Both run against local stub endpoints, as the Claude Code capture did. Outcome: the D10 contingency known, D11 put to the owner as a recorded amendment, the rule table's Codex and Pi rows taken from evidence | — | S |
+| S1 Launch plan and read-only surfaces | A3 (digests), A6, A7 (part), B6 | The LaunchPlan JSON schema with `env_clear`; `catalog_digest`, `launch_identity_digest` and `options_digest` computed read-only; the Claude Code launcher builds its plan through the resolver with argv and environment byte-for-byte as today; `cct llm show`, `cct harness explain claude-code --llm <target>`; `--json` for `list`, `validate`, `show` and `explain` against `shared/schemas/llm-catalog-cli.schema.json`; `pi-code --llm` refused as "adapter not implemented"; the supervisor and benchmark suites assert their native launches unchanged | — | M |
+| S2 Compatibility, read-only | A2, A4, A9 (doctor) | The state-file primitives (FR-29) with their tests; the rule table as data (FR-14), with the S0 facts and departure 3; the five states (FR-13) keyed by the evidence digest; two-part records (FR-16); `cct llm compatibility [--json]`; `cct doctor`'s LLM catalog section (FR-28). Launches do not change | S0, S1 | M |
+| S4 Stamps and exact-id resume, Claude Code | B1 (rest), B4, A7 (`sessions`) | Opens with the Claude Code capture as a re-runnable script stamped with the CLI version (amendment 4), adding `--session-id` on a new session, the transcript that proves it and the JSON model field; generated session ids (D9); stamps `attempted` to `established` (FR-17); the resume rules (FR-18) and re-resolution (FR-19), which retire departure 2; `cct llm sessions` | S1, S2 | M |
+| S3 Probe and the D7 gate | A5, B5, B2 (`--allow-unverified`) | The probe runner (FR-15) over canary primitives extracted from `routing-probe.sh` with routing pins unchanged (D6); the watchdog; the stub gateway with one negative-control switch per capability; `cct llm test`; Claude Code launches refuse `unverified` and `incompatible` targets, with `--allow-unverified` (D7, or open decision 1's milder rule), which retires departure 1; the real binary run through the stub gateway with every switch, and once against a configured target, quoted in the PR | S2, S4 | L |
+| S5 Project policy | A8 | `[llm].allowed` (FR-24, D13), read from `.cct.toml` only, by the Claude Code launcher as well as `pi-code` (amendments 1 and 5); Pi's config lint (`adapters/pi/runtime/config/lint.ts`, which `scripts/validate-cct-config.sh` also runs) learns the `[llm]` table | S1 | S |
+| S6 Codex (C) | C | `adapters/codex/bin/codex-code` with `--llm`, the `-c` overlay (D10), native passthrough byte-for-byte, stamps, exact-id resume, the probe; a disproving S0 capture stops the slice for a ruling | S0–S4 | L |
+| S7 Pi (D) | D | `--llm` on `pi-code`, `--provider`/`--model` through the form D11 rules, stamps, exact-id resume, native byte-for-byte, the probe | S0–S4 | L |
+| S8 Kiro (E) | E | Opens with the Kiro capture, a re-runnable script stamped with the CLI version: model ids, `--model` on new and resumed sessions, session id discovery, headless output. Kiro has no endpoint to stub, so the capture uses the owner's Kiro login and runs only on the owner's word. Then `adapters/kiro/bin/kiro-code`, managed models only (FR-23), endpoint bindings `unsupported`, the managed-harness evidence contract, stamps and resume | S1–S4 | M |
+| S9 Unified entry and Studio (F) | F | `cct harness start` and `exec` (D15); a Studio page over the `--json` surfaces: targets, states, the explained launch, non-secret edits through the validator, the id-only command to copy; Studio never starts a harness (D14) | S1–S4, and the adapters that have landed | L |
+| S10 Routing reference (G) | G | `llm =` and `binding =` in routing profiles with conflict refusals (FR-25); the supervisor resolves through the resolver; journal and stamp agree by launch-identity digest; `docs/llm-routing.md`; closes #400 | S1–S9 merged | M |
+
+**Order.** S0, S1, S2, S4 and S3, in that order, as the owner ruled; S5
+can land any time after S1. The adapters S6–S8 follow S3 and S4, since
+each carries the probe, the stamp and the resume contract, and they are
+independent of each other; S8 opens with its own capture. S9 follows
+them, and S10 comes last.
+
+**Why the captures come first.** The approved plan runs each capture as
+its adapter's first task. Capturing Codex and Pi in S0, before S2, lets
+the rule table start from evidence rather than placeholders and puts
+the D10 contingency and the D11 ruling in front of the owner early, at
+the cost of two scripts and their records and no product code. Each
+script names the CLI version in the record it writes, so a newer CLI is
+re-captured by running it again.
+
+**User-visible changes along the way.**
+
+- S4 refuses `--continue` and the resume picker with `--llm`, and a
+  resume under a different target, as FR-18 rules.
+- S3 refuses a target until `cct llm test` passes for it, as D7 rules;
+  `--allow-unverified` launches with a notice. In full: the evidence
+  digest (FR-9) includes the harness version, so every Claude Code
+  update returns every target to `unverified` (FR-13), and under D7 as
+  ruled each target is then refused until it is tested again. Claude
+  Code updates often: the installed version moved from 2.1.329 to
+  2.1.331 between 20 and 23 November. Open decision 1 is a milder rule.
+  S3's CHANGELOG entry carries an upgrade note either way.
+
+**Spec amendments this plan needs.** Each is recorded in `spec.md`
+with its date when its slice starts, never as a silent edit:
+
+1. FR-24 and the scenario that quotes it name
+   `.code-copilot-team/config.toml`. `[llm].allowed` is read from
+   `.cct.toml` only (#460): not from `.cct.local.toml`, and not from
+   the legacy file (S5).
+2. Departure 8 added `auto_compact_window`; FR-9's options digest
+   gains it beside `small_fast_model`, `max_output_tokens`,
+   `reasoning_effort` and `thinking` (S1).
+3. FR-14's rule table states departure 3: a Claude Code binding may
+   name a `managed` provider, with no endpoint, meaning Claude Code's
+   own login (S2).
+4. The FR-20 capture is re-run on the installed `claude`, by a
+   re-runnable script stamped with the CLI version, before S4 and S3
+   rely on it: 2.1.331 may carry variables 2.1.329 did not (S4).
+5. `.cct.toml` is read by Claude Code launches as well as by Pi; today
+   only `pi-code` reads it (S5).
+
+**Open decisions.**
+
+1. **S3: a target tested on an older harness version.** As ruled (D7
+   with FR-13's evidence digest), every Claude Code update refuses
+   every target until it is tested again. The milder rule: refuse a
+   target that was never tested, whose latest conclusive record
+   failed, or whose launch identity changed; give a notice, and
+   launch, when only the harness version is newer than the one its
+   passing record was measured on. Adopting it amends FR-12, FR-13 and
+   D7. A changed tuning option or rule version is neither case, so the
+   ruling places those too.
+2. **The release that ships these slices.** Six source files (the
+   `claude-code` launcher and its `harness-stamp.sh` hook, `pi-code`,
+   `home.ts`, `cct-home.sh`, `home.py`), `docs/cct-home.md` and the
+   2.1.0 upgrade notes say 2.2 removes the legacy-home fallbacks:
+   `~/.code-copilot-team` and a project's
+   `.code-copilot-team/config.toml`. These slices add features, so the
+   release that ships them would be 2.2.0. Either that release also
+   removes the fallbacks, as those texts promise, or the removal moves
+   to a later version and the texts change with it.
+
+**Proof and gates.** As "Test strategy" and "Delivery gates" above, per
+slice: every probe matrix quoted in a PR comes from a real harness run,
+never a mock, and a planted secret and a planted path token are absent
+from every artifact.
 
 ## Design decisions carried into tasks (see spec.md § Decisions)
 
