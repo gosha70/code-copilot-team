@@ -138,7 +138,7 @@ EOF
 }
 catalog > "$HOME_DIR/.cct/llms.toml"
 
-cctx() { env -i HOME="$HOME_DIR" PATH="$TMP/bin:$PATH" LC_ALL=en_US.UTF-8 TEST_LLM_KEY="$SECRET" ${RULES_OVERRIDE:+CCT_LLM_RULES_FILE="$RULES_OVERRIDE"} "$@"; }
+cctx() { env -i HOME="$HOME_DIR" PATH="$TMP/bin:$PATH" TEST_LLM_KEY="$SECRET" ${RULES_OVERRIDE:+CCT_LLM_RULES_FILE="$RULES_OVERRIDE"} "$@"; }
 compat() { cctx bash "$CCT" llm compatibility "$@"; }
 field() { jq -r --arg t "$1" ".targets[] | select(.target == \$t) | $2"; }
 record() {  # <llm> <binding> <attempt-json>: the probe's writer
@@ -211,7 +211,7 @@ assert_eq "claude older than the table's minimum: unavailable" \
     "$(field m '"\(.state)|\(.reason)"' <<< "$OUT")"
 
 # ── the evidence (FR-9): computed with its own digests, never keyed on none ──
-EVID=$(env -i HOME="$HOME_DIR" PATH="$TMP/bin:$PATH" LC_ALL=en_US.UTF-8 TEST_LLM_KEY="$SECRET" bash -c '
+EVID=$(env -i HOME="$HOME_DIR" PATH="$TMP/bin:$PATH" TEST_LLM_KEY="$SECRET" bash -c '
     for l in llm-catalog llm-adapters/claude-code llm-resolve cct-statefile llm-compat; do source "$1/scripts/lib/$l.sh"; done
     lc_validate "$(lc_catalog_path)" >/dev/null && lr_resolve claude-code m || exit 1
     ok=no
@@ -219,7 +219,7 @@ EVID=$(env -i HOME="$HOME_DIR" PATH="$TMP/bin:$PATH" LC_ALL=en_US.UTF-8 TEST_LLM
     lr_resolve pi m; rc=0; lcm_evidence 2.1.331 || rc=$?
     printf "%s|%s|%s" "$ok" "$rc" "$LCM_EVIDENCE"' _ "$REPO_DIR")
 assert_eq "evidence: a fresh resolution gets its digests computed; no binding, no evidence" "yes|1|null" "$EVID"
-EVID=$(env -i HOME="$HOME_DIR" PATH="$TMP/bin:$PATH" LC_ALL=en_US.UTF-8 bash -c '
+EVID=$(env -i HOME="$HOME_DIR" PATH="$TMP/bin:$PATH" bash -c '
     set -u
     for l in llm-catalog llm-adapters/claude-code llm-resolve cct-statefile llm-compat; do source "$1/scripts/lib/$l.sh"; done
     LCM_EVIDENCE="{\"stale\": true}"; rc=0; lcm_evidence 2.1.331 || rc=$?
