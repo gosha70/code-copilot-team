@@ -112,9 +112,11 @@ lr_digests() {
     return 0
 }
 
-# lr_resolve <harness> <target>
+# lr_resolve <harness> <target> [<project-dir>]
 # Returns 0 when the target resolves to a binding (LR_STATE then says
-# whether it launches) and 1 when it does not (LR_REFUSAL says why). Sets
+# whether it launches) and 1 when it does not (LR_REFUSAL says why). With a
+# project directory, the [llm] table of its project's .cct.toml may refuse
+# the target (FR-24; a launch always passes one). Sets
 # LR_HARNESS, LR_TARGET, LR_LLM, LR_BINDING, LR_STATE, LR_REASON,
 # LR_REFUSAL, the identity (LR_PROVIDER, LR_PROVIDER_KIND, LR_MODEL,
 # LR_ENDPOINT_ID, LR_PROTOCOL, LR_ORIGIN), and through the adapter its
@@ -138,6 +140,19 @@ lr_resolve() {
     if ! lc_resolve "$1" "$2"; then
         LR_REFUSAL="$LC_R_ERR"
         return 1
+    fi
+    if [[ -n "${3:-}" ]]; then
+        # The project restricts, never grants (FR-24, D13; S5).
+        if ! lc_project_policy "$(lc_project_root "$3")"; then
+            LR_REFUSAL="$LC_POLICY_ERR"
+            return 1
+        fi
+        if ! lc_policy_allows "$LC_R_LLM" "$LC_R_BINDING"; then
+            local listed
+            listed=$(printf '%s' "$LC_ALLOWED" | paste -sd, - | sed 's/,/, /g')
+            LR_REFUSAL="--llm $2 is not allowed in this project: $LC_POLICY_FILE [$LC_POLICY_TABLE].$LC_POLICY_KEY lists ${listed:-nothing}"
+            return 1
+        fi
     fi
     LR_LLM="$LC_R_LLM"
     LR_BINDING="$LC_R_BINDING"

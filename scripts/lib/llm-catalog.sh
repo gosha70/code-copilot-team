@@ -696,3 +696,91 @@ lc_endpoint_url() {
     fi
     return 0
 }
+
+# ── a project's restriction (#400 FR-24, D13, slice S5) ──────────────
+LC_PROJECT_CONFIG=".cct.toml"   # the committed project file (#460); never .cct.local.toml or the legacy one
+LC_POLICY_TABLE="llm"
+LC_POLICY_KEY="allowed"
+LC_TARGET_RE='^[A-Za-z0-9][A-Za-z0-9_-]*(@[A-Za-z0-9][A-Za-z0-9_-]*)?$'
+
+# lc_project_policy <project-root>
+# The [llm] table of <project-root>/.cct.toml, and nothing else of the
+# file, which is Pi's configuration first: a table this lexer does not
+# accept elsewhere in it can never block a launch. Sets LC_POLICY_FILE
+# (empty: the project restricts nothing) and LC_ALLOWED (the allowed llm
+# ids and <llm>@<binding> targets, one per line; empty with a policy file
+# means none). Returns 1 with LC_POLICY_ERR when [llm] holds anything but
+# `allowed = [...]`, in any form: projects restrict, never grant.
+lc_project_policy() {
+    local file="$1/$LC_PROJECT_CONFIG" raw line lineno=0 in=0 root=1 seen=0 e
+    LC_POLICY_FILE="" LC_ALLOWED="" LC_POLICY_ERR=""
+    [[ -f "$file" ]] || return 0
+    while IFS= read -r raw || [[ -n "$raw" ]]; do
+        lineno=$((lineno + 1))
+        ct_trim "$raw"
+        line="$CT_LINE"
+        if [[ -z "$line" || "${line:0:1}" == "#" ]]; then continue; fi
+        if [[ "${line:0:1}" == "[" ]]; then
+            in=0 root=0
+            if [[ "$line" =~ ^\[[[:space:]]*$LC_POLICY_TABLE[[:space:]]*\]$ ]]; then
+                in=1
+            elif [[ "$line" =~ ^\[\[?[[:space:]]*$LC_POLICY_TABLE[[:space:]]*\. ]]; then
+                LC_POLICY_ERR="$file line $lineno: '$line' is not accepted: projects restrict, never grant (only [$LC_POLICY_TABLE] $LC_POLICY_KEY = [...])"
+                return 1
+            fi
+            continue
+        fi
+        if [[ "$in" -eq 0 ]]; then
+            # Another table's key is that table's own. At the root, `llm.allowed
+            # = [...]` or `llm = {...}` would be the same table spelled
+            # another way: refused, so it is never silently ignored.
+            if [[ "$root" -eq 1 && "$line" =~ ^$LC_POLICY_TABLE[[:space:]]*[.=] ]]; then
+                LC_POLICY_ERR="$file line $lineno: write the project's LLM restriction as an [$LC_POLICY_TABLE] table with $LC_POLICY_KEY = [...]"
+                return 1
+            fi
+            continue
+        fi
+        if ! ct_split_kv "$line"; then
+            LC_POLICY_ERR="$file line $lineno: $CT_ERR"
+            return 1
+        fi
+        if [[ "$CT_KEY" != "$LC_POLICY_KEY" ]]; then
+            LC_POLICY_ERR="$file line $lineno: [$LC_POLICY_TABLE].$CT_KEY is not accepted: projects restrict, never grant (only $LC_POLICY_KEY = [...])"
+            return 1
+        fi
+        if [[ "$seen" -eq 1 ]]; then
+            LC_POLICY_ERR="$file line $lineno: [$LC_POLICY_TABLE].$LC_POLICY_KEY is given twice"
+            return 1
+        fi
+        seen=1
+        if ! ct_lex_value "$CT_VAL" || [[ "$CT_TYPE" != "array" ]]; then
+            LC_POLICY_ERR="$file line $lineno: [$LC_POLICY_TABLE].$LC_POLICY_KEY must be an array of llm ids or <llm>@<binding> targets"
+            return 1
+        fi
+        LC_POLICY_FILE="$file"
+        if [[ -n "$CT_VALUE" ]]; then
+            while IFS= read -r e; do
+                if [[ ! "$e" =~ $LC_TARGET_RE ]]; then
+                    LC_POLICY_ERR="$file line $lineno: '$e' in [$LC_POLICY_TABLE].$LC_POLICY_KEY is not an llm id or <llm>@<binding> target"
+                    LC_POLICY_FILE=""
+                    return 1
+                fi
+                LC_ALLOWED="${LC_ALLOWED}${e}"$'\n'
+            done <<< "${CT_VALUE//$CT_RS/$'\n'}"
+        fi
+    done < "$file"
+    return 0
+}
+
+# lc_policy_allows <llm> <binding>: 0 when no policy restricts, or the
+# policy lists the llm or <llm>@<binding> (call lc_project_policy first).
+lc_policy_allows() {
+    [[ -z "$LC_POLICY_FILE" ]] && return 0
+    printf '%s' "$LC_ALLOWED" | grep -qxF -e "$1" -e "$1@$2"
+}
+
+# lc_project_root <dir>: the project a launch in <dir> belongs to, by the
+# claude-code launcher's rule: its git top level, else the directory itself.
+lc_project_root() {
+    git -C "$1" rev-parse --show-toplevel 2>/dev/null || (cd "$1" 2>/dev/null && pwd -P) || printf '%s\n' "$1"
+}

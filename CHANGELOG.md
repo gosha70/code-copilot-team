@@ -36,6 +36,14 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   says what changed. `cct doctor` gains an "LLM catalog" section. Records are
   written privately (`0600` in `0700` directories), atomically and under a
   lock. Launches do not change yet. Part of #400.
+- **A project can narrow which LLMs `--llm` may use on it.** An `[llm]`
+  table with `allowed = ["<llm>", "<llm>@<binding>", ...]` in the project's
+  committed `.cct.toml` refuses any other target with exit 3, for a Claude
+  Code launch and in `cct harness explain` (which gains `--project <dir>`).
+  It only restricts: any other key under `[llm]` is refused by name. It is
+  never read from `.cct.local.toml` or the legacy
+  `.code-copilot-team/config.toml`, and a launch without `--llm` reads none
+  of it. Pi's config lint accepts the table. Part of #400.
 
 ### Security
 

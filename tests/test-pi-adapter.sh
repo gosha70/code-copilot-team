@@ -308,6 +308,10 @@ if command -v node >/dev/null 2>&1 && [[ "$(node --version | sed 's/^v//' | cut 
 
   RC=0; bash "$REPO_DIR/scripts/validate-cct-config.sh" "$CFG/future-version.toml" >/dev/null 2>&1 || RC=$?
   assert "validator rejects a future schema version (exit 1)" "[[ '$RC' == '1' ]]"
+
+  RC=0; OUT=$(bash "$REPO_DIR/scripts/validate-cct-config.sh" "$CFG/llm-grant.toml" 2>&1) || RC=$?
+  assert "validator rejects an [llm] key that would grant (exit 1)" "[[ '$RC' == '1' ]]"
+  assert "validator says projects restrict, never grant (#400 FR-24)" "echo \"\$OUT\" | grep -q 'llm.default: projects restrict, never grant'"
 else
   echo "  SKIP: config validation (node >= 22.6 unavailable)"
   if [[ -n "${CI:-}" ]]; then echo "  FAIL: node >= 22.6 required in CI"; FAIL=$((FAIL + 1)); fi

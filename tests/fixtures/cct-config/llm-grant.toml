@@ -1,0 +1,8 @@
+# FIXTURE — invalid. A project's [llm] table may only restrict (#400 FR-24,
+# D13): `default` would choose a model for whoever opens the project.
+# scripts/validate-cct-config.sh must report an error and exit 1.
+config_version = 2
+
+[llm]
+allowed = ["deepseek"]
+default = "deepseek"

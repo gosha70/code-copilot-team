@@ -742,7 +742,17 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   `<llm>@<binding>` targets) only; any other key under `[llm]` is
   refused by name with the reason "projects restrict, never grant"
   (D13). An `allowed` list narrows `--llm` and restored stamps; it
-  never selects a target.
+  never selects a target. *Amended 2026-11-23, S5, plan amendments 1
+  and 5:* the file is the project's committed `.cct.toml` (#460) only,
+  at the git top level of the launch directory: never `.cct.local.toml`
+  and never the legacy `.code-copilot-team/config.toml`. Claude Code
+  launches read it as well as Pi: only its `[llm]` table, only for a
+  `--llm` launch, through the resolver, so `cct harness explain`
+  applies it too. The same table written another way (a dotted key or
+  an inline table at the top of the file, an `[llm.<x>]` table) is
+  refused by name rather than ignored. `pi-code` applies it when its
+  `--llm` lands (S7); Pi's config lint accepts `llm.allowed` and
+  reports any other `llm.*` key as an error.
 - **FR-25 Routing migration (G).** A `[[profiles]]` entry may declare
   `llm = "<id>"` and `binding = "<id>"`; then `backend` is derived
   from the binding's harness and `provider`, `model`, `protocol`,

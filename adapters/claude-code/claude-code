@@ -1816,7 +1816,7 @@ llm_prepare() {  # <project-dir>
     fi
     # The resolver `cct harness explain` uses, so a launch and its
     # explanation cannot disagree (#400 FR-9).
-    if ! lr_resolve "$LLM_CC_HARNESS" "$LLM_TARGET"; then
+    if ! lr_resolve "$LLM_CC_HARNESS" "$LLM_TARGET" "$project"; then
         llm_refuse "$LR_REFUSAL"
     fi
     if [[ "$LLM_CC_STATE" != "unverified" ]]; then

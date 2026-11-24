@@ -124,7 +124,9 @@ cctx() {
     while [[ $# -gt 0 && "$1" != "--" ]]; do envs+=("$1"); shift; done
     shift
     RC=0
-    OUT=$(env -u CCT_HOME CCT_HOME="$h" TEST_LLM_KEY="$SECRET" TEST_LLM_URL="https://env.example/$PATH_TOKEN/v1" \
+    # From a directory with no project file: explain reads the current
+    # directory's project unless --project names one (S5).
+    OUT=$(cd "${CLI_RUN_DIR:-$TMP}" && env -u CCT_HOME CCT_HOME="$h" TEST_LLM_KEY="$SECRET" TEST_LLM_URL="https://env.example/$PATH_TOKEN/v1" \
         ${envs[@]+"${envs[@]}"} bash "$CCT" "$@" 2>&1) || RC=$?
 }
 digests_of() {  # <home> <target> [VAR=value ...] -> "catalog launch options"
@@ -333,10 +335,10 @@ assert_eq "compatibility --json, a usage error: exit 2 and the envelope alone" \
     "2|compatibility|cct llm compatibility: unknown option '--bogus'" "$(json_err)"
 cctx "$BASE_HOME" -- harness explain claude-code --json
 assert_eq "explain --json, a usage error: exit 2 and the envelope alone" \
-    "2|explain|usage: cct harness explain <harness> --llm <target> [--json]" "$(json_err)"
+    "2|explain|usage: cct harness explain <harness> --llm <target> [--project <dir>] [--json]" "$(json_err)"
 cctx "$BASE_HOME" -- harness bogus --json
 assert_eq "harness --json, an unknown subcommand: a null command" \
-    "2|null|usage: cct harness explain <harness> --llm <target> [--json]" "$(json_err)"
+    "2|null|usage: cct harness explain <harness> --llm <target> [--project <dir>] [--json]" "$(json_err)"
 cctx "$BASE_HOME" -- llm frob --json; ERR_NO_COMMAND="$OUT"
 assert_eq "--json, an unknown command: a null command" \
     "2|null|cct llm: unknown command 'frob' (list | show | validate | compatibility)" "$(json_err)"
@@ -368,6 +370,17 @@ else
     SKIPPED=$(( $(wc -w <<< "$SCHEMA_DOCS") + 1 ))
     echo "  SKIP: jsonschema not installed — the $SKIPPED schema checks did not run"
 fi
+
+# ── a project's [llm] restriction, through explain (#400 S5) ──
+mkdir -p "$TMP/policy-proj"
+printf '[llm]\nallowed = ["m2"]\n' > "$TMP/policy-proj/.cct.toml"
+cctx "$BASE_HOME" -- harness explain claude-code --llm m --project "$TMP/policy-proj"
+assert_exit "explain --project: a target the project does not list is refused" 3 "$RC"
+assert_contains "...naming the project's list" "$OUT" "is not allowed in this project"
+CLI_RUN_DIR="$TMP/policy-proj" cctx "$BASE_HOME" -- harness explain claude-code --llm m
+assert_exit "explain: the project is the current directory's by default" 3 "$RC"
+cctx "$BASE_HOME" -- harness explain claude-code --llm m --project "$TMP/no-such-dir"
+assert_exit "explain --project: a directory that does not exist is a usage error" 2 "$RC"
 
 # ── cct help ──
 HELP=$(bash "$CCT" help 2>&1)
