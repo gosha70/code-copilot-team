@@ -1794,6 +1794,8 @@ llm_load_libs() {
     source "$repo/scripts/lib/llm-catalog.sh"
     # shellcheck source=/dev/null
     source "$repo/scripts/lib/llm-adapters/claude-code.sh"
+    # shellcheck source=/dev/null
+    source "$repo/scripts/lib/llm-resolve.sh"
 }
 
 llm_prepare() {  # <project-dir>
@@ -1812,10 +1814,11 @@ llm_prepare() {  # <project-dir>
         { lc_validate "$catalog" || true; } | sed 's/^/  /' >&2
         exit "$LLM_EXIT_REFUSED"
     fi
-    if ! lc_resolve "$LLM_CC_HARNESS" "$LLM_TARGET"; then
-        llm_refuse "$LC_R_ERR"
+    # The resolver `cct harness explain` uses, so a launch and its
+    # explanation cannot disagree (#400 FR-9).
+    if ! lr_resolve "$LLM_CC_HARNESS" "$LLM_TARGET"; then
+        llm_refuse "$LR_REFUSAL"
     fi
-    llm_cc_plan "$LC_R_BINDING"
     if [[ "$LLM_CC_STATE" != "unverified" ]]; then
         llm_refuse "$LC_R_LLM@$LC_R_BINDING is $LLM_CC_STATE on $LLM_CC_HARNESS: $LLM_CC_REASON"
     fi

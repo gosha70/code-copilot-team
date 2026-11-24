@@ -303,7 +303,7 @@ assert_contains "cct help documents llm" "$(bash "$REPO_DIR/scripts/cct" help 2>
 assert_contains "cct help documents --llm on start" "$(bash "$REPO_DIR/scripts/cct" help 2>&1)" "cct start --llm"
 USAGE_RC=0; USAGE_OUT=$(bash "$CLI" bogus 2>&1) || USAGE_RC=$?
 assert_exit "an unknown cct llm command exits 2" 2 "$USAGE_RC"
-assert_contains "...and names the two that exist" "$USAGE_OUT" "list | validate"
+assert_contains "...and names the three that exist" "$USAGE_OUT" "list | show | validate"
 
 echo ""
 echo "========================================="

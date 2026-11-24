@@ -1,0 +1,209 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gosha70/code-copilot-team/shared/schemas/llm-catalog-cli.schema.json",
+  "title": "cct llm and cct harness explain --json output",
+  "description": "What `cct llm list|show|validate --json` and `cct harness explain <harness> --llm <target> --json` print (#400 FR-6, S1). No value of any variable appears: a credential is its variable's NAME and whether it is set, and an endpoint is its origin (scheme://host[:port]).",
+  "type": "object",
+  "required": ["schema_version", "command"],
+  "oneOf": [
+    {"$ref": "#/$defs/list"},
+    {"$ref": "#/$defs/show"},
+    {"$ref": "#/$defs/validate"},
+    {"$ref": "#/$defs/explain"}
+  ],
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"},
+    "origin": {"type": ["string", "null"], "pattern": "^https?://[^/?#@]+$"},
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "state": {"enum": ["unverified", "unsupported", "unavailable"]},
+    "credential": {
+      "type": "object",
+      "required": ["mode", "name", "set"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {"enum": ["env", "none", "native"]},
+        "name": {"type": ["string", "null"]},
+        "set": {"type": ["boolean", "null"]}
+      }
+    },
+    "digests": {
+      "type": "object",
+      "required": ["catalog", "launch_identity", "options"],
+      "additionalProperties": false,
+      "properties": {
+        "catalog": {"$ref": "#/$defs/digest"},
+        "launch_identity": {"$ref": "#/$defs/digest"},
+        "options": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "list": {
+      "type": "object",
+      "required": ["schema_version", "command", "catalog", "targets"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {"const": 1},
+        "command": {"const": "list"},
+        "catalog": {"type": "string"},
+        "targets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["target", "llm", "binding", "harness", "model", "endpoint", "credential", "state", "reason"],
+            "additionalProperties": false,
+            "properties": {
+              "target": {"type": "string"},
+              "llm": {"$ref": "#/$defs/id"},
+              "binding": {"type": ["string", "null"]},
+              "harness": {"type": ["string", "null"]},
+              "model": {"type": "string"},
+              "endpoint": {"$ref": "#/$defs/origin"},
+              "credential": {"oneOf": [{"$ref": "#/$defs/credential"}, {"type": "null"}]},
+              "state": {"oneOf": [{"$ref": "#/$defs/state"}, {"type": "null"}]},
+              "reason": {"type": ["string", "null"]}
+            }
+          }
+        }
+      }
+    },
+    "show": {
+      "type": "object",
+      "required": ["schema_version", "command", "catalog", "llm", "bindings"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {"const": 1},
+        "command": {"const": "show"},
+        "catalog": {"type": "string"},
+        "llm": {
+          "type": "object",
+          "required": ["id", "provider", "provider_kind", "display_name", "model", "context_window", "reasoning", "input"],
+          "additionalProperties": false,
+          "properties": {
+            "id": {"$ref": "#/$defs/id"},
+            "provider": {"$ref": "#/$defs/id"},
+            "provider_kind": {"enum": ["api", "managed"]},
+            "display_name": {"type": "string"},
+            "model": {"type": "string"},
+            "context_window": {"type": ["integer", "null"]},
+            "reasoning": {"type": ["boolean", "null"]},
+            "input": {"oneOf": [{"type": "array", "items": {"type": "string"}}, {"type": "null"}]}
+          }
+        },
+        "bindings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "target", "harness", "endpoint", "protocol", "credential", "state", "reason", "digests"],
+            "additionalProperties": false,
+            "properties": {
+              "id": {"$ref": "#/$defs/id"},
+              "target": {"type": "string"},
+              "harness": {"type": "string"},
+              "endpoint": {"$ref": "#/$defs/origin"},
+              "protocol": {"type": ["string", "null"]},
+              "credential": {"$ref": "#/$defs/credential"},
+              "state": {"$ref": "#/$defs/state"},
+              "reason": {"type": ["string", "null"]},
+              "digests": {"$ref": "#/$defs/digests"}
+            }
+          }
+        }
+      }
+    },
+    "validate": {
+      "type": "object",
+      "required": ["schema_version", "command", "file", "valid", "error", "violations"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {"const": 1},
+        "command": {"const": "validate"},
+        "file": {"type": "string"},
+        "valid": {"type": "boolean"},
+        "error": {"type": ["string", "null"]},
+        "violations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["line", "context", "message"],
+            "additionalProperties": false,
+            "properties": {
+              "line": {"type": ["integer", "null"]},
+              "context": {"type": ["string", "null"]},
+              "message": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "explain": {
+      "description": "The LaunchPlan (FR-9) of one target on one harness. A target that does not resolve has a null binding and a refusal.",
+      "type": "object",
+      "required": ["schema_version", "command", "harness", "target", "llm", "binding", "refusal"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "command": {"const": "explain"},
+        "harness": {"type": "string"},
+        "target": {"type": "string"},
+        "llm": {"type": ["string", "null"]},
+        "binding": {"type": ["string", "null"]},
+        "executable": {"type": "string"},
+        "argv": {"type": "array", "items": {"type": "string"}},
+        "env_names": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "set"],
+            "additionalProperties": false,
+            "properties": {
+              "name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+              "set": {"type": "boolean"},
+              "from": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}
+            }
+          }
+        },
+        "env_clear": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "overlay": {"type": "array"},
+        "identity": {
+          "type": "object",
+          "required": ["harness", "llm", "binding", "provider", "provider_kind", "endpoint", "protocol", "model"],
+          "additionalProperties": false,
+          "properties": {
+            "harness": {"type": "string"},
+            "llm": {"type": "string"},
+            "binding": {"type": "string"},
+            "provider": {"type": "string"},
+            "provider_kind": {"enum": ["api", "managed"]},
+            "endpoint": {"$ref": "#/$defs/origin"},
+            "protocol": {"type": ["string", "null"]},
+            "model": {"type": "string"}
+          }
+        },
+        "compatibility": {
+          "type": "object",
+          "required": ["state", "reason"],
+          "additionalProperties": false,
+          "properties": {
+            "state": {"$ref": "#/$defs/state"},
+            "reason": {"type": ["string", "null"]}
+          }
+        },
+        "digests": {"$ref": "#/$defs/digests"},
+        "refusal": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "required": ["state", "reason"],
+              "additionalProperties": false,
+              "properties": {
+                "state": {"oneOf": [{"$ref": "#/$defs/state"}, {"type": "null"}]},
+                "reason": {"type": "string"}
+              }
+            }
+          ]
+        }
+      },
+      "if": {"properties": {"binding": {"type": "string"}}},
+      "then": {"required": ["executable", "argv", "env_names", "env_clear", "overlay", "identity", "compatibility", "digests"]}
+    }
+  }
+}

@@ -52,3 +52,17 @@ slice leaves to them.
 | L11 | Review rulings of 2026-11-20: tuning variables in a settings `env` block are a notice, not a refusal; `CLAUDE_CODE_OAUTH_TOKEN` removed for an api endpoint, `CLAUDE_CODE_USE_GATEWAY` and `ANTHROPIC_UNIX_SOCKET` on every selected launch; the quoting refusal covers the launcher's path and forwarded flags; tests for each; the capture extended | FR-10, FR-20, FR-30 | `scripts/lib/llm-adapters/claude-code.sh`, `adapters/claude-code/claude-code`, `tests/test-llm-launch.sh`, `verification/claude-code-capture.md` | [x] |
 | L12 | Second review ruling of 2026-11-20: the typed-command check refuses control characters only (C0, DEL, C1 as UTF-8) and types printable non-ASCII; an api endpoint also loses `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`, `CLAUDE_CODE_GATEWAY_TOKEN` and the three file-descriptor forms, which a managed provider keeps; tests for each; the capture extended | FR-10, FR-20, FR-30 | `adapters/claude-code/claude-code`, `scripts/lib/llm-adapters/claude-code.sh`, `tests/test-llm-launch.sh`, `verification/claude-code-capture.md` | [x] |
 | L13 | Third review ruling of 2026-11-20, after #480 merged, as its own small PR: an api endpoint also loses `ANTHROPIC_IDENTITY_TOKEN` and `ANTHROPIC_IDENTITY_TOKEN_FILE`, which a managed provider keeps; tests; the capture extended (section 7) | FR-20, FR-30 | `scripts/lib/llm-adapters/claude-code.sh`, `tests/test-llm-launch.sh`, `docs/llm-catalog.md`, `verification/claude-code-capture.md` | [x] |
+
+## S1 — launch plan and read-only surfaces (plan ruled 2026-11-23)
+
+From A3 (digests), A6, A7 (part) and B6; plan.md, "Remaining slices".
+
+| # | Task | Requirement(s) | File(s) | Done |
+|---|---|---|---|---|
+| S1.1 | The resolver: (harness, target) → the binding, the adapter's plan, the static state and three digests (catalog, launch identity, options) as canonical JSON, names only; every other harness refused "adapter not implemented" | FR-9, FR-21–23 (refusal) | `scripts/lib/llm-resolve.sh` | [x] |
+| S1.2 | The Claude Code launcher resolves through it; its launches (argv, environment, messages) unchanged | FR-9, FR-11, FR-27 | `adapters/claude-code/claude-code` | [x] |
+| S1.3 | `cct llm show`, `cct harness explain`, `--json` for list, show, validate and explain, and the schema | FR-6, FR-7 | `scripts/llm-cli.sh`, `scripts/cct`, `shared/schemas/llm-catalog-cli.schema.json` | [x] |
+| S1.4 | `pi-code --llm` refused as not implemented, never forwarded to pi | FR-22 | `adapters/pi/bin/pi-code` | [x] |
+| S1.5 | Tests: the CLI suite (a planted secret and path token absent everywhere, the digest properties, the schema), a launch and its explanation agreeing, the usage message; pins, repo-structure and the CI step. No supervisor, routing or benchmark code changes, and their suites pass unchanged | FR-6, FR-7, FR-9, FR-27 | `tests/test-llm-cli.sh`, `tests/test-llm-launch.sh`, `tests/test-llm-catalog.sh`, `tests/test-shared-structure.sh`, `tests/test-counts.env`, `docs/repo-structure.md`, `.github/workflows/sync-check.yml` | [x] |
+| S1.6 | The guide, the CHANGELOG, and spec amendment 2 (`auto_compact_window` in the options digest) | FR-28, FR-9 | `docs/llm-catalog.md`, `CHANGELOG.md`, `spec.md` | [x] |
+| S1.7 | Gates: suites, validate-spec, origin alignment, doc accuracy, `pre-pr-check.sh --closes <S1 issue>`, peer review, PR "Part of #400" | all S1 | repository gates | [ ] |

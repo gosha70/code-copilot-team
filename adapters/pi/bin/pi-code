@@ -802,6 +802,10 @@ while [[ $# -gt 0 ]]; do
     --peer-review-off)    PEER_ENABLED=false; shift ;;
     --peer-review-scope)  PEER_SCOPE="${2:?--peer-review-scope requires code|design|both}"; shift 2 ;;
     --peer-review-scope=*) PEER_SCOPE="${1#*=}"; shift ;;
+    --llm|--llm=*)
+      # #400: refused until the Pi adapter lands (slice S7), never forwarded to pi.
+      err "--llm is not implemented for pi-code yet: the Pi adapter is a later slice of #400 (docs/llm-catalog.md)"
+      exit 3 ;;
     -*)            PI_ARGS+=("$1"); shift ;;   # unknown option → forward to pi
     *)
       if [[ -z "$PROJECT_PATH" && -d "$1" ]]; then
