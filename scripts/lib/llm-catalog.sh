@@ -700,6 +700,8 @@ lc_endpoint_url() {
 # ── a project's restriction (#400 FR-24, D13, slice S5) ──────────────
 LC_PROJECT_CONFIG=".cct.toml"   # the committed project file (#460); never .cct.local.toml or the legacy one
 LC_POLICY_TABLE="llm"
+# The table's name as TOML may write it: bare, or quoted either way.
+LC_POLICY_TABLE_RE="($LC_POLICY_TABLE|\"$LC_POLICY_TABLE\"|'$LC_POLICY_TABLE')"
 LC_POLICY_KEY="allowed"
 LC_TARGET_RE='^[A-Za-z0-9][A-Za-z0-9_-]*(@[A-Za-z0-9][A-Za-z0-9_-]*)?$'
 
@@ -732,9 +734,9 @@ lc_project_policy() {
         if [[ -z "$line" || "${line:0:1}" == "#" ]]; then continue; fi
         if [[ "${line:0:1}" == "[" ]]; then
             in=0 root=0
-            if [[ "$line" =~ ^\[[[:space:]]*$LC_POLICY_TABLE[[:space:]]*\]$ ]]; then
+            if [[ "$line" =~ ^\[[[:space:]]*$LC_POLICY_TABLE_RE[[:space:]]*\]$ ]]; then
                 in=1
-            elif [[ "$line" =~ ^\[\[?[[:space:]]*$LC_POLICY_TABLE[[:space:]]*\. ]]; then
+            elif [[ "$line" =~ ^\[\[?[[:space:]]*$LC_POLICY_TABLE_RE[[:space:]]*(\.|\]\]) ]]; then
                 LC_POLICY_ERR="$file line $lineno: '$line' is not accepted: projects restrict, never grant (only [$LC_POLICY_TABLE] $LC_POLICY_KEY = [...])"
                 return 1
             fi
@@ -744,7 +746,7 @@ lc_project_policy() {
             # Another table's key is that table's own. At the root, `llm.allowed
             # = [...]` or `llm = {...}` would be the same table spelled
             # another way: refused, so it is never silently ignored.
-            if [[ "$root" -eq 1 && "$line" =~ ^$LC_POLICY_TABLE[[:space:]]*[.=] ]]; then
+            if [[ "$root" -eq 1 && "$line" =~ ^$LC_POLICY_TABLE_RE[[:space:]]*[.=] ]]; then
                 LC_POLICY_ERR="$file line $lineno: write the project's LLM restriction as an [$LC_POLICY_TABLE] table with $LC_POLICY_KEY = [...]"
                 return 1
             fi
@@ -791,6 +793,14 @@ lc_policy_allows() {
 
 # lc_project_root <dir>: the project a launch in <dir> belongs to, by the
 # claude-code launcher's rule: its git top level, else the directory itself.
+# When git will not name the top level (a checkout it refuses to work in,
+# a broken worktree pointer, no git), the nearest directory holding .git
+# stands for it, so a work tree git refuses never hides its .cct.toml.
 lc_project_root() {
-    git -C "$1" rev-parse --show-toplevel 2>/dev/null || (cd "$1" 2>/dev/null && pwd -P) || printf '%s\n' "$1"
+    local d top
+    if top=$(git -C "$1" rev-parse --show-toplevel 2>/dev/null); then printf '%s\n' "$top"; return 0; fi
+    d=$(cd "$1" 2>/dev/null && pwd -P) || { printf '%s\n' "$1"; return 0; }
+    top="$d"
+    while [[ ! -e "$top/.git" && "$top" != "/" ]]; do top=$(dirname "$top"); done
+    if [[ -e "$top/.git" ]]; then printf '%s\n' "$top"; else printf '%s\n' "$d"; fi
 }

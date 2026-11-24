@@ -348,6 +348,16 @@ allowed = ["m"]')"
 printf '[llm]\nallowed = ["m2"]\n' > "$PROJ/.cct.local.toml"
 mkdir -p "$PROJ/.code-copilot-team"; printf '[llm]\nallowed = ["m2"]\n' > "$PROJ/.code-copilot-team/config.toml"
 assert_eq "policy: .cct.local.toml and the legacy config.toml are never read" "0|no||" "$(policy -)"
+# TOML may quote the table's name: still the [llm] table, read or refused as such.
+assert_eq "policy: a quoted table name is the same [llm] table" "0|yes|m|" "$(policy '["llm"]
+allowed = ["m"]')"
+assert_eq "policy: ...single-quoted and spaced too" "0|yes|m|" "$(policy "[ 'llm' ]
+allowed = [\"m\"]")"
+assert_eq "policy: a quoted dotted key at the top is refused, never ignored" \
+    "1|no||$PROJ/.cct.toml line 1: write the project's LLM restriction as an [llm] table with allowed = [...]" "$(policy '"llm".allowed = ["m"]')"
+assert_eq "policy: [[llm]] is refused, never ignored" \
+    "1|no||$PROJ/.cct.toml line 1: '[[llm]]' is not accepted: projects restrict, never grant (only [llm] allowed = [...])" "$(policy '[[llm]]
+allowed = ["m"]')"
 # A restriction that cannot be read is never read as none.
 printf '[llm]\nallowed = ["m"]\n' > "$PROJ/.cct.toml"; chmod 000 "$PROJ/.cct.toml"
 assert_eq "policy: a .cct.toml that cannot be read is refused by name" "1|no||cannot read $PROJ/.cct.toml" "$(policy =)"

@@ -635,6 +635,11 @@ printf '[llm]\nallowed = ["opus"]\n' > "$PROJ/.cct.toml"; printf '[llm]\nallowed
 refused "project policy: ...so a personal file cannot widen the committed list" \
     "--llm deepseek is not allowed in this project" -- --llm deepseek -p x
 rm -f "$PROJ/.cct.toml" "$PROJ/.cct.local.toml"
+LOCKED="$TMP/locked-proj"; mkdir -p "$LOCKED"; chmod 000 "$LOCKED"
+refused "project policy: an interactive launch into a directory it cannot enter is refused" \
+    "cannot enter $LOCKED, so its project's restriction cannot be read" -- --shell cmux --llm deepseek "$LOCKED"
+assert_eq "project policy: ...nothing was typed" "" "$(cat "$MUX_LOG")"
+chmod 700 "$LOCKED"
 
 echo ""
 echo "========================================="

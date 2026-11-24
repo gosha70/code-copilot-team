@@ -2190,9 +2190,12 @@ case "${1:-}" in
                 exec "${CLAUDE_CMD[@]}"
             fi
             # Refused here, before any session vehicle is touched. A
-            # directory that does not exist is start_session's error.
+            # directory that does not exist is start_session's error; one
+            # it cannot enter is refused, its .cct.toml being unreadable.
             if [[ -d "${1:-.}" ]]; then
-                llm_prepare "$(cd "${1:-.}" && pwd)"
+                llm_project=$(cd "${1:-.}" 2>/dev/null && pwd) \
+                    || llm_refuse "cannot enter ${1:-.}, so its project's restriction cannot be read"
+                llm_prepare "$llm_project"
             fi
         else
             # The notice belongs where a session is about to start, not on
