@@ -299,6 +299,16 @@ compat nope >/dev/null 2>"$TMP/err"; RC=$?
 assert_eq "an unknown target is a usage error" "2" "$RC"
 compat --harness vim >/dev/null 2>&1; RC=$?
 assert_eq "an unknown harness is a usage error" "2" "$RC"
+# --json when it cannot answer: the error envelope, one JSON document and
+# nothing else (stdout and stderr together), and the text form's exit code.
+lone() { printf '%s|%s|%s' "$RC" "$(jq -r '"\(.command)|\(.error)"' <<< "$OUT" 2>/dev/null)" "$(jq -s length <<< "$OUT" 2>/dev/null)"; }
+OUT=$(compat nope --json 2>&1); RC=$?; ERR_TARGET="$OUT"
+assert_eq "json: an unknown target, the error envelope alone" \
+    "2|compatibility|unknown llm 'nope' (cct llm list shows the catalog)|1" "$(lone)"
+echo 'not json' > "$TMP/rules-bad.json"
+OUT=$(RULES_OVERRIDE="$TMP/rules-bad.json" compat --json 2>&1); RC=$?
+assert_eq "json: a rule table that cannot be read, the error envelope alone" \
+    "2|compatibility|cannot read the compatibility rule table: $TMP/rules-bad.json|1" "$(lone)"
 assert_contains "a harness with no binding says so" "$(compat --harness codex)" "has no binding for codex"
 assert_eq "one target" "1|m" "$(compat m --json | jq -r '"\(.targets | length)|\(.targets[0].target)"')"
 assert_contains "cct help documents compatibility" "$(bash "$CCT" help 2>&1)" "cct llm compatibility [<target>]"
@@ -308,16 +318,18 @@ for py in python3 python3.13 python3.12 python3.11; do
     if command -v "$py" >/dev/null 2>&1 && "$py" -c 'import jsonschema' >/dev/null 2>&1; then PY_SCHEMA="$py"; break; fi
 done
 if [[ -n "$PY_SCHEMA" ]]; then
-    if printf '%s' "$JSON" | "$PY_SCHEMA" -c '
+    for doc in JSON ERR_TARGET; do
+        if printf '%s' "${!doc}" | "$PY_SCHEMA" -c '
 import json, sys, jsonschema
 schema = json.load(open(sys.argv[1]))
 jsonschema.Draft202012Validator.check_schema(schema)
 jsonschema.Draft202012Validator(schema).validate(json.load(sys.stdin))' "$SCHEMA" >/dev/null 2>&1; then
-        PASS=$((PASS+1)); echo "  PASS: schema: the compatibility document"
-    else FAIL=$((FAIL+1)); echo "  FAIL: schema: the compatibility document does not match $SCHEMA"; fi
+            PASS=$((PASS+1)); echo "  PASS: schema: the $doc document"
+        else FAIL=$((FAIL+1)); echo "  FAIL: schema: the $doc document does not match $SCHEMA"; fi
+    done
 else
-    SKIPPED=1
-    echo "  SKIP: jsonschema not installed — the compatibility document was not validated"
+    SKIPPED=2
+    echo "  SKIP: jsonschema not installed — the two compatibility documents were not validated"
 fi
 
 # ── doctor's LLM catalog section (FR-28) ──
@@ -329,7 +341,13 @@ assert_eq "doctor: the catalog, then one row per target" \
 assert_contains "doctor: a row gives the state and why" "$DOC" "incompatible: failed its test of 2026-11-23T20:00:00Z: tool_call"
 echo 'not json' > "$REC_DIR/u@ub.json"
 assert_contains "doctor: an unreadable record fails the section" "$(rows "$(cctx bash "$CCT" doctor --no-network --json 2>/dev/null)")" "test records=fail"
+DOC=$(RULES_OVERRIDE="$TMP/rules-bad.json" cctx bash "$CCT" doctor --no-network --json 2>/dev/null)
+assert_eq "doctor: a compatibility error fails the section with its message" \
+    "catalog=ok compatibility=fail|cannot read the compatibility rule table: $TMP/rules-bad.json" \
+    "$(rows "$DOC")|$(jq -r '.checks[] | select(.section == "LLM catalog" and .check == "compatibility") | .detail' <<< "$DOC")"
 rm -f "$HOME_DIR/.cct/llms.toml"
+OUT=$(compat --json 2>&1); RC=$?
+assert_eq "json: no catalog, the error envelope alone" "2|compatibility|no LLM catalog|1" "$(lone)"
 assert_eq "doctor: no catalog is skipped, not a failure" "catalog=skip" "$(rows "$(cctx bash "$CCT" doctor --no-network --json 2>/dev/null)")"
 
 echo ""

@@ -284,6 +284,27 @@ assert_eq "list --json, a catalog that cannot be read: exit 2 and the envelope a
 cctx "$BASE_HOME" -- llm show ghost --json; ERR_UNKNOWN="$OUT"
 assert_eq "show --json, an unknown llm: exit 2 and the envelope alone" \
     "2|show|unknown llm 'ghost' (cct llm list shows the catalog)" "$(json_err)"
+# A usage error: the same envelope, with no catalog (none was read), and a
+# null command when none was recognized.
+cctx "$BASE_HOME" -- llm list extra --json; ERR_USAGE="$OUT"
+assert_eq "list --json, a usage error: exit 2 and the envelope alone" "2|list|cct llm list takes no arguments" "$(json_err)"
+assert_eq "list --json, a usage error: ...with no catalog" "false" "$(jq 'has("catalog")' <<< "$OUT")"
+cctx "$BASE_HOME" -- llm show --json
+assert_eq "show --json, a usage error: exit 2 and the envelope alone" "2|show|usage: cct llm show <llm> [--json]" "$(json_err)"
+cctx "$BASE_HOME" -- llm validate a b --json
+assert_eq "validate --json, a usage error: exit 2 and the envelope alone" "2|validate|cct llm validate takes at most one file" "$(json_err)"
+cctx "$BASE_HOME" -- llm compatibility --bogus --json
+assert_eq "compatibility --json, a usage error: exit 2 and the envelope alone" \
+    "2|compatibility|cct llm compatibility: unknown option '--bogus'" "$(json_err)"
+cctx "$BASE_HOME" -- harness explain claude-code --json
+assert_eq "explain --json, a usage error: exit 2 and the envelope alone" \
+    "2|explain|usage: cct harness explain <harness> --llm <target> [--json]" "$(json_err)"
+cctx "$BASE_HOME" -- harness bogus --json
+assert_eq "harness --json, an unknown subcommand: a null command" \
+    "2|null|usage: cct harness explain <harness> --llm <target> [--json]" "$(json_err)"
+cctx "$BASE_HOME" -- llm frob --json; ERR_NO_COMMAND="$OUT"
+assert_eq "--json, an unknown command: a null command" \
+    "2|null|cct llm: unknown command 'frob' (list | show | validate | compatibility)" "$(json_err)"
 
 # ── every --json document against the schema ──
 cctx "$BASE_HOME" -- llm show m --json; SHOW="$OUT"
@@ -299,7 +320,7 @@ schema = json.load(open(sys.argv[1]))
 jsonschema.Draft202012Validator.check_schema(schema)
 jsonschema.Draft202012Validator(schema).validate(json.load(sys.stdin))' "$SCHEMA" >/dev/null 2>&1
 }
-SCHEMA_DOCS="LIST SHOW VALID BROKEN PLAN REFUSED ERR_MISSING ERR_INVALID ERR_EXPLAIN ERR_UNKNOWN"
+SCHEMA_DOCS="LIST SHOW VALID BROKEN PLAN REFUSED ERR_MISSING ERR_INVALID ERR_EXPLAIN ERR_UNKNOWN ERR_USAGE ERR_NO_COMMAND"
 if [[ -n "$PY_SCHEMA" ]]; then
     for doc in $SCHEMA_DOCS; do
         if schema_ok "${!doc}"; then PASS=$((PASS+1)); echo "  PASS: schema: the $doc document";

@@ -208,13 +208,13 @@
       "then": {"required": ["executable", "argv", "env_names", "env_clear", "overlay", "identity", "compatibility", "digests"]}
     },
     "error": {
-      "description": "A list, show, explain or compatibility that cannot answer: no catalog, a catalog with violations, or (show) an llm the catalog does not define. The exit code is the text form's: 2, or 1 for violations. validate reports these in its own form.",
+      "description": "A command that cannot answer. A usage error has no catalog (none was read), and a null command when no command was recognized. Otherwise the catalog is missing, has violations or cannot be read, show names an llm the catalog does not define, or compatibility cannot read its rule table or resolve its target. The exit code is the text form's: 2, or 1 for violations. validate reports a catalog it cannot read in its own form.",
       "type": "object",
-      "required": ["schema_version", "command", "catalog", "error"],
+      "required": ["schema_version", "command", "error"],
       "additionalProperties": false,
       "properties": {
         "schema_version": {"const": 1},
-        "command": {"enum": ["list", "show", "explain", "compatibility"]},
+        "command": {"enum": ["list", "show", "validate", "explain", "compatibility", null]},
         "catalog": {"type": "string"},
         "error": {"type": "string", "minLength": 1}
       }

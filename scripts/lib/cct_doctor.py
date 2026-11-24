@@ -440,6 +440,9 @@ def check_llm_catalog(repo: Path, report: Report) -> None:
     if compat is None:
         report.add(section, "compatibility", BAD, _no_answer("cct llm compatibility --json", code))
         return
+    if compat.get("error"):
+        report.add(section, "compatibility", BAD, compat["error"])
+        return
     for target in compat.get("targets", []):
         status = OK if target.get("state") == "supported" else WARN
         report.add(section, f"{target.get('target')} on {target.get('harness')}", status,
