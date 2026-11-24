@@ -729,12 +729,14 @@ lc_project_policy() {
     fi
     while IFS= read -r raw || [[ -n "$raw" ]]; do
         lineno=$((lineno + 1))
+        [[ "$lineno" -eq 1 ]] && raw="${raw#$'\xef\xbb\xbf'}"   # a UTF-8 byte-order mark
         ct_trim "$raw"
         line="$CT_LINE"
         if [[ -z "$line" || "${line:0:1}" == "#" ]]; then continue; fi
         if [[ "${line:0:1}" == "[" ]]; then
             in=0 root=0
-            if [[ "$line" =~ ^\[[[:space:]]*$LC_POLICY_TABLE_RE[[:space:]]*\]$ ]]; then
+            # The header may carry a comment, as TOML allows.
+            if [[ "$line" =~ ^\[[[:space:]]*$LC_POLICY_TABLE_RE[[:space:]]*\][[:space:]]*(#.*)?$ ]]; then
                 in=1
             elif [[ "$line" =~ ^\[\[?[[:space:]]*$LC_POLICY_TABLE_RE[[:space:]]*(\.|\]\]) ]]; then
                 LC_POLICY_ERR="$file line $lineno: '$line' is not accepted: projects restrict, never grant (only [$LC_POLICY_TABLE] $LC_POLICY_KEY = [...])"
@@ -791,16 +793,19 @@ lc_policy_allows() {
     printf '%s' "$LC_ALLOWED" | grep -qxF -e "$1" -e "$1@$2"
 }
 
-# lc_project_root <dir>: the project a launch in <dir> belongs to, by the
-# claude-code launcher's rule: its git top level, else the directory itself.
-# When git will not name the top level (a checkout it refuses to work in,
-# a broken worktree pointer, no git), the nearest directory holding .git
-# stands for it, so a work tree git refuses never hides its .cct.toml.
-lc_project_root() {
+# lc_project_roots <dir>: the directories whose .cct.toml restricts a launch
+# in <dir>, one per line: its git top level. When git names none, the
+# directory itself and, when it or a directory above it holds .git, the
+# nearest such directory too: git may be refusing a work tree there (a
+# checkout it will not work in, a broken worktree pointer) or finding none
+# on purpose (a ceiling directory). A project only restricts, so every
+# root's list applies.
+lc_project_roots() {
     local d top
     if top=$(git -C "$1" rev-parse --show-toplevel 2>/dev/null); then printf '%s\n' "$top"; return 0; fi
     d=$(cd "$1" 2>/dev/null && pwd -P) || { printf '%s\n' "$1"; return 0; }
+    printf '%s\n' "$d"
     top="$d"
     while [[ ! -e "$top/.git" && "$top" != "/" ]]; do top=$(dirname "$top"); done
-    if [[ -e "$top/.git" ]]; then printf '%s\n' "$top"; else printf '%s\n' "$d"; fi
+    if [[ -e "$top/.git" && "$top" != "$d" ]]; then printf '%s\n' "$top"; fi
 }

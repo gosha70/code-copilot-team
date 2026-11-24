@@ -355,6 +355,9 @@ assert_eq "policy: ...single-quoted and spaced too" "0|yes|m|" "$(policy "[ 'llm
 allowed = [\"m\"]")"
 assert_eq "policy: a quoted dotted key at the top is refused, never ignored" \
     "1|no||$PROJ/.cct.toml line 1: write the project's LLM restriction as an [llm] table with allowed = [...]" "$(policy '"llm".allowed = ["m"]')"
+assert_eq "policy: a header with a comment is the [llm] table" "0|yes|m|" "$(policy '[llm] # the team restriction
+allowed = ["m"]')"
+assert_eq "policy: ...and so is one after a byte-order mark" "0|yes|m|" "$(policy "$(printf '\357\273\277[llm]\nallowed = ["m"]')")"
 assert_eq "policy: [[llm]] is refused, never ignored" \
     "1|no||$PROJ/.cct.toml line 1: '[[llm]]' is not accepted: projects restrict, never grant (only [llm] allowed = [...])" "$(policy '[[llm]]
 allowed = ["m"]')"
