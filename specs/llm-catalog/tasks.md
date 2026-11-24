@@ -79,3 +79,17 @@ From A3 (digests), A6, A7 (part) and B6; plan.md, "Remaining slices".
 | S1.5 | Tests: the CLI suite (a planted secret and path token absent everywhere, the digest properties, the schema), a launch and its explanation agreeing, the usage message; pins, repo-structure and the CI step. No supervisor, routing or benchmark code changes, and their suites pass unchanged | FR-6, FR-7, FR-9, FR-27 | `tests/test-llm-cli.sh`, `tests/test-llm-launch.sh`, `tests/test-llm-catalog.sh`, `tests/test-shared-structure.sh`, `tests/test-counts.env`, `docs/repo-structure.md`, `.github/workflows/sync-check.yml` | [x] |
 | S1.6 | The guide, the CHANGELOG, and spec amendment 2 (`auto_compact_window` in the options digest) | FR-28, FR-9 | `docs/llm-catalog.md`, `CHANGELOG.md`, `spec.md` | [x] |
 | S1.7 | Gates: suites, validate-spec, origin alignment, doc accuracy, `pre-pr-check.sh --closes <S1 issue>`, peer review, PR "Part of #400" | all S1 | repository gates | [ ] |
+
+## S2 — compatibility, read-only (plan ruled 2026-11-23)
+
+From A2, A4 and A9 (doctor); plan.md, "Remaining slices". Launches do not
+change.
+
+| # | Task | Requirement(s) | File(s) | Done |
+|---|---|---|---|---|
+| S2.1 | State-file primitives: `0700` directories, `0600` files, same-directory temp and rename under a lock directory (pid, host, time; reclaimed for a dead pid on this host, or after ten minutes for another host's), symlink refusal, a TERM-interrupted write cleaned at once and a killed writer's temporary file by the next writer; tests with a killed lock holder, concurrent writers and each stale-lock rule | FR-29 | `scripts/lib/cct-statefile.sh`, `tests/test-cct-statefile.sh` | [x] |
+| S2.2 | The rule table as data with `rule_version`: protocols (Codex and Pi from S0), quirks, managed providers (amendment 3), required and conditional capabilities; pinned to its version; kept in agreement with the Claude Code adapter's static checks | FR-14 | `shared/llm/compat-rules.json`, `tests/test-llm-compat.sh` | [x] |
+| S2.3 | The five states keyed by the evidence digest (launch identity, options, harness version, rule version), with what changed when a record no longer applies; two-part records through the state-file primitives; a malformed record refused by name | FR-13, FR-16, FR-29 | `scripts/lib/llm-compat.sh`, `tests/test-llm-compat.sh` | [x] |
+| S2.4 | `cct llm compatibility [<target>] [--harness <h>] [--json]` and its schema; `cct doctor`'s LLM catalog section | FR-6, FR-28 | `scripts/llm-cli.sh`, `scripts/cct`, `shared/schemas/llm-catalog-cli.schema.json`, `scripts/lib/cct_doctor.py` | [x] |
+| S2.5 | Pins, repo-structure, the CI steps; the guide, the CHANGELOG; spec amendment 3 and the FR-29 departure for the owner's ruling | FR-28 | `tests/test-counts.env`, `tests/test-shared-structure.sh`, `tests/test-llm-catalog.sh`, `docs/repo-structure.md`, `.github/workflows/sync-check.yml`, `docs/llm-catalog.md`, `CHANGELOG.md`, `spec.md` | [x] |
+| S2.6 | Gates: suites, validate-spec, origin alignment, doc accuracy, `pre-pr-check.sh --closes <S2 issue>`, peer review, PR "Part of #400" | all S2 | repository gates | [ ] |

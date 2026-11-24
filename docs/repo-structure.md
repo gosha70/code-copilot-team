@@ -8,6 +8,7 @@ code-copilot-team/
 │   ├── skills/                          24 skills (SKILL.md format, open Agent Skills spec)
 │   ├── docs/                            8 tool-agnostic reference docs
 │   ├── review/                          Independent-reviewer sources (CODE_REVIEW.md, loader, project-config template)
+│   ├── llm/compat-rules.json            The LLM compatibility rule table: protocols, quirks, capabilities per harness (#400)
 │   ├── templates/                       11 stacks × PROJECT.md + commands/
 │   ├── templates/sdd/                   10 SDD templates (spec, plan, tasks, automation, collaboration, lessons-learned, pitch, hill-chart, cycle-retro, cooldown-report), plus validate-pitch.sh
 │   └── templates/provider-profile-template.toml  Peer provider profile seed
@@ -45,10 +46,12 @@ code-copilot-team/
 │   ├── providers-health.sh              Peer provider availability diagnostics
 │   ├── cct-home.sh                      `cct home [show|migrate]`: the one mover between the legacy home and ~/.cct (#411)
 │   ├── lib/cct-home.sh                  The CCT home resolver, ${CCT_HOME:-~/.cct} with the 2.1.x legacy fallback (#411)
-│   ├── llm-cli.sh                       `cct llm list|show|validate` and `cct harness explain`: read-only views of the LLM catalog, `--json` (#479, #400)
+│   ├── llm-cli.sh                       `cct llm list|show|validate|compatibility` and `cct harness explain`: read-only views of the LLM catalog, `--json` (#479, #400)
 │   ├── lib/llm-catalog.sh               The LLM catalog ${CCT_HOME:-~/.cct}/llms.toml: parse, validate, resolve a `--llm` target (#479)
 │   ├── lib/llm-adapters/claude-code.sh  What a catalog binding sets and removes in a Claude Code launch (#479)
 │   ├── lib/llm-resolve.sh               The one resolver for a `--llm` target: the LaunchPlan and its three digests (#400)
+│   ├── lib/llm-compat.sh                A target's compatibility state from the rule table, the harness and the test records (#400)
+│   ├── lib/cct-statefile.sh             Private, locked, atomic writes for the records CCT keeps in the user home (#400)
 │   ├── lib/cct-toml.sh                  The constrained-TOML line lexer shared by routing.toml and llms.toml (#479)
 │   ├── lib/cct-endpoint.sh              The endpoint origin sanitizer and base-URL rule, shared by routing and the LLM catalog (#479)
 │   ├── setup-reviewer.sh                Copilot independent-reviewer installer (Codex first)
@@ -83,6 +86,8 @@ code-copilot-team/
 │   ├── test-llm-catalog.sh            116 LLM catalog + `cct llm` tests (#479)
 │   ├── test-llm-launch.sh             188 `claude-code --llm` launch tests (#479)
 │   ├── test-llm-cli.sh                79 `cct llm show`, `cct harness explain` and `--json` tests (#400)
+│   ├── test-cct-statefile.sh          46 state-file tests: modes, locks, killed and concurrent writers (#400)
+│   ├── test-llm-compat.sh             68 compatibility state, record, `cct llm compatibility` and doctor tests (#400)
 │   ├── test-wiki-setup.sh             54 managed wiki-studio install tests (#384)
 │   ├── test-wiki-launcher.sh          24 provenance-bound wiki launcher + alias tests (#384)
 │   ├── test-wiki-schema.sh            20 schema reconciliation + fingerprint tests (needs the managed .venv; #384)

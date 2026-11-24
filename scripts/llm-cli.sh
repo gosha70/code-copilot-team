@@ -9,6 +9,10 @@
 #   cct llm validate [file] [--json]   check the catalog (default: the one in
 #                                      the CCT home); every violation by line
 #                                      and name
+#   cct llm compatibility [<target>] [--harness <h>] [--json]
+#                                      each target's state (supported,
+#                                      unverified, unavailable, unsupported,
+#                                      incompatible) and the evidence for it
 #   cct harness explain <harness> --llm <target> [--json]
 #                                      the launch plan: what a launch would
 #                                      set and remove, by name, its digests,
@@ -24,8 +28,9 @@
 # define) prints under --json the envelope with an error field, alone, and
 # exits as its text form does.
 #
-# Exit codes: 0 ok; 1 the catalog has violations; 2 usage, or no readable
-# catalog; 3 `explain` of a launch that would be refused.
+# Exit codes: 0 ok; 1 the catalog has violations; 2 usage, no readable
+# catalog, or a compatibility record that cannot be read (named); 3
+# `explain` of a launch that would be refused.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,6 +40,10 @@ source "$SCRIPT_DIR/lib/llm-catalog.sh"
 source "$SCRIPT_DIR/lib/llm-adapters/claude-code.sh"
 # shellcheck source=lib/llm-resolve.sh
 source "$SCRIPT_DIR/lib/llm-resolve.sh"
+# shellcheck source=lib/cct-statefile.sh
+source "$SCRIPT_DIR/lib/cct-statefile.sh"
+# shellcheck source=lib/llm-compat.sh
+source "$SCRIPT_DIR/lib/llm-compat.sh"
 
 LLM_EXAMPLE_REL="shared/templates/llm/llms.toml.example"
 LLM_NO_CATALOG="no LLM catalog"
@@ -52,6 +61,10 @@ USAGE
   cct llm validate [file] [--json]  check the catalog (default: llms.toml in
                                     the CCT home); every violation by line
                                     and name
+  cct llm compatibility [<target>] [--harness <h>] [--json]
+                                    each target's state and the evidence for
+                                    it, from the catalog, the rule table and
+                                    the test records
   cct harness explain <harness> --llm <target> [--json]
                                     what a launch would set and remove, by
                                     name, and why it would be refused
@@ -357,6 +370,78 @@ cmd_explain() {
     return 0
 }
 
+# Each target's state and the evidence for it (FR-13, FR-16): every binding
+# in catalog order, those of one harness, or one target.
+cmd_compatibility() {  # <target or empty> <harness or empty> <json>
+    local target="$1" only="$2" json="$3" l b bl h t rc worst=0 pairs="" rec
+    local jrows='[]' rows="" w1=6 w2=7 w3=5 f1 f2 f3 f4 rest hv=""
+    load_catalog compatibility "$json" || return $?
+    if ! lcm_load_rules; then echo "cct llm: $LCM_ERR" >&2; return 2; fi
+    if [[ -n "$target" ]]; then
+        pairs="${only:-$LLM_CC_HARNESS}${CT_US}$target"$'\n'
+    else
+        while IFS= read -r l; do
+            [[ -z "$l" ]] && continue
+            while IFS= read -r b; do
+                [[ -z "$b" ]] && continue
+                bl=$(lc_get "bindings.$b" llm) || bl=""
+                [[ "$bl" == "$l" ]] || continue
+                h=$(lc_get "bindings.$b" harness) || h=""
+                [[ -z "$only" || "$h" == "$only" ]] || continue
+                pairs="$pairs$h${CT_US}$(target_of "$l" "$b" "$h")"$'\n'
+            done <<< "$(lc_ids bindings)"
+        done <<< "$(lc_ids llms)"
+    fi
+
+    while IFS= read -r rec; do
+        [[ -z "$rec" ]] && continue
+        h="${rec%%"$CT_US"*}"; t="${rec#*"$CT_US"}"
+        rc=0; lcm_state "$h" "$t" || rc=$?
+        if [[ "$rc" -eq 1 ]]; then
+            echo "cct llm compatibility: $LCM_ERR" >&2
+            return 2
+        fi
+        if [[ "$rc" -eq 2 ]]; then
+            worst=2
+            echo "cct llm compatibility: $LCM_ERR" >&2
+        fi
+        [[ -n "$LCM_HV" ]] && hv="$LCM_EXE $LCM_HV"
+        rows="${rows}$t${CT_US}$h${CT_US}$LCM_STATE${CT_US}$LCM_REASON"$'\n'
+        [[ ${#t} -gt $w1 ]] && w1=${#t}
+        [[ ${#h} -gt $w2 ]] && w2=${#h}
+        [[ ${#LCM_STATE} -gt $w3 ]] && w3=${#LCM_STATE}
+        jrows=$(jq -c --arg t "$t" --arg l "$LR_LLM" --arg b "$LR_BINDING" --arg h "$h" \
+            --arg s "$LCM_STATE" --arg r "$LCM_REASON" --argjson d "$LCM_DEGRADED" \
+            --argjson e "$LCM_EVIDENCE" --argjson rec "${LCM_RECORD:-null}" '
+            def brief: if . == null then null else {at, outcome} end;
+            . + [{target: $t, llm: $l, binding: $b, harness: $h, state: $s, reason: $r,
+                  degraded: $d, evidence: $e,
+                  latest_attempt: ($rec.latest_attempt // null | brief),
+                  latest_conclusive: ($rec.latest_conclusive // null | brief)}]' <<< "$jrows")
+    done <<< "$pairs"
+
+    if [[ "$json" == 1 ]]; then
+        envelope compatibility "$(jq -nc --arg f "$CATALOG" --argjson rv "$(lcm_rule_version)" --argjson t "$jrows" \
+            '{catalog: $f, rule_version: $rv, targets: $t}')"
+        return "$worst"
+    fi
+    if [[ -z "$rows" ]]; then
+        echo "The catalog at $CATALOG has no binding${only:+ for $only}."
+        return "$worst"
+    fi
+    printf "%-${w1}s  %-${w2}s  %-${w3}s  %s\n" "TARGET" "HARNESS" "STATE" "WHY"
+    while IFS= read -r rec; do
+        [[ -z "$rec" ]] && continue
+        f1="${rec%%"$CT_US"*}"; rest="${rec#*"$CT_US"}"
+        f2="${rest%%"$CT_US"*}"; rest="${rest#*"$CT_US"}"
+        f3="${rest%%"$CT_US"*}"; f4="${rest#*"$CT_US"}"
+        printf "%-${w1}s  %-${w2}s  %-${w3}s  %s\n" "$f1" "$f2" "$f3" "$f4"
+    done <<< "$rows"
+    echo ""
+    echo "Rule version $(lcm_rule_version)${hv:+; $hv}. Computed from the catalog, the rule table and the test records; nothing was sent anywhere."
+    return "$worst"
+}
+
 # --json may come anywhere among a command's arguments.
 JSON=0
 ARGS=()
@@ -380,6 +465,21 @@ case "$cmd" in
         if [[ $# -gt 1 ]]; then echo "cct llm validate takes at most one file" >&2; exit 2; fi
         cmd_validate "${1:-}" "$JSON"
         ;;
+    compatibility)
+        t="" h=""
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --harness)   h="${2:-}"; [[ -n "$h" ]] || { echo "cct llm compatibility: --harness needs a harness" >&2; exit 2; }; shift 2 ;;
+                --harness=*) h="${1#*=}"; shift ;;
+                -*)          echo "cct llm compatibility: unknown option '$1'" >&2; exit 2 ;;
+                *)           if [[ -z "$t" ]]; then t="$1"; shift; else echo "cct llm compatibility: one target" >&2; exit 2; fi ;;
+            esac
+        done
+        if [[ -n "$h" && " $LC_HARNESSES " != *" $h "* ]]; then
+            echo "cct llm compatibility: unknown harness '$h' (one of: ${LC_HARNESSES// /, })" >&2; exit 2
+        fi
+        cmd_compatibility "$t" "$h" "$JSON"
+        ;;
     harness)
         # `cct harness explain <harness> --llm <target>`, dispatched here by scripts/cct.
         sub="${1:-}"; [[ $# -gt 0 ]] && shift
@@ -401,5 +501,5 @@ case "$cmd" in
         cmd_explain "$h" "$t" "$JSON"
         ;;
     help|-h|--help) usage ;;
-    *) echo "cct llm: unknown command '$cmd' (list | show | validate)" >&2; usage >&2; exit 2 ;;
+    *) echo "cct llm: unknown command '$cmd' (list | show | validate | compatibility)" >&2; usage >&2; exit 2 ;;
 esac

@@ -178,6 +178,14 @@ jobs:
       - name: LLM CLI tests
         run: bash tests/test-llm-cli.sh
 
+      # #400 S2: the state-file primitives every record is written through,
+      # and the compatibility states, records and doctor section.
+      - name: State-file tests
+        run: bash tests/test-cct-statefile.sh
+
+      - name: LLM compatibility tests
+        run: bash tests/test-llm-compat.sh
+
       # pre-pr-check.sh audits a PR's commits, body and title for close
       # keywords; `--closes none` is the mode for a PR that closes nothing
       # (#408). The suite drives it against a throwaway repository.

@@ -190,9 +190,9 @@ lr_plan_json() {
         --arg proto "$LR_PROTOCOL" --arg model "$LR_MODEL" \
         --arg state "$LR_STATE" --arg reason "$LR_REASON" \
         --arg dc "$LR_DIGEST_CATALOG" --arg dl "$LR_DIGEST_LAUNCH" --arg dopt "$LR_DIGEST_OPTIONS" \
-        --argjson refusal "$refusal" \
+        --argjson refusal "$refusal" --arg exe "$LLM_CC_EXECUTABLE" \
         '{schema_version: $v, harness: $h, target: $t, llm: $l, binding: $b,
-          executable: "claude", argv: [], env_names: $env, env_clear: $clear, overlay: [],
+          executable: $exe, argv: [], env_names: $env, env_clear: $clear, overlay: [],
           identity: {harness: $h, llm: $l, binding: $b, provider: $p, provider_kind: $kind,
                      endpoint: (if $origin == "" then null else $origin end),
                      protocol: (if $proto == "" then null else $proto end), model: $model},

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/gosha70/code-copilot-team/shared/schemas/llm-catalog-cli.schema.json",
   "title": "cct llm and cct harness explain --json output",
-  "description": "What `cct llm list|show|validate --json` and `cct harness explain <harness> --llm <target> --json` print (#400 FR-6, S1). No value of any variable appears: a credential is its variable's NAME and whether it is set, and an endpoint is its origin (scheme://host[:port]).",
+  "description": "What `cct llm list|show|validate|compatibility --json` and `cct harness explain <harness> --llm <target> --json` print (#400 FR-6, S1, S2). No value of any variable appears: a credential is its variable's NAME and whether it is set, and an endpoint is its origin (scheme://host[:port]).",
   "type": "object",
   "required": ["schema_version", "command"],
   "oneOf": [
@@ -10,7 +10,8 @@
     {"$ref": "#/$defs/show"},
     {"$ref": "#/$defs/validate"},
     {"$ref": "#/$defs/explain"},
-    {"$ref": "#/$defs/error"}
+    {"$ref": "#/$defs/error"},
+    {"$ref": "#/$defs/compatibility"}
   ],
   "$defs": {
     "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"},
@@ -207,15 +208,80 @@
       "then": {"required": ["executable", "argv", "env_names", "env_clear", "overlay", "identity", "compatibility", "digests"]}
     },
     "error": {
-      "description": "A list, show or explain that cannot answer: no catalog, a catalog with violations, or (show) an llm the catalog does not define. The exit code is the text form's: 2, or 1 for violations. validate reports these in its own form.",
+      "description": "A list, show, explain or compatibility that cannot answer: no catalog, a catalog with violations, or (show) an llm the catalog does not define. The exit code is the text form's: 2, or 1 for violations. validate reports these in its own form.",
       "type": "object",
       "required": ["schema_version", "command", "catalog", "error"],
       "additionalProperties": false,
       "properties": {
         "schema_version": {"const": 1},
-        "command": {"enum": ["list", "show", "explain"]},
+        "command": {"enum": ["list", "show", "explain", "compatibility"]},
         "catalog": {"type": "string"},
         "error": {"type": "string", "minLength": 1}
+      }
+    },
+    "compat_state": {"enum": ["supported", "unverified", "unavailable", "unsupported", "incompatible"]},
+    "attempt": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "required": ["at", "outcome"],
+          "additionalProperties": false,
+          "properties": {
+            "at": {"type": "string"},
+            "outcome": {"enum": ["pass", "fail", "unverifiable"]}
+          }
+        }
+      ]
+    },
+    "compatibility": {
+      "type": "object",
+      "required": ["schema_version", "command", "catalog", "rule_version", "targets"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {"const": 1},
+        "command": {"const": "compatibility"},
+        "catalog": {"type": "string"},
+        "rule_version": {"type": "integer"},
+        "targets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["target", "llm", "binding", "harness", "state", "reason", "degraded", "evidence", "latest_attempt", "latest_conclusive"],
+            "additionalProperties": false,
+            "properties": {
+              "target": {"type": "string"},
+              "llm": {"$ref": "#/$defs/id"},
+              "binding": {"$ref": "#/$defs/id"},
+              "harness": {"enum": ["claude-code", "codex", "pi", "kiro"]},
+              "state": {"$ref": "#/$defs/compat_state"},
+              "reason": {"type": "string"},
+              "degraded": {
+                "type": "array",
+                "items": {"enum": ["launch_identity", "options", "harness_version", "rule_version"]}
+              },
+              "evidence": {
+                "oneOf": [
+                  {"type": "null"},
+                  {
+                    "type": "object",
+                    "required": ["digest", "launch_identity", "options", "harness_version", "rule_version"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "digest": {"$ref": "#/$defs/digest"},
+                      "launch_identity": {"$ref": "#/$defs/digest"},
+                      "options": {"$ref": "#/$defs/digest"},
+                      "harness_version": {"type": "string"},
+                      "rule_version": {"type": "integer"}
+                    }
+                  }
+                ]
+              },
+              "latest_attempt": {"$ref": "#/$defs/attempt"},
+              "latest_conclusive": {"$ref": "#/$defs/attempt"}
+            }
+          }
+        }
       }
     }
   }

@@ -150,6 +150,24 @@ It also prints three digests:
 
 Later slices of #400 key compatibility records and session stamps on them. `shared/schemas/llm-catalog-cli.schema.json` describes the `--json` output. When a command cannot answer (there is no catalog, it has violations, or `show` names an llm it does not define), `--json` still prints the envelope, with an `error` field and nothing else, and exits as the text form does. A harness other than `claude-code`, and `pi-code --llm`, are refused with "not implemented" until their slice of #400 lands.
 
+## Compatibility
+
+```bash
+cct llm compatibility                  # every target's state, and why
+cct llm compatibility deepseek --json  # one target, with its evidence
+cct doctor                             # its "LLM catalog" section shows the same
+```
+
+Each target is in one of five states:
+
+- **supported:** its latest conclusive test passed every capability the binding needs, and nothing has changed since.
+- **unverified:** it was never tested, or something changed since its test. The reason says what changed: the launch identity, the options, the version of `claude`, or the rule version.
+- **unavailable:** its credential or base URL variable is not set, or `claude` is not installed.
+- **unsupported:** `claude` cannot speak the endpoint's protocol or honour a quirk it declares. The rules are data, in `shared/llm/compat-rules.json`, with a version.
+- **incompatible:** its latest conclusive test failed.
+
+The state is computed from the catalog, the rule table, the environment and the test records in `${CCT_HOME:-~/.cct}/llm-compat/`, and nothing is sent anywhere. A test that could not reach a verdict, for example one that timed out, never replaces a conclusive result. Launches do not use these states yet: an `unverified` target still launches with a notice, and the test that writes the records arrives with a later slice of #400.
+
 ## Refusals
 
 Each happens before Claude Code starts, with exit code 3 and the reason.
@@ -183,4 +201,4 @@ Resume a session with the target it was started with (`cct start --llm deepseek 
 
 ## Not in this version
 
-Specified in #400 and not built yet: a compatibility probe (`cct llm test`), so every launchable target reads `unverified`; a record of each session's target, with resume restored or refused from it; a Studio page; a project's own allow-list; and `--llm` on the Codex, Pi and Kiro launchers.
+Specified in #400 and not built yet: a compatibility probe (`cct llm test`), so no test records exist yet and every launchable target reads `unverified`; launches gated on the compatibility state; a record of each session's target, with resume restored or refused from it; a Studio page; a project's own allow-list; and `--llm` on the Codex, Pi and Kiro launchers.

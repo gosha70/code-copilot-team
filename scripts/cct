@@ -98,6 +98,8 @@ COMMANDS
                     cct llm list                 the targets, and whether each can launch
                     cct llm show <llm>           one llm and what each binding launches
                     cct llm validate [file]      check the catalog, by line and name
+                    cct llm compatibility [<target>]
+                                                 each target's state, and the evidence
                   Each takes --json.
   harness         What a harness launch would do, before it runs:
                     cct harness explain <harness> --llm <target> [--json]

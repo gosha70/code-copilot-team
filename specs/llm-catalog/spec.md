@@ -542,7 +542,12 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   once the Codex adapter's capture proves the installed CLI accepts
   it; `pi`: openai-chat, openai-responses, anthropic-messages;
   `kiro`: managed only), the quirks it can honour, and the
-  capabilities each harness requires of a binding. A declared quirk
+  capabilities each harness requires of a binding. *Amended
+  2026-11-23, S2, plan amendment 3:* the table also states whether a
+  harness may be bound to a `managed` provider with no endpoint;
+  `claude-code` may, meaning Claude Code's own login (the launch-first
+  slice's departure 3). The table is `shared/llm/compat-rules.json`;
+  its Codex and Pi rows carry S0's captures. A declared quirk
   is configuration, never evidence. Changing the table changes
   `rule_version`, which degrades `supported` to `unverified`.
 - **FR-15 Behavioral probe.** `cct llm test <target> --harness <h>`
@@ -784,7 +789,11 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   interrupted write leaves no partial file and no stale temporary
   file; readers tolerate a missing file and refuse a malformed one by
   name. Probe temporary directories are created with `mktemp -d` and
-  removed on exit and on `INT`/`TERM`.
+  removed on exit and on `INT`/`TERM`. *S2 departure (2026-11-23), for
+  the owner's ruling:* `scripts/lib/cct-statefile.sh` uses the lock
+  directory on every host, never `flock`: on a shared home directory a
+  host holding `flock` and a host using the lock directory would not
+  exclude each other.
 - **FR-30 Competing variables cleared.** A selected launch removes
   from the child environment every credential, base-URL,
   custom-header and provider-switch variable of the harness that the
