@@ -13,7 +13,10 @@
 #            (<state>.lock) whose pid file, created exclusively
 #            (sf_dir_lock), names its OWNER PID: mkdir alone is not
 #            exclusive everywhere (uutils' is not, #530). Stale takeover
-#            requires threshold age AND a confirmed-dead owner; a
+#            requires threshold age AND a confirmed-dead owner, and
+#            happens under a guard (<state>.lock.reclaim, created
+#            exclusively) after the lock is judged again, so of two
+#            waiters taking over one stale lock, one wins (#534); a
 #            hung-but-LIVE owner keeps the lock (safety over
 #            liveness — two writers would lose updates even though
 #            rename prevents torn JSON), and malformed/unverifiable
@@ -60,9 +63,32 @@ if ! declare -F rs_journal >/dev/null 2>&1; then
 fi
 
 # ── lock (owner-aware) ───────────────────────────────────────────────
+# _rs_reclaim <lock> <dead pid>: free a stale lock whose owner was judged
+# dead, one reclaimer at a time (#534). Under a guard created exclusively
+# (<lock>.reclaim), the lock is judged again: it is freed only while it is
+# still past the threshold and its pid file still names that dead owner, so
+# a lock another waiter took over in between is never freed. Only the pid
+# file goes, then the directory. A guard left by a reclaimer killed inside
+# it is waited for and named, never removed by guesswork. Returns 0 freed;
+# 1 not (taken over again, another reclaimer holds the guard, or the
+# directory holds something else).
+_rs_reclaim() {
+    local guard="$1$SF_RECLAIM_SUFFIX" rc=1 now mtime
+    _sf_create "$guard" || return 1
+    now=$(rs_now)
+    mtime=$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null) || mtime=""
+    if [[ "$mtime" =~ ^[0-9]+$ && $((now - mtime)) -ge "$RS_LOCK_STALE_SEC" \
+          && "$(cat "$1/pid" 2>/dev/null)" == "$2" ]] && ! kill -0 "$2" 2>/dev/null; then
+        rm -f "$1/pid"
+        rmdir "$1" 2>/dev/null && rc=0
+    fi
+    rm -f "$guard"
+    return "$rc"
+}
 rs_lock() {
-    local dir="${RS_FILE}.lock" waited=0 rc
+    local dir="${RS_FILE}.lock" waited=0 rc stale_dead
     while :; do
+        stale_dead=0
         rc=0
         sf_dir_lock "$dir" pid "$$"$'\n' || rc=$?
         [[ "$rc" -eq 0 ]] && return 0
@@ -91,15 +117,21 @@ rs_lock() {
                 # lose updates even though rename prevents torn JSON.
                 rs_journal "lock_busy_live_owner" "lock $dir is ${age}s old but owner pid $owner is ALIVE — waiting, never stealing"
             else
-                rs_journal "lock_takeover" "stale lock (${age}s >= ${RS_LOCK_STALE_SEC}s) at $dir with CONFIRMED-DEAD owner pid $owner taken over"
-                rm -rf "$dir" 2>/dev/null || true
-                continue
+                stale_dead=1
+                if _rs_reclaim "$dir" "$owner"; then
+                    rs_journal "lock_takeover" "stale lock (${age}s >= ${RS_LOCK_STALE_SEC}s) at $dir with CONFIRMED-DEAD owner pid $owner taken over"
+                    continue
+                fi
             fi
         fi
         sleep 1
         waited=$((waited + 1))
         if [[ "$waited" -gt $((RS_LOCK_STALE_SEC * 2)) ]]; then
-            echo "routing-state: could not acquire $dir (busy)" >&2
+            if [[ "$stale_dead" -eq 1 && ( -e "$dir$SF_RECLAIM_SUFFIX" || -L "$dir$SF_RECLAIM_SUFFIX" ) ]]; then
+                echo "routing-state: $dir is stale, but cannot be reclaimed while $dir$SF_RECLAIM_SUFFIX exists; remove it if no writer is reclaiming" >&2
+            else
+                echo "routing-state: could not acquire $dir (busy)" >&2
+            fi
             return 2
         fi
     done
