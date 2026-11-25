@@ -62,6 +62,14 @@ mkdir -p "$MOCK_BIN" "$FAKE_HOME/.cct" "$PROJ"
 # claude: argv, cwd and the whole environment.
 cat > "$MOCK_BIN/claude" << 'MOCK'
 #!/usr/bin/env bash
+# A session's stamp records the harness version (#400 FR-17), which the
+# launcher asks for before it starts claude: answered here, and logged
+# apart from the session launches the assertions read.
+if [[ "${1:-}" == "--version" ]]; then
+    echo "--version" >> "${MOCK_CLAUDE_LOG:?}.version"
+    echo "${MOCK_CLAUDE_VERSION:-2.1.332} (Claude Code)"
+    exit 0
+fi
 {
     printf 'ARGV:'; printf ' %q' "$@"; printf '\n'
     printf 'PWD:%s\n' "$PWD"
@@ -283,7 +291,7 @@ assert_eq "native: mutation — a launcher that selects by default is caught" "<
 new_logs
 run_launcher "${DIRTY[@]}" -- --llm deepseek -p "hello there" --output-format json
 assert_exit "selected: headless --llm launch succeeds" 0 "$RC"
-assert_contains "selected: --llm is taken out of claude's argv" "$(cat "$CLAUDE_LOG")" "ARGV: -p hello\\ there --output-format json"
+assert_contains "selected: --llm is taken out of claude's argv" "$(grep '^ARGV:' "$CLAUDE_LOG")" " -p hello\\ there --output-format json"
 assert_contains "selected: stdout is still pure claude output" "$(echo "$OUTPUT" | grep -v '^\[claude-code\]')" '{"subtype":"success","result":"mock output"}'
 assert_eq "selected: the endpoint's base URL" "https://api.deepseek.example/anthropic" "$(claude_env ANTHROPIC_BASE_URL)"
 assert_eq "selected: the credential reaches claude as the bearer token" "$SECRET" "$(claude_env ANTHROPIC_AUTH_TOKEN)"
@@ -317,7 +325,7 @@ assert_eq "selected: the credential is in no launcher log" "0" "$(grep -rlF "$SE
 
 new_logs
 run_launcher -- -p "after" --llm=deepseek
-assert_contains "selected: --llm=<target> after -p is honoured" "$(cat "$CLAUDE_LOG")" "ARGV: -p after"
+assert_contains "selected: --llm=<target> after -p is honoured" "$(grep '^ARGV:' "$CLAUDE_LOG")" " -p after"
 assert_eq "selected: ...and applied" "https://api.deepseek.example/anthropic" "$(claude_env ANTHROPIC_BASE_URL)"
 
 # ── The other credential shapes ──
@@ -472,13 +480,13 @@ assert_eq "in-pane: peer review and --llm compose" "true opus" "$(claude_env CCT
 
 # ── Interactive, a new cmux workspace: the typed command carries ids only ──
 new_logs
-run_launcher "${DIRTY[@]}" -- --shell cmux --continue --llm deepseek "$PROJ"
+run_launcher "${DIRTY[@]}" -- --shell cmux --verbose --llm deepseek "$PROJ"
 assert_exit "typed: launch succeeds" 0 "$RC"
 TYPED=$(cat "$MUX_LOG")
 assert_eq "typed: the outer launcher does not run claude" "0" "$(claude_ran)"
 assert_contains "typed: the banner says which LLM was selected" "$OUTPUT" "LLM:     deepseek (DeepSeek · deepseek-main[1m] · https://api.deepseek.example)"
 assert_contains "typed: the command names the target" "$TYPED" "--llm deepseek"
-assert_contains "typed: ...re-runs this launcher in the pane" "$TYPED" "CCT_LLM_CHILD=1 $LAUNCHER --llm deepseek --continue"
+assert_contains "typed: ...re-runs this launcher in the pane" "$TYPED" "CCT_LLM_CHILD=1 $LAUNCHER --llm deepseek --verbose"
 assert_contains "typed: ...in the project" "$TYPED" "cd $PROJ && exec env"
 assert_not_contains "typed: the credential is not typed" "$TYPED" "$SECRET"
 assert_not_contains "typed: the endpoint is not typed" "$TYPED" "deepseek.example"
@@ -493,7 +501,7 @@ pane() {  # [VAR=value ...] : runs $TYPED as the pane's shell would
 }
 pane "${DIRTY[@]}"
 assert_exit "typed: the pane's command runs" 0 "$RC"
-assert_contains "typed: claude gets the resume flag and no --llm" "$(grep '^ARGV:' "$CLAUDE_LOG")" "ARGV: --continue"
+assert_contains "typed: claude gets the forwarded flag and no --llm" "$(grep '^ARGV:' "$CLAUDE_LOG")" "ARGV: --verbose"
 assert_eq "typed: the pane applies the selection" "https://api.deepseek.example/anthropic" "$(claude_env ANTHROPIC_BASE_URL)"
 assert_eq "typed: the credential is read in the pane" "$SECRET" "$(claude_env ANTHROPIC_AUTH_TOKEN)"
 assert_eq "typed: the ambient key is removed in the pane" "<unset>" "$(claude_env ANTHROPIC_API_KEY)"
@@ -653,6 +661,158 @@ if denied -x "$LOCKED" "$T1" "$T2"; then
     assert_eq "$T2" "" "$(cat "$MUX_LOG")"
 fi
 chmod 700 "$LOCKED"
+
+# ── Sessions and resume (#400 S4: FR-17, FR-18, FR-19, D9) ──
+STAMPS="$FAKE_HOME/.cct/llm-sessions/claude-code"
+REAL_PROJ=$(cd "$PROJ" && pwd -P)
+UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+session_of() { grep '^ARGV:' "$CLAUDE_LOG" | tail -1 | grep -oE -- '--session-id [0-9a-f-]{36}' | awk '{print $2}'; }
+stamp() { cat "$STAMPS/$1.json" 2>/dev/null; }
+file_mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
+
+new_logs
+run_launcher -- --llm deepseek -p "a new session"
+S1=$(session_of)
+assert_exit "sessions: a new --llm session starts" 0 "$RC"
+assert_eq "sessions: claude gets a session id the launcher generated (D9)" "yes" "$([[ "$S1" =~ $UUID_RE ]] && echo yes || echo no)"
+assert_eq "sessions: its stamp is attempted, for the resolved target (FR-17)" "attempted deepseek@deepseek-claude deepseek-main[1m] anthropic-messages 2.1.332" \
+    "$(stamp "$S1" | jq -r '"\(.status) \(.llm)@\(.binding) \(.requested_model) \(.protocol) \(.harness_version)"')"
+assert_eq "sessions: ...with the three digests, the evidence digest and the compatibility state" "4 unverified" \
+    "$(stamp "$S1" | jq -r '"\([.digests[] | select(. != null)] | length) \(.compatibility.state)"')"
+assert_eq "sessions: ...no gate yet, the project, and no effective model before the harness's evidence" "none yet false $REAL_PROJ null" \
+    "$(stamp "$S1" | jq -r '"\(.gate.state) \(.gate.bypassed) \(.project) \(.effective_model)"')"
+assert_eq "sessions: ...and the names the launch cleared, as explain lists them (FR-30)" \
+    "$(jq -c .env_clear <<< "$EXPLAIN_JSON")" "$(stamp "$S1" | jq -c .env_clear)"
+assert_not_contains "sessions: the stamp holds no credential value" "$(stamp "$S1")" "$SECRET"
+assert_eq "sessions: the stamp is private" "600" "$(file_mode "$STAMPS/$S1.json")"
+assert_contains "sessions: the session id is said, to resume it by" "$OUTPUT" "session $S1 (resume it with --resume $S1)"
+
+# D9: the launcher chooses the id. A --session-id naming an existing session
+# would have that session's stamp replaced before claude refused the id.
+cp "$STAMPS/$S1.json" "$TMP/s1.saved"
+refused "sessions: a --session-id with --llm is refused: the launcher generates the id (D9)" \
+    "--session-id is not accepted with --llm" -- --llm opus -p x --session-id "$S1"
+assert_eq "sessions: ...and the stamp of the session it names is untouched" "same" \
+    "$(cmp -s "$STAMPS/$S1.json" "$TMP/s1.saved" && echo same || echo changed)"
+refused "sessions: ...in its --session-id=<id> form too, saying to drop it" "Drop --session-id" -- --llm opus -p x "--session-id=$S1"
+refused "sessions: a bare --continue with --llm is refused (FR-18)" "--continue resumes whichever session Claude Code picks" -- --llm deepseek -p x --continue
+# Claude Code acts on --continue before --resume, and on --teleport and
+# --from-pr before --resume too (2.1.332).
+refused "sessions: ...and so is --continue beside --resume <id>, which Claude Code acts on first" \
+    "--continue resumes whichever session Claude Code picks (it wins over --resume)" -- --llm deepseek -p x --resume "$S1" --continue
+refused "sessions: ...and --from-pr, a session Claude Code finds for itself" \
+    "--from-pr resumes a session Claude Code finds for itself" -- --llm deepseek -p x --from-pr 12
+refused "sessions: ...and --teleport" "--teleport resumes a session Claude Code finds for itself" -- --llm deepseek -p x --teleport=remote-1
+refused "sessions: ...and so is the resume picker" "the resume picker lets Claude Code choose the session" -- --llm deepseek -p x --resume
+refused "sessions: ...and a session named rather than given by its id" "the resume picker lets Claude Code choose the session" -- --llm deepseek -p x --resume my-session
+
+C1=$(stamp "$S1" | jq -r .created_at)
+# The reply Claude Code's transcript records for the session (S4's capture:
+# the project's directory is its path, every other character a dash).
+TRANSCRIPTS="$FAKE_HOME/.claude/projects/$(printf '%s' "$REAL_PROJ" | sed 's/[^A-Za-z0-9]/-/g')"
+mkdir -p "$TRANSCRIPTS"
+printf '%s\n' '{"type":"assistant","message":{"role":"assistant","model":"deepseek-main"}}' > "$TRANSCRIPTS/$S1.jsonl"
+# A stamp whose list of cleared names went stale (written by an older
+# launcher): the refresh writes this launch's list (FR-30).
+jq -c '.env_clear = ["STALE_NAME"] | .refreshed_at = "2026-01-01T00:00:00Z"' "$STAMPS/$S1.json" > "$TMP/s1.stale"
+cat "$TMP/s1.stale" > "$STAMPS/$S1.json"
+new_logs
+run_launcher -- --llm deepseek -p again --resume "$S1"
+assert_exit "sessions: resumed by its id with its own target" 0 "$RC"
+assert_eq "sessions: ...claude resumes that id, and no new id is added" "1 0" \
+    "$(grep '^ARGV:' "$CLAUDE_LOG" | grep -c -- "--resume $S1") $(grep '^ARGV:' "$CLAUDE_LOG" | grep -c -- '--session-id')"
+assert_eq "sessions: ...and the stamp is refreshed, its creation time kept" "$C1 yes" \
+    "$(stamp "$S1" | jq -r '"\(.created_at) \(if .refreshed_at != "2026-01-01T00:00:00Z" then "yes" else "no" end)"')"
+assert_eq "sessions: ...and established from the transcript's reply, with the model it names (FR-17)" "established deepseek-main" \
+    "$(stamp "$S1" | jq -r '"\(.status) \(.effective_model)"')"
+assert_eq "sessions: ...and its list of cleared names is this launch's" \
+    "$(jq -c .env_clear <<< "$EXPLAIN_JSON")" "$(stamp "$S1" | jq -c .env_clear)"
+refused "sessions: resumed with another target, refused, naming both (FR-18)" \
+    "session $S1 was started with deepseek@deepseek-claude, not opus@opus-claude" -- --llm opus -p x --resume "$S1"
+new_logs
+run_launcher -- --llm deepseek -p again "-r$S1"
+assert_eq "sessions: -r<id> as one argument is a resume by that id too, with no new id" "0 1 0" \
+    "$RC $(grep '^ARGV:' "$CLAUDE_LOG" | grep -c -- "-r$S1") $(grep '^ARGV:' "$CLAUDE_LOG" | grep -c -- '--session-id')"
+new_logs; run_launcher -- --llm deepseek -p hi --append-system-prompt "-respond tersely"; RA="$RC:$(claude_ran)"
+new_logs; run_launcher -- --llm deepseek -p -- "-rewrite the README"; RB="$RC:$(claude_ran)"
+assert_eq "sessions: an option's value or a prompt after -- that starts with -r is text, not a resume" "0:1 0:1" "$RA $RB"
+
+new_logs
+run_launcher "${DIRTY[@]}" -- -p "restore" --resume "$S1"
+assert_exit "sessions: resumed by its id without --llm" 0 "$RC"
+assert_contains "sessions: ...its stamped target is restored, and said" "$OUTPUT" "session $S1 was started with --llm deepseek@deepseek-claude: resuming it on that target"
+assert_eq "sessions: ...and applied over the shell's own" "https://api.deepseek.example/anthropic" "$(claude_env ANTHROPIC_BASE_URL)"
+new_logs
+run_launcher "${DIRTY[@]}" -- -p y --resume "$S1" -c
+assert_eq "sessions: without --llm, --continue beside --resume <id> restores nothing, and says what it does not check" \
+    "no 1 https://ambient-gateway.example" \
+    "$(grep -q 'resuming it on' <<< "$OUTPUT" && echo yes || echo no) $(grep -c 'this resumes whichever session Claude Code picks' <<< "$OUTPUT") $(claude_env ANTHROPIC_BASE_URL)"
+new_logs
+run_launcher "${DIRTY[@]}" -- -p fork-native --resume "$S1" --fork-session
+assert_eq "sessions: a fork without --llm is a new native session: nothing restored, no id added" \
+    "no https://ambient-gateway.example 0" \
+    "$(grep -q 'resuming it on' <<< "$OUTPUT" && echo yes || echo no) $(claude_env ANTHROPIC_BASE_URL) $(grep '^ARGV:' "$CLAUDE_LOG" | grep -c -- '--session-id')"
+NOSTAMP=99999999-8888-7777-6666-555555555555
+new_logs
+run_launcher "${DIRTY[@]}" -- -p native --resume "$NOSTAMP"
+assert_eq "sessions: a session without a stamp resumes natively, unchanged" "https://ambient-gateway.example" "$(claude_env ANTHROPIC_BASE_URL)"
+assert_not_contains "sessions: ...with nothing restored" "$OUTPUT" "resuming it on"
+assert_eq "sessions: ...no id added, and no stamp written" "0 no" \
+    "$(grep '^ARGV:' "$CLAUDE_LOG" | grep -c -- '--session-id') $([[ -e "$STAMPS/$NOSTAMP.json" ]] && echo yes || echo no)"
+refused "sessions: a session without a stamp is refused with --llm" "session $NOSTAMP has no stamp" -- --llm deepseek -p x --resume "$NOSTAMP"
+assert_eq "sessions: ...naming the ways out: resume it without --llm, or fork it" "1 1" \
+    "$(grep -c 'Resume it without --llm' <<< "$OUTPUT") $(grep -cF -- "--resume $NOSTAMP --fork-session --llm deepseek@deepseek-claude" <<< "$OUTPUT")"
+
+# The minimum version and the records are read for the stamp's compatibility
+# state only: before S3's gate no launch is refused on the state, and a
+# record that cannot be read refuses the launch by name, since the stamp
+# cannot be written (FR-17, FR-29).
+new_logs
+run_launcher MOCK_CLAUDE_VERSION=2.1.300 -- --llm deepseek -p old
+OLD=$(session_of)
+assert_eq "sessions: a claude older than the minimum still launches before S3's gate; its stamp says unavailable" \
+    "0:1 unavailable" "$RC:$(claude_ran) $(stamp "$OLD" | jq -r .compatibility.state)"
+COMPAT_REC="$FAKE_HOME/.cct/llm-compat/claude-code/deepseek@deepseek-claude.json"
+mkdir -p "$(dirname "$COMPAT_REC")"; chmod 700 "$FAKE_HOME/.cct/llm-compat" "$(dirname "$COMPAT_REC")"
+printf 'not a record' > "$COMPAT_REC"; chmod 600 "$COMPAT_REC"
+refused "sessions: a compatibility record that cannot be read refuses the launch, naming it" \
+    "the record $COMPAT_REC is malformed" -- --llm deepseek -p x
+rm -f "$COMPAT_REC"
+
+cp "$FAKE_HOME/.cct/llms.toml" "$TMP/llms.saved"
+sed -i.bak 's#https://api.deepseek.example/anthropic#https://moved.deepseek.example/anthropic#' "$FAKE_HOME/.cct/llms.toml"
+refused "sessions: a restored target whose launch identity changed is refused (FR-19)" \
+    "the launch identity of deepseek@deepseek-claude changed since session $S1 was stamped" -- -p x --resume "$S1"
+cp "$TMP/llms.saved" "$FAKE_HOME/.cct/llms.toml"
+sed -i.bak 's/^max_output_tokens = 32000$/max_output_tokens = 16000/' "$FAKE_HOME/.cct/llms.toml"
+new_logs
+run_launcher -- --llm deepseek -p x --resume "$S1"
+assert_eq "sessions: a tuning change is said, and the resume allowed (FR-19)" "0:1:1" \
+    "$RC:$(claude_ran):$(grep -c "the tuning options of deepseek@deepseek-claude changed since session $S1 was stamped" <<< "$OUTPUT")"
+cp "$TMP/llms.saved" "$FAKE_HOME/.cct/llms.toml"
+
+new_logs
+run_launcher -- --llm opus -p fork --resume "$S1" --fork-session
+F1=$(session_of)
+assert_exit "sessions: a fork onto another target starts a new session" 0 "$RC"
+assert_eq "sessions: ...under its own id, stamped with that target and its origin" "opus@opus-claude $S1" \
+    "$(stamp "$F1" | jq -r '"\(.llm)@\(.binding) \(.forked_from)"')"
+LISTED=$(env -i HOME="$FAKE_HOME" PATH="$MOCK_BIN:$PATH" TEST_DEEPSEEK_KEY="$SECRET" bash "$REPO_DIR/scripts/cct" llm sessions --json 2>&1)
+assert_eq "sessions: cct llm sessions lists what the launcher stamped, each resumable now" \
+    "deepseek@deepseek-claude true|opus@opus-claude true $S1" \
+    "$(jq -r --arg a "$S1" --arg f "$F1" '[(.sessions[] | select(.session_id == $a) | "\(.target) \(.resume.eligible)"),
+        (.sessions[] | select(.session_id == $f) | "\(.target) \(.resume.eligible) \(.forked_from)")] | join("|")' <<< "$LISTED" 2>&1)"
+
+new_logs
+run_launcher -- -p x --continue
+assert_contains "sessions: a native bare --continue says what it does not check, where stamps exist" "$OUTPUT" "this resumes whichever session Claude Code picks"
+mkdir -p "$TMP/stampless-home"
+new_logs
+run_launcher HOME="$TMP/stampless-home" -- -p x --continue
+assert_not_contains "sessions: ...and nothing where none exist, so a launcher that never used --llm is unchanged" "$OUTPUT" "whichever session"
+refused "sessions: a typed launch with --llm and --continue is refused" "--continue resumes whichever session" \
+    -- --shell cmux --continue --llm deepseek "$PROJ"
+assert_eq "sessions: ...before anything is typed" "" "$(cat "$MUX_LOG")"
 
 echo ""
 echo "========================================="

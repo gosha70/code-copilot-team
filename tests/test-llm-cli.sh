@@ -350,7 +350,138 @@ assert_eq "harness --json, an unknown subcommand: a null command" \
     "2|null|usage: cct harness explain <harness> --llm <target> [--project <dir>] [--json]" "$(json_err)"
 cctx "$BASE_HOME" -- llm frob --json; ERR_NO_COMMAND="$OUT"
 assert_eq "--json, an unknown command: a null command" \
-    "2|null|cct llm: unknown command 'frob' (list | show | validate | compatibility)" "$(json_err)"
+    "2|null|cct llm: unknown command 'frob' (list | show | validate | compatibility | sessions)" "$(json_err)"
+cctx "$BASE_HOME" -- llm sessions extra --json; ERR_SESSIONS="$OUT"
+assert_eq "sessions --json, a usage error: exit 2 and the envelope alone" "2|sessions|cct llm sessions: unknown argument 'extra'" "$(json_err)"
+cctx "$BASE_HOME" -- llm sessions --harness bogus --json
+assert_eq "sessions --json, an unknown harness: exit 2, naming the harnesses" \
+    "2|sessions|cct llm sessions: unknown harness 'bogus' (one of: claude-code, codex, pi, kiro)" "$(json_err)"
+
+# ── cct llm sessions (#400 S4: FR-6, FR-17, FR-18, FR-19) ──
+# Each stamp is written by the library a launch writes it with, from the
+# project, with a stand-in claude for the harness version, which the
+# compatibility state a resume computes needs too.
+mkdir -p "$TMP/bin"; printf '#!/bin/sh\necho "2.1.332 (Claude Code)"\n' > "$TMP/bin/claude"; chmod +x "$TMP/bin/claude"
+SESS_PROJ="$TMP/sess-proj"; mkdir -p "$SESS_PROJ"; SESS_PROJ=$(cd "$SESS_PROJ" && pwd -P)
+CLAUDE_DIR="$TMP/claude-config"   # Claude Code's own directory: its transcripts
+stamp_session() {  # <home> <target> <session-id>: the stamp a launch from the project writes
+    (cd "$SESS_PROJ" && env -u CCT_HOME CCT_HOME="$1" PATH="$TMP/bin:$PATH" TEST_LLM_KEY="$SECRET" bash -c '
+        for l in llm-catalog llm-adapters/claude-code llm-resolve cct-statefile llm-compat llm-sessions; do source "$1/scripts/lib/$l.sh"; done
+        lc_validate "$(lc_catalog_path)" >/dev/null && lr_resolve claude-code "$2" "$PWD" && lss_stamp_new claude-code "$3"
+    ' _ "$REPO_DIR" "$2" "$3")
+}
+sess() {  # <home> [VAR=value ...] -- <cct args>: cctx with Claude Code's directory and the stand-in claude
+    local h="$1"; shift
+    cctx "$h" CLAUDE_CONFIG_DIR="$CLAUDE_DIR" PATH="$TMP/bin:$PATH" "$@"
+}
+first() { jq -r ".sessions[0] | \"\(.resume.eligible)|\(.resume.reason)\"" <<< "$OUT"; }
+resume_of() { jq -r --arg id "$1" '.sessions[] | select(.session_id == $id) | "\(.resume.eligible)|\(.resume.reason)"' <<< "$OUT"; }
+SESS_HOME=$(home sessions)
+sess "$SESS_HOME" -- llm sessions
+assert_eq "sessions: none stamped yet, said, exit 0" \
+    "0|No claude-code session started with --llm has a stamp yet ($SESS_HOME/llm-sessions/claude-code)." "$RC|$OUT"
+
+SA=aaaaaaaa-0000-4000-8000-00000000000a; SB=bbbbbbbb-0000-4000-8000-00000000000b
+stamp_session "$SESS_HOME" m "$SA"; stamp_session "$SESS_HOME" own "$SB"
+# Claude Code names a project's directory after its path, every other
+# character a dash (S4's capture). It also records an API error as its own
+# assistant entry, which is not a reply.
+SLUG=$(printf '%s' "$SESS_PROJ" | sed 's/[^A-Za-z0-9]/-/g')
+mkdir -p "$CLAUDE_DIR/projects/$SLUG"
+printf '%s\n' '{"type":"user","message":{"role":"user","content":"hi"}}' \
+    '{"type":"assistant","message":{"role":"assistant","model":"model-one-0501"}}' > "$CLAUDE_DIR/projects/$SLUG/$SA.jsonl"
+printf '%s\n' '{"type":"user","message":{"role":"user","content":"hi"}}' \
+    '{"type":"assistant","isApiErrorMessage":true,"message":{"role":"assistant","model":"<synthetic>"}}' > "$CLAUDE_DIR/projects/$SLUG/$SB.jsonl"
+sess "$SESS_HOME" -- llm sessions --json; SESSIONS="$OUT"
+row() { jq -r --arg id "$1" ".sessions[] | select(.session_id == \$id) | $2" <<< "$SESSIONS"; }
+assert_eq "sessions --json: exit 0, both sessions, for claude-code" "0|2|claude-code" \
+    "$RC|$(jq '.sessions | length' <<< "$SESSIONS")|$(jq -r .harness <<< "$SESSIONS")"
+assert_eq "sessions: each with its target, requested model and project" "m@b|model-one|$SESS_PROJ" \
+    "$(row "$SA" '"\(.target)|\(.requested_model)|\(.project)"')"
+assert_eq "sessions: a reply in the harness's transcript establishes it, with the model the reply names" \
+    "established|model-one-0501|yes" "$(row "$SA" '"\(.status)|\(.effective_model)|\(if .established_at then "yes" else "no" end)"')"
+assert_eq "sessions: ...and its stamp keeps that" "established|model-one-0501" \
+    "$(jq -r '"\(.status)|\(.effective_model)"' "$SESS_HOME/llm-sessions/claude-code/$SA.json")"
+assert_eq "sessions: a transcript with only Claude Code's own API-error entry leaves it attempted, with no effective model" \
+    "attempted|null" "$(row "$SB" '"\(.status)|\(.effective_model)"')"
+assert_eq "sessions: both resumable now, with no reason" "true|null true|null" \
+    "$(row "$SA" '"\(.resume.eligible)|\(.resume.reason)"') $(row "$SB" '"\(.resume.eligible)|\(.resume.reason)"')"
+# Older than SB, so newest first is the reverse of the order the directory lists.
+jq '.refreshed_at = "2026-01-01T00:00:00Z"' "$SESS_HOME/llm-sessions/claude-code/$SA.json" > "$TMP/sa.json"
+cat "$TMP/sa.json" > "$SESS_HOME/llm-sessions/claude-code/$SA.json"
+sess "$SESS_HOME" -- llm sessions --json
+assert_eq "sessions: newest first" "$SB $SA" "$(jq -r '[.sessions[].session_id] | join(" ")' <<< "$OUT")"
+sess "$SESS_HOME" -- llm sessions; SESSIONS_TEXT="$OUT"
+assert_contains "sessions: the text names the harness" "$OUT" "claude-code sessions started with --llm, newest first"
+assert_eq "sessions: ...and a row per session: its id, target, model, state, resume and project" "1" \
+    "$(grep -F "$SA" <<< "$OUT" | grep -F 'm@b' | grep -F model-one-0501 | grep -F established | grep -wF yes | grep -cF "$SESS_PROJ")"
+mkdir -p "$TMP/other-proj"
+sess "$SESS_HOME" -- llm sessions --project "$SESS_PROJ" --json; IN_PROJ=$(jq '.sessions | length' <<< "$OUT")
+sess "$SESS_HOME" -- llm sessions --project "$TMP/other-proj" --json
+assert_eq "sessions --project: only the sessions started in that directory" "2 0" "$IN_PROJ $(jq '.sessions | length' <<< "$OUT")"
+sess "$SESS_HOME" -- llm sessions --harness pi --json; SESSIONS_PI="$OUT"
+assert_eq "sessions --harness: another harness's stamps, none before its slice" "0|pi|0" \
+    "$RC|$(jq -r .harness <<< "$OUT")|$(jq '.sessions | length' <<< "$OUT")"
+
+# What a resume by the session's id would refuse, each with its reason.
+sess "$SESS_HOME" TEST_LLM_KEY= -- llm sessions --json
+assert_eq "sessions: a target that cannot launch now is not resumable, and the other still is" \
+    "false|m@b is unavailable on claude-code: credential variable TEST_LLM_KEY is not set true" \
+    "$(jq -r --arg a "$SA" --arg b "$SB" '[(.sessions[] | select(.session_id == $a) | "\(.resume.eligible)|\(.resume.reason)"), (.sessions[] | select(.session_id == $b) | .resume.eligible)] | join(" ")' <<< "$OUT")"
+printf '[llm]\nallowed = ["own"]\n' > "$SESS_PROJ/.cct.toml"
+sess "$SESS_HOME" -- llm sessions --json
+assert_eq "sessions: a target its project no longer allows is not resumable" \
+    "false|--llm m@b is not allowed in this project: $SESS_PROJ/.cct.toml [llm].allowed lists own" "$(resume_of "$SA")"
+rm -f "$SESS_PROJ/.cct.toml"
+mkdir -p "$SESS_PROJ/.claude"; printf '{"env": {"ANTHROPIC_BASE_URL": "https://elsewhere.example"}}\n' > "$SESS_PROJ/.claude/settings.json"
+sess "$SESS_HOME" -- llm sessions --json
+assert_eq "sessions: a settings file setting a variable the launch controls makes it not resumable" \
+    "false|a Claude Code settings file sets a variable this launch must control ($SESS_PROJ/.claude/settings.json: ANTHROPIC_BASE_URL)" \
+    "$(resume_of "$SA")"
+rm -f "$SESS_PROJ/.claude/settings.json"
+COMPAT_REC="$SESS_HOME/llm-compat/claude-code/m@b.json"
+mkdir -p "$(dirname "$COMPAT_REC")"; chmod 700 "$SESS_HOME/llm-compat" "$(dirname "$COMPAT_REC")"
+printf 'not a record' > "$COMPAT_REC"; chmod 600 "$COMPAT_REC"
+sess "$SESS_HOME" -- llm sessions --json
+assert_eq "sessions: a compatibility record that cannot be read makes it not resumable, as the stamp's refresh would fail" \
+    "false|the compatibility state of m@b cannot be computed: the record $COMPAT_REC is malformed" "$(resume_of "$SA")"
+rm -f "$COMPAT_REC"
+# A fork's transcript opens with its source's history, each entry marked
+# forkedFrom: not this session's replies, so an API error alone after them
+# leaves the fork attempted.
+SD=dddddddd-0000-4000-8000-0000000000fd; stamp_session "$SESS_HOME" m "$SD"
+printf '%s\n' "{\"type\":\"assistant\",\"forkedFrom\":{\"sessionId\":\"$SA\",\"messageUuid\":\"u1\"},\"message\":{\"role\":\"assistant\",\"model\":\"model-one-0501\"}}" \
+    '{"type":"user","message":{"role":"user","content":"go on"}}' \
+    '{"type":"assistant","isApiErrorMessage":true,"message":{"role":"assistant","model":"<synthetic>"}}' > "$CLAUDE_DIR/projects/$SLUG/$SD.jsonl"
+sess "$SESS_HOME" -- llm sessions --json
+assert_eq "sessions: a fork whose own reply never came stays attempted, whatever its copied history says" \
+    "attempted|null" "$(jq -r --arg d "$SD" '.sessions[] | select(.session_id == $d) | "\(.status)|\(.effective_model)"' <<< "$OUT")"
+rm -f "$SESS_HOME/llm-sessions/claude-code/$SD.json"
+SC=cccccccc-0000-4000-8000-00000000000c; stamp_session "$SESS_HOME" m "$SC"
+mkdir -p "$CLAUDE_DIR/projects/-shortened-path-1a2b3c"
+printf '%s\n' '{"type":"assistant","message":{"role":"assistant","model":"model-one-0601"}}' > "$CLAUDE_DIR/projects/-shortened-path-1a2b3c/$SC.jsonl"
+sess "$SESS_HOME" -- llm sessions --json
+assert_eq "sessions: a transcript in a directory not named after the path (Claude Code shortens long ones) is found by its id" \
+    "established|model-one-0601" "$(jq -r --arg c "$SC" '.sessions[] | select(.session_id == $c) | "\(.status)|\(.effective_model)"' <<< "$OUT")"
+MOVED_HOME=$(home sess-moved); stamp_session "$MOVED_HOME" m "$SA"
+sed -i.bak 's#https://llm.example/#https://moved.example/#' "$MOVED_HOME/llms.toml"
+sess "$MOVED_HOME" -- llm sessions --json; SESSIONS_MOVED="$OUT"
+assert_eq "sessions: a target whose launch identity changed is not resumable (FR-19)" \
+    "false|the launch identity of m@b changed since the session was stamped (its provider, endpoint, protocol, auth header, model, credential or quirks)" "$(first)"
+sess "$MOVED_HOME" -- llm sessions
+assert_contains "sessions: ...said under the table, with its resume column no" "$OUT" "Not resumable now: $SA: the launch identity of m@b changed"
+NOCAT_HOME=$(home sess-nocat); stamp_session "$NOCAT_HOME" m "$SA"; mv "$NOCAT_HOME/llms.toml" "$NOCAT_HOME/llms.saved"
+sess "$NOCAT_HOME" -- llm sessions --json
+assert_eq "sessions: with no catalog the stamps are still listed, none resumable" \
+    "0|false|there is no LLM catalog at $NOCAT_HOME/llms.toml" "$RC|$(first)"
+BAD=dddddddd-0000-4000-8000-00000000000d
+printf 'not a stamp' > "$SESS_HOME/llm-sessions/claude-code/$BAD.json"
+sess "$SESS_HOME" -- llm sessions
+assert_eq "sessions: a stamp that cannot be read is named, the others listed, exit 2" "2|yes|yes" \
+    "$RC|$(grep -qF "the stamp of session $BAD cannot be read" <<< "$OUT" && echo yes || echo no)|$(grep -qF "$SA" <<< "$OUT" && echo yes || echo no)"
+rm -f "$SESS_HOME/llm-sessions/claude-code/$BAD.json"
+assert_eq "sessions: no credential value or endpoint path in any output" "0" \
+    "$(printf '%s\n' "$SESSIONS" "$SESSIONS_TEXT" "$SESSIONS_MOVED" | grep -cF -e "$SECRET" -e "$PATH_TOKEN")"
 
 # ── every --json document against the schema ──
 cctx "$BASE_HOME" -- llm show m --json; SHOW="$OUT"
@@ -367,6 +498,7 @@ jsonschema.Draft202012Validator.check_schema(schema)
 jsonschema.Draft202012Validator(schema).validate(json.load(sys.stdin))' "$SCHEMA" >/dev/null 2>&1
 }
 SCHEMA_DOCS="LIST SHOW VALID BROKEN PLAN REFUSED ERR_MISSING ERR_INVALID ERR_EXPLAIN ERR_UNKNOWN ERR_USAGE ERR_NO_COMMAND"
+SCHEMA_DOCS="$SCHEMA_DOCS SESSIONS SESSIONS_MOVED SESSIONS_PI ERR_SESSIONS"
 if [[ -n "$PY_SCHEMA" ]]; then
     for doc in $SCHEMA_DOCS; do
         if schema_ok "${!doc}"; then PASS=$((PASS+1)); echo "  PASS: schema: the $doc document";
@@ -375,8 +507,11 @@ if [[ -n "$PY_SCHEMA" ]]; then
     if schema_ok "$(jq -c '. + {targets: []}' <<< "$ERR_MISSING")"; then
         FAIL=$((FAIL+1)); echo "  FAIL: schema: an error envelope that also lists targets must match no form"
     else PASS=$((PASS+1)); echo "  PASS: schema: an error envelope that also lists targets matches no form"; fi
+    if schema_ok "$(jq -c '.sessions[0].resume.reason = null' <<< "$SESSIONS_MOVED")"; then
+        FAIL=$((FAIL+1)); echo "  FAIL: schema: a session not resumable must say why"
+    else PASS=$((PASS+1)); echo "  PASS: schema: a session not resumable must say why"; fi
 else
-    SCHEMA_SKIPPED=$(( $(wc -w <<< "$SCHEMA_DOCS") + 1 ))
+    SCHEMA_SKIPPED=$(( $(wc -w <<< "$SCHEMA_DOCS") + 2 ))
     SKIPPED=$((SKIPPED + SCHEMA_SKIPPED))
     echo "  SKIP: jsonschema not installed — the $SCHEMA_SKIPPED schema checks did not run"
 fi
@@ -423,6 +558,7 @@ fi
 HELP=$(bash "$CCT" help 2>&1)
 assert_contains "cct help documents show" "$HELP" "cct llm show <llm>"
 assert_contains "cct help documents harness explain" "$HELP" "cct harness explain <harness> --llm <target>"
+assert_contains "cct help documents sessions" "$HELP" "cct llm sessions"
 
 echo ""
 echo "========================================="

@@ -1,5 +1,5 @@
 {
-  "rule_version": 1,
+  "rule_version": 2,
   "capabilities": [
     "auth",
     "model_identity",
@@ -18,7 +18,7 @@
       "protocols": ["anthropic-messages"],
       "managed": true,
       "quirks": ["rejects-dynamic-tools"],
-      "min_version": null,
+      "min_version": "2.1.305",
       "required": ["auth", "model_identity", "streaming", "system_prompt", "tool_call", "tool_result", "output_parsing", "clean_exit", "limit_controls"],
       "conditional": ["reasoning_control", "image_input"]
     },

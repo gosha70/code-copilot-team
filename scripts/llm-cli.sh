@@ -13,6 +13,11 @@
 #                                      each target's state (supported,
 #                                      unverified, unavailable, unsupported,
 #                                      incompatible) and the evidence for it
+#   cct llm sessions [--harness <h>] [--project <dir>] [--json]
+#                                      the --llm sessions, from the stamps
+#                                      written when they started: target,
+#                                      model, state, project, and whether
+#                                      each can be resumed now (#400 S4)
 #   cct harness explain <harness> --llm <target> [--project <dir>] [--json]
 #                                      the launch plan: what a launch from
 #                                      that project (default: here) would
@@ -47,6 +52,8 @@ source "$SCRIPT_DIR/lib/llm-resolve.sh"
 source "$SCRIPT_DIR/lib/cct-statefile.sh"
 # shellcheck source=lib/llm-compat.sh
 source "$SCRIPT_DIR/lib/llm-compat.sh"
+# shellcheck source=lib/llm-sessions.sh
+source "$SCRIPT_DIR/lib/llm-sessions.sh"
 
 LLM_EXAMPLE_REL="shared/templates/llm/llms.toml.example"
 LLM_NO_CATALOG="no LLM catalog"
@@ -69,6 +76,10 @@ USAGE
                                     it, from the catalog, the rule table and
                                     the test records; a target alone means
                                     its claude-code binding
+  cct llm sessions [--harness <h>] [--project <dir>] [--json]
+                                    the --llm sessions, stamped when they
+                                    started: target, model, state, project,
+                                    and whether each can be resumed now
   cct harness explain <harness> --llm <target> [--project <dir>] [--json]
                                     what a launch from that project (default:
                                     here) would set and remove, by name, and
@@ -259,8 +270,8 @@ cmd_list() {
     return 0
 }
 
-_print_rows() {
-    local header="TARGET${CT_US}HARNESS${CT_US}MODEL${CT_US}ENDPOINT${CT_US}CREDENTIAL${CT_US}STATE"
+_print_rows() {  # [header]: ROWS in six columns, under cct llm list's header by default
+    local header="${1:-TARGET${CT_US}HARNESS${CT_US}MODEL${CT_US}ENDPOINT${CT_US}CREDENTIAL${CT_US}STATE}"
     local w1=0 w2=0 w3=0 w4=0 w5=0 rec f1 f2 f3 f4 f5 f6 rest
     while IFS= read -r rec; do
         [[ -z "$rec" ]] && continue
@@ -463,6 +474,87 @@ cmd_compatibility() {  # <target or empty> <harness or empty> <json>
     return "$worst"
 }
 
+# The stamps of --llm sessions (#400 FR-6, FR-17, S4), newest first: one
+# harness's, and only one project's when it is given. A stamp is promoted to
+# established, with the effective model, from the harness's own transcript
+# for that session. Whether each can be resumed now is the check a resume by
+# its id makes (FR-18, FR-19), in the launcher's order: a valid catalog; its
+# stamped target resolving, for its project, to a launchable binding; no
+# settings file setting a variable the launch controls; the launch identity
+# it was stamped with; a compatibility state that can be computed, which the
+# stamp's refresh needs.
+cmd_sessions() {  # <json> <harness> <project, physical, or empty for all>
+    local json="$1" h="$2" only="$3" dir f id rc worst=0 catalog_err="" eligible reason t project jrows='[]'
+    dir=$(lss_dir "$h")
+    CATALOG="$(lc_catalog_path)"
+    if [[ ! -e "$CATALOG" ]]; then
+        catalog_err="there is no LLM catalog at $CATALOG"
+    elif ! lc_validate "$CATALOG" >/dev/null 2>&1; then
+        catalog_err="the LLM catalog is not valid (cct llm validate): $CATALOG"
+    fi
+    for f in "$dir"/*.json; do
+        id=$(basename "$f" .json)
+        [[ "$id" =~ $LSS_UUID_RE ]] || continue   # a stamp is named by its session id
+        rc=0; lss_read "$h" "$id" || rc=$?
+        [[ "$rc" -eq 1 ]] && continue   # removed since the directory was listed
+        if [[ "$rc" -ne 0 ]]; then
+            echo "cct llm sessions: $LSS_ERR" >&2
+            worst=2
+            continue
+        fi
+        project=$(jq -r '.project // ""' <<< "$LSS_STAMP")
+        [[ -z "$only" || "$project" == "$only" ]] || continue
+        if lss_promote "$h" "$id"; then lss_read "$h" "$id" || true; fi
+        t="$LSS_STAMP_TARGET"
+        eligible=false reason=""
+        if [[ -n "$catalog_err" ]]; then
+            reason="$catalog_err"
+        elif ! lr_resolve "$h" "$t" "$project"; then
+            reason="$LR_REFUSAL"
+        elif [[ "$LR_STATE" != "unverified" ]]; then
+            reason="$t is $LR_STATE on $h: $LR_REASON"
+        else
+            rc=0; llm_cc_settings_conflicts "$project" || rc=$?
+            lr_digests || true
+            if [[ "$rc" -eq 1 ]]; then
+                reason="a Claude Code settings file sets a variable this launch must control ($(head -1 <<< "$LLM_CC_SETTINGS_REFUSED"))"
+            elif [[ "$LR_DIGEST_LAUNCH" != "$(jq -r '.digests.launch_identity // ""' <<< "$LSS_STAMP")" ]]; then
+                reason="the launch identity of $t changed since the session was stamped (its provider, endpoint, protocol, auth header, model, credential or quirks)"
+            elif ! lcm_state "$h" "$t"; then
+                reason="the compatibility state of $t cannot be computed: ${LCM_ERR:-unknown}"
+            else
+                eligible=true
+            fi
+        fi
+        jrows=$(jq -c --argjson s "$LSS_STAMP" --arg id "$id" --arg h "$h" --arg t "$t" \
+            --argjson e "$eligible" --argjson r "$(null_if_empty "$reason")" '
+            . + [$s | {session_id: $id, harness: $h, target: $t, llm, binding, requested_model,
+                       effective_model, status, project, forked_from, created_at, refreshed_at,
+                       established_at, resume: {eligible: $e, reason: $r}}]' <<< "$jrows")
+    done
+    jrows=$(jq -c 'sort_by(.refreshed_at) | reverse' <<< "$jrows")
+    if [[ "$json" == 1 ]]; then
+        envelope sessions "$(jq -nc --arg h "$h" --arg d "$dir" --argjson s "$jrows" \
+            '{harness: $h, sessions_dir: $d, sessions: $s}')"
+        return "$worst"
+    fi
+    if [[ "$(jq length <<< "$jrows")" -eq 0 ]]; then
+        echo "No $h session started with --llm${only:+ in $only} has a stamp yet ($dir)."
+        return "$worst"
+    fi
+    echo "$h sessions started with --llm${only:+ in $only}, newest first (stamps: $dir)"
+    ROWS=$(jq -r --arg us "$CT_US" '.[] | [.session_id, .target, (.effective_model // .requested_model // "-"),
+        (.status // "-"), (if .resume.eligible then "yes" else "no" end), (.project // "-")] | join($us)' <<< "$jrows")
+    _print_rows "SESSION${CT_US}TARGET${CT_US}MODEL${CT_US}STATUS${CT_US}RESUME${CT_US}PROJECT"
+    if jq -e 'any(.[]; .resume.eligible | not)' >/dev/null <<< "$jrows"; then
+        echo ""
+        jq -r '.[] | select(.resume.eligible | not) | "Not resumable now: \(.session_id): \(.resume.reason)"' <<< "$jrows"
+    fi
+    echo ""
+    echo "Resume one by its id, on the target it was started with: claude-code --resume <session>"
+    return "$worst"
+}
+
 # --json may come anywhere among a command's arguments.
 JSON=0
 ARGS=()
@@ -501,6 +593,26 @@ case "$cmd" in
         fi
         cmd_compatibility "$t" "$h" "$JSON"
         ;;
+    sessions)
+        h="$LLM_CC_HARNESS" p=""
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --harness)   h="${2:-}"; [[ -n "$h" ]] || usage_error sessions "cct llm sessions: --harness needs a harness"; shift 2 ;;
+                --harness=*) h="${1#*=}"; [[ -n "$h" ]] || usage_error sessions "cct llm sessions: --harness needs a harness"; shift ;;
+                --project)   p="${2:-}"; [[ -n "$p" ]] || usage_error sessions "cct llm sessions: --project needs a directory"; shift 2 ;;
+                --project=*) p="${1#*=}"; [[ -n "$p" ]] || usage_error sessions "cct llm sessions: --project needs a directory"; shift ;;
+                *)           usage_error sessions "cct llm sessions: unknown argument '$1'" ;;
+            esac
+        done
+        if [[ " $LC_HARNESSES " != *" $h "* ]]; then
+            usage_error sessions "cct llm sessions: unknown harness '$h' (one of: ${LC_HARNESSES// /, })"
+        fi
+        if [[ -n "$p" ]]; then
+            [[ -d "$p" ]] || usage_error sessions "cct llm sessions: no such directory: $p"
+            p=$(cd "$p" && pwd -P)
+        fi
+        cmd_sessions "$JSON" "$h" "$p"
+        ;;
     harness)
         # `cct harness explain <harness> --llm <target>`, dispatched here by scripts/cct.
         sub="${1:-}"; [[ $# -gt 0 ]] && shift
@@ -528,7 +640,7 @@ case "$cmd" in
         ;;
     help|-h|--help) usage ;;
     *)
-        msg="cct llm: unknown command '$cmd' (list | show | validate | compatibility)"
+        msg="cct llm: unknown command '$cmd' (list | show | validate | compatibility | sessions)"
         if [[ "$JSON" == 1 ]]; then usage_error "" "$msg"; fi
         echo "$msg" >&2; usage >&2; exit 2
         ;;

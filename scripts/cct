@@ -100,6 +100,9 @@ COMMANDS
                     cct llm validate [file]      check the catalog, by line and name
                     cct llm compatibility [<target>]
                                                  each target's state, and the evidence
+                    cct llm sessions [--harness <h>] [--project <dir>]
+                                                 the --llm sessions: target, model,
+                                                 state, project, whether each resumes
                   Each takes --json.
   harness         What a harness launch would do, before it runs:
                     cct harness explain <harness> --llm <target> [--project <dir>] [--json]
