@@ -297,6 +297,15 @@ assert_eq "sf_dir_lock: a lock released between its create and the look is taken
     "$(n=0; _sf_create() { n=$((n + 1)); [[ "$n" -eq 1 ]] && return 1; ( set -C; printf '%s' "$2" > "$1" ); }
        rc=0; sf_dir_lock "$DL" pid me || rc=$?; echo "$rc|$(cat "$DL/pid")")"
 rm -f "$DL/pid"; rmdir "$DL"
+# A create refused while its holder releases, the directory going with it,
+# met a busy lock, not an error, and nothing is removed: the directory there
+# next may be another writer's, just made. The stub removes the directory, as
+# that release does. rmdir counts its calls, and first makes the directory
+# again, as another writer's mkdir landing just before it would.
+assert_eq "sf_dir_lock: a create refused while its holder releases is busy, and removes no directory" "1|0" \
+    "$(_sf_create() { command rmdir -- "${1%/*}"; return 1; }
+       n=0; rmdir() { local d; for d; do :; done; n=$((n + 1)); mkdir -p -- "$d"; command rmdir "$@"; }
+       rc=0; sf_dir_lock "$DL" pid me || rc=$?; echo "$rc|$n")"
 # A write that fails after the exclusive open (here, a file size limit of 0)
 # leaves no empty owner file to stand for a holder, and prints nothing.
 assert_eq "sf_dir_lock: an owner file whose write fails is removed, with its directory, as an error" "2|gone" \

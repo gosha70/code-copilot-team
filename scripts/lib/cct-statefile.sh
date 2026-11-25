@@ -137,7 +137,9 @@ _sf_create() {
 # caller created the owner file first); 2 the owner file could not be
 # created or written, and the directory made here is removed again while
 # still empty. A create refused by an owner file that is gone a moment later
-# met a holder releasing, so it is tried again, up to SF_LOCK_CREATE_TRIES.
+# met a holder releasing: it is tried again, up to SF_LOCK_CREATE_TRIES, or,
+# when the directory went with that holder, the lock was busy (1) and nothing
+# is removed, since the directory there now may be another writer's.
 sf_dir_lock() {
     local rc tries=0
     mkdir -- "$1" 2>/dev/null || return 1
@@ -145,11 +147,15 @@ sf_dir_lock() {
         rc=0
         _sf_create "$1/$2" "$3" || rc=$?
         [[ "$rc" -eq 0 ]] && return 0
-        [[ "$rc" -eq 1 && ( -e "$1/$2" || -L "$1/$2" ) ]] && return 1
-        tries=$((tries + 1))
-        [[ "$rc" -eq 1 && -d "$1" && "$tries" -lt "$SF_LOCK_CREATE_TRIES" ]] || break
+        if [[ "$rc" -eq 1 ]]; then
+            [[ -e "$1/$2" || -L "$1/$2" ]] && return 1   # another writer holds it
+            [[ -d "$1" ]] || return 1                    # gone with its releasing holder: busy, not an error
+            tries=$((tries + 1))
+            [[ "$tries" -lt "$SF_LOCK_CREATE_TRIES" ]] && continue
+        fi
+        break
     done
-    rmdir -- "$1" 2>/dev/null || return 1   # gone, or an owner file arrived meanwhile: not ours
+    rmdir -- "$1" 2>/dev/null || return 1   # an owner file arrived meanwhile: not ours
     return 2
 }
 
