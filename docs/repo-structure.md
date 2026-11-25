@@ -72,21 +72,21 @@ code-copilot-team/
 │   ├── test-peer-review.sh             99 peer-review runner tests
 │   ├── test-review-loop.sh           237 review loop integration tests
 │   ├── test-setup-reviewer.sh           43 copilot reviewer installer tests
-│   ├── test-auto-build-loop.sh        1429 auto-build driver tests
+│   ├── test-auto-build-loop.sh        1434 auto-build driver tests
 │   ├── test-ui-harness.sh              87 visual-harness contract tests
 │   ├── test-routing-config.sh         365 execution-profile registry + result + cli tests
 │   ├── test-routing-failover.sh       227 circuit + action + selection + supervisor + identity tests (#251 B)
 │   ├── test-routing-tasks.sh          160 task metadata + floor + task-addressed explain tests (#254 C)
 │   ├── test-routing-packet.sh         102 immutable delegation-packet tests (#254 C T2)
 │   ├── test-routing-delegation.sh     180 route-class + packet execution + reconciliation tests (#254 C T3-T5)
-│   ├── test-routing-recovery.sh       380 probe-state + timing + probe + tick-wake tests (#257 D)
+│   ├── test-routing-recovery.sh       387 probe-state + timing + probe + tick-wake tests (#257 D)
 │   ├── test-pre-pr-check.sh           17 close-keyword audit tests (#408)
 │   ├── test-github-hardening.sh       14 hardening audit tests (classic + ruleset sources)
 │   ├── test-cct-home.sh               146 home resolver + `cct home` tests (#411)
 │   ├── test-llm-catalog.sh            151 LLM catalog, project policy + `cct llm` tests (#479, #400)
 │   ├── test-llm-launch.sh             198 `claude-code --llm` launch tests (#479, #400)
 │   ├── test-llm-cli.sh                107 `cct llm show`, `cct harness explain` and `--json` tests (#400)
-│   ├── test-cct-statefile.sh          51 state-file tests: modes, locks, killed and concurrent writers (#400)
+│   ├── test-cct-statefile.sh          58 state-file tests: modes, locks, killed and concurrent writers (#400)
 │   ├── test-llm-compat.sh             77 compatibility state, record, `cct llm compatibility` and doctor tests (#400)
 │   ├── test-wiki-setup.sh             54 managed wiki-studio install tests (#384)
 │   ├── test-wiki-launcher.sh          24 provenance-bound wiki launcher + alias tests (#384)

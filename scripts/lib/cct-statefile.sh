@@ -113,9 +113,44 @@ _sf_lock_stale() {
 # noclobber opens a new file O_EXCL, so of two creators exactly one
 # succeeds. mkdir is never trusted for that: uutils' mkdir (Ubuntu's
 # coreutils since 25.10) tells two simultaneous callers both that it made
-# the directory.
+# the directory. Returns 0 created; 1 not (something is at <path>, or it
+# cannot be opened); 2 created but <line> could not be written, and the
+# file is removed again, so an empty file never stands for an owner.
 _sf_create() {
-    ( set -C; printf '%s' "${2:-}" > "$1" ) 2>/dev/null
+    # stdout too goes nowhere: bash flushes what a failed write left
+    # buffered to the subshell's own stdout.
+    ( set -C
+      exec 3> "$1" || exit 1
+      printf '%s' "${2:-}" >&3 && exit 0
+      exec 3>&-
+      rm -f -- "$1"
+      exit 2
+    ) >/dev/null 2>&1
+}
+
+# sf_dir_lock <dir> <owner file> <line>: take a lock directory as CCT's other
+# shell locks do (#530), each keeping its own rules for a lock it finds held.
+# mkdir <dir>, then create <dir>/<owner file> holding <line>, exclusively:
+# the owner file decides, since mkdir may tell two callers both that it made
+# the directory. A directory that was already there is held, as before.
+# Returns 0 held; 1 held by another (the directory was there, or another
+# caller created the owner file first); 2 the owner file could not be
+# created or written, and the directory made here is removed again while
+# still empty. A create refused by an owner file that is gone a moment later
+# met a holder releasing, so it is tried again, up to SF_LOCK_CREATE_TRIES.
+sf_dir_lock() {
+    local rc tries=0
+    mkdir -- "$1" 2>/dev/null || return 1
+    while :; do
+        rc=0
+        _sf_create "$1/$2" "$3" || rc=$?
+        [[ "$rc" -eq 0 ]] && return 0
+        [[ "$rc" -eq 1 && ( -e "$1/$2" || -L "$1/$2" ) ]] && return 1
+        tries=$((tries + 1))
+        [[ "$rc" -eq 1 && -d "$1" && "$tries" -lt "$SF_LOCK_CREATE_TRIES" ]] || break
+    done
+    rmdir -- "$1" 2>/dev/null || return 1   # gone, or an owner file arrived meanwhile: not ours
+    return 2
 }
 
 # Free a stale lock, one reclaimer at a time. Its staleness is judged again

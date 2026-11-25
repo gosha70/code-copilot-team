@@ -68,6 +68,8 @@ RB_TOOL_MARKER="CCT_TOOL_OK"
 
 # shellcheck source=cct-home.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cct-home.sh"   # the CCT home (#411)
+# shellcheck source=cct-statefile.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cct-statefile.sh"   # sf_dir_lock (#530)
 RB_LEDGER="${CCT_ROUTING_PROBE_LEDGER:-$(cct_home_path routing-probe-ledger.json)}"
 RB_LEDGER_SKELETON='{"schema_version":1,"probes":[]}'
 
@@ -162,9 +164,13 @@ rb_reserve() {
 # a launched probe went unaccounted — breaking both "launched implies
 # accounted" and every cap that counts rows.
 _rb_lock() {
-    local dir="${RB_LEDGER}.lock" waited=0
+    local dir="${RB_LEDGER}.lock" waited=0 rc
     mkdir -p "$(dirname "$RB_LEDGER")" 2>/dev/null || true
-    while ! mkdir "$dir" 2>/dev/null; do
+    while :; do
+        rc=0
+        sf_dir_lock "$dir" pid "$$"$'\n' || rc=$?
+        [[ "$rc" -eq 0 ]] && return 0
+        [[ "$rc" -eq 2 ]] && return 1   # its owner could not be recorded
         # Do not reclaim by PID check. The observed owner can release
         # and a replacement can acquire before deletion, causing this
         # process to remove a live writer's lock. Accounting refuses
@@ -176,10 +182,6 @@ _rb_lock() {
             return 1
         fi
     done
-    if ! printf '%s\n' "$$" > "${dir}/pid"; then
-        rm -rf "$dir" 2>/dev/null || true
-        return 1
-    fi
 }
 _rb_unlock() {
     local dir="${RB_LEDGER}.lock"

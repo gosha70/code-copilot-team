@@ -858,8 +858,15 @@ tick)
             # field can, since a relaunching supervisor has not written
             # a status yet — and it serializes the read-compare-write
             # of the claim between concurrent ticks.
+            # Held by its pid file, created exclusively (sf_dir_lock): mkdir
+            # alone may tell two takers both that they made it (#530).
             rl="$ldir/routing-run.lock"
-            if ! mkdir "$rl" 2>/dev/null; then
+            rl_rc=0
+            sf_dir_lock "$rl" pid "$$"$'\n' || rl_rc=$?
+            if [[ "$rl_rc" -eq 2 ]]; then
+                skip "cannot record ownership of the run lock — refusing"; continue
+            fi
+            if [[ "$rl_rc" -ne 0 ]]; then
                 rlo=$(cat "$rl/pid" 2>/dev/null || echo "")
                 if [[ ! "$rlo" =~ ^[0-9]+$ ]]; then
                     skip "the run lock exists with an unverifiable owner — refusing (inspect $rl)"; continue
@@ -868,10 +875,6 @@ tick)
                     skip "a live supervisor (pid $rlo) holds the run lock — refusing the wake"; continue
                 fi
                 skip "the run lock records dead owner pid $rlo — refusing racy automatic takeover; confirm no supervisor is active, remove $rl, then retry"; continue
-            fi
-            if ! printf '%s\n' "$$" > "$rl/pid"; then
-                rm -rf "$rl" 2>/dev/null || true
-                skip "cannot record ownership of the run lock — refusing"; continue
             fi
             release_rl() {
                 [[ "$(cat "$rl/pid" 2>/dev/null)" == "$$" ]] || return 1
@@ -968,7 +971,12 @@ tick)
                     # against the child; testing `claimed == $wgen` and
                     # `acked != $wgen` makes the clear conditional on
                     # the exact state we are undoing.
-                    if ! mkdir "$rl" 2>/dev/null; then
+                    rl_rc=0
+                    sf_dir_lock "$rl" pid "$$"$'\n' || rl_rc=$?
+                    if [[ "$rl_rc" -eq 2 ]]; then
+                        lfail "the acknowledgement check could not record run-lock ownership — the claim is left intact"; continue
+                    fi
+                    if [[ "$rl_rc" -ne 0 ]]; then
                         rlo2=$(cat "$rl/pid" 2>/dev/null || echo "")
                         if [[ "$rlo2" == "$WCHILD" ]]; then
                             echo "routing tick: $feat: the launched supervisor acquired the run lock as the ack window closed — claim generation $wgen stands"
@@ -976,10 +984,6 @@ tick)
                             WOKE=$((WOKE + 1)); continue
                         fi
                         lfail "no acknowledgement, and the run lock is held by pid '$rlo2' — the claim is NOT released (refusing to clear a claim we cannot prove is stale)"; continue
-                    fi
-                    if ! printf '%s\n' "$$" > "$rl/pid"; then
-                        rm -rf "$rl" 2>/dev/null || true
-                        lfail "the acknowledgement check could not record run-lock ownership — the claim is left intact"; continue
                     fi
                     RELEASED=0
                     if [[ "$(jq -r 'if .routing_wake.acked == null then "" else (.routing_wake.acked|tostring) end' "$run" 2>/dev/null)" == "$wgen" ]]; then

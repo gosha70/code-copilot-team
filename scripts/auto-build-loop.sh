@@ -44,6 +44,8 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/cct-home.sh
 source "$SCRIPT_DIR/lib/cct-home.sh"   # the CCT home (#411)
+# shellcheck source=lib/cct-statefile.sh
+source "$SCRIPT_DIR/lib/cct-statefile.sh"   # sf_dir_lock, the ledger lock (#530)
 
 # ── routed usage channel (#273, increment G of #109) ────────────────
 # The supervisor names the driver-owned evidence artifact via
@@ -3719,9 +3721,11 @@ hill_final() {  # prints the summary line (for automation-summary.md) and journa
 
 # ── Ledger init (FR-3) ───────────────────────────────────────
 
-# Atomic per-feature ledger lock. `mkdir` is the POSIX create-if-absent
-# primitive: of N contenders exactly one wins, which no amount of reading
-# a mutable state.json can provide. Every path that CREATES the ledger
+# Atomic per-feature ledger lock: the mkdir, then its owner file created
+# exclusively (sf_dir_lock), so of N contenders exactly one wins, which no
+# amount of reading a mutable state.json can provide. The owner file
+# decides, not the mkdir: uutils' mkdir tells two simultaneous callers both
+# that it made the directory (#530). Every path that CREATES the ledger
 # contends on it, and so does the rollback — otherwise "is this ledger
 # mine?" and "delete it" are two steps a rival initialiser can slip
 # between. Lives BESIDE the ledger dir, not inside it, so it never shows
@@ -3749,15 +3753,20 @@ ledger_lock_acquire() {
     # Re-entrant within one attempt: the rollback runs inside init_ledger's
     # own exit path, and must not deadlock against itself.
     [[ "$LEDGER_LOCK_HELD" == "true" ]] && return 0
-    local lock waited=0
+    local lock waited=0 rc
     lock=$(ledger_lock_path)
     mkdir -p "${LEDGER_DIR%/*}" 2>/dev/null || true
-    until mkdir "$lock" 2>/dev/null; do
+    # 0 held; 1 another attempt holds it; 2 this attempt could not record
+    # itself as the owner, at once, since waiting cannot change that.
+    while :; do
+        rc=0
+        sf_dir_lock "$lock" owner "$ATTEMPT_ID"$'\n' || rc=$?
+        [[ "$rc" -eq 0 ]] && break
+        [[ "$rc" -eq 2 ]] && return 2
         [[ $waited -ge $LEDGER_LOCK_WAIT_SEC ]] && return 1
         sleep 1
         waited=$((waited + 1))
     done
-    printf '%s\n' "$ATTEMPT_ID" > "$lock/owner" 2>/dev/null || true
     LEDGER_LOCK_HELD=true
     # The lock's identity is fixed at the moment it is taken. Release must
     # target THIS path, never re-derive it from LEDGER_DIR — a private
@@ -3770,17 +3779,27 @@ ledger_lock_acquire() {
 
 ledger_lock_release() {
     [[ "$LEDGER_LOCK_HELD" == "true" ]] || return 0
-    local lock="$LEDGER_LOCK_HELD_PATH"
-    rm -f "$lock/owner" 2>/dev/null || true
+    local lock="$LEDGER_LOCK_HELD_PATH" owner
+    # Only this attempt's own owner file is removed. Where mkdir is not
+    # exclusive (#530), another attempt can create its owner file the moment
+    # this one's is gone: the lock is then that attempt's, and this one is
+    # released, never removing the other's file.
+    owner=$(cat "$lock/owner" 2>/dev/null) || owner=""
+    [[ "$owner" == "$ATTEMPT_ID" ]] && rm -f "$lock/owner" 2>/dev/null
     # rmdir is the whole verification: it fails if anything is left inside
     # (an owner file that would not delete) or if the directory itself
     # cannot go. Ownership is cleared ONLY on proven removal — reporting
     # "released" while the lock is still on disk would wedge every later
     # run behind a lock nobody believes they hold.
-    if ! rmdir "$lock" 2>/dev/null; then
-        echo "[auto-build] ERROR: could not release the ledger lock — $lock" >&2
-        echo "is still on disk and will block later runs. Remove it manually." >&2
-        return 1
+    # A directory already gone is released too: another attempt can remove
+    # it once it is empty.
+    if ! rmdir "$lock" 2>/dev/null && [[ -e "$lock" || -L "$lock" ]]; then
+        owner=$(cat "$lock/owner" 2>/dev/null) || owner=""
+        if [[ -z "$owner" || "$owner" == "$ATTEMPT_ID" ]]; then
+            echo "[auto-build] ERROR: could not release the ledger lock — $lock" >&2
+            echo "is still on disk and will block later runs. Remove it manually." >&2
+            return 1
+        fi
     fi
     LEDGER_LOCK_HELD=false
     LEDGER_LOCK_HELD_PATH=""
@@ -3808,9 +3827,10 @@ resolve_evidence_destination() {
     [[ "$DRY_RUN" == "true" ]] && return 0
     [[ "$LEDGER_PRIVATE_FALLBACK" == "true" ]] && return 0
     [[ "$LEDGER_LOCK_HELD" == "true" ]] && return 0
-    local why=""
+    local why="" lrc=0
     LEDGER_SHARED_LOCK=$(ledger_lock_path)
-    if ledger_lock_acquire; then
+    ledger_lock_acquire || lrc=$?
+    if [[ "$lrc" -eq 0 ]]; then
         # Winning the lock only proves present exclusion. A fresh attempt
         # that finds a FOREIGN ledger under it is not entitled to park into
         # it, flip its status, or append to its escalations — that ledger
@@ -3818,6 +3838,8 @@ resolve_evidence_destination() {
         ledger_is_ours && return 0
         why="the canonical ledger belongs to another attempt ($(jq -r '.attempt_id // "unknown"' "$STATE" 2>/dev/null))"
         ledger_lock_release || true
+    elif [[ "$lrc" -eq 2 ]]; then
+        why="this attempt could not record itself as the owner of the ledger lock $LEDGER_SHARED_LOCK"
     else
         why="the ledger lock $LEDGER_SHARED_LOCK was not free within ${LEDGER_LOCK_WAIT_SEC}s"
     fi
@@ -3840,7 +3862,14 @@ init_ledger() {
     # The "does a ledger already exist?" test and the creation that follows
     # it must be one indivisible step, or two attempts both observe an
     # absent state.json and both create one. Every creator contends here.
-    if ! ledger_lock_acquire; then
+    local lrc=0
+    ledger_lock_acquire || lrc=$?
+    if [[ "$lrc" -eq 2 ]]; then
+        echo "Error: this attempt could not record itself as the owner of the" >&2
+        echo "ledger lock $(ledger_lock_path) for '$FEATURE_ID'." >&2
+        exit 1
+    fi
+    if [[ "$lrc" -ne 0 ]]; then
         echo "Error: another auto-build attempt holds the ledger lock for" >&2
         echo "'$FEATURE_ID' ($(ledger_lock_path)) and did not release it within" >&2
         echo "${LEDGER_LOCK_WAIT_SEC}s. If no other run is active the lock is stale —" >&2

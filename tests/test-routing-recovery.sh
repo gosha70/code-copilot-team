@@ -36,6 +36,13 @@ printf '#!/usr/bin/env bash\ncat > /dev/null\necho "test default canary: this ca
 export CCT_ROUTING_PROBE_CMD="bash $TMP/default-probe/unreachable.sh"
 export CCT_ROUTING_PROBE_LEDGER="$TMP/default-probe/ledger.json"
 
+# #530 shim. MKDIR_SHIM reports success for a directory already there,
+# which is what uutils' mkdir tells one of two simultaneous callers, made
+# deterministic.
+MKDIR_SHIM="$TMP/mkdir-shim"; mkdir -p "$MKDIR_SHIM"
+printf '#!/bin/sh\nexec /bin/mkdir -p "$@"\n' > "$MKDIR_SHIM/mkdir"
+chmod +x "$MKDIR_SHIM/mkdir"
+
 PASS=0; FAIL=0
 assert() {
     local name="$1"; shift
@@ -826,6 +833,37 @@ assert "state lock: a scheduled writer never deletes a dead-owner lock" \
       ! rs_trylock
       [[ "$(cat "${RS_FILE}.lock/pid")" == "$2" ]]' _ "$SLIB" "$DEAD_SCHED_PID"
 
+# #530: a lock is held by its pid file, created exclusively, never by the
+# mkdir alone. MKDIR_SHIM reports success for each held lock below, as
+# uutils' mkdir can for one of two simultaneous callers: each lock still
+# refuses, and its owner's pid stays.
+mkdir -p "$TK/held-state.json.lock"; printf '%s\n' "$$" > "$TK/held-state.json.lock/pid"
+assert "state lock (#530): rs_trylock refuses a held lock even when mkdir reports success" \
+    env PATH="$MKDIR_SHIM:$PATH" CCT_ROUTING_STATE="$TK/held-state.json" bash -c '
+      source "$1"
+      ! rs_trylock
+      [[ "$(cat "${RS_FILE}.lock/pid")" == "$2" ]]' _ "$SLIB" "$$"
+assert "state lock (#530): ...and rs_lock waits for it and gives up" \
+    env PATH="$MKDIR_SHIM:$PATH" CCT_ROUTING_STATE="$TK/held-state.json" CCT_ROUTING_LOCK_STALE_SEC=1 bash -c '
+      source "$1"
+      ! rs_lock 2>/dev/null
+      [[ "$(cat "${RS_FILE}.lock/pid")" == "$2" ]]' _ "$SLIB" "$$"
+rm -rf "$TK/held-state.json.lock"
+mkdir -p "$TK/held.tick.lock"; printf '%s\n' "$$" > "$TK/held.tick.lock/pid"
+assert "tick lock (#530): rs_tick_trylock refuses a held lock even when mkdir reports success" \
+    env PATH="$MKDIR_SHIM:$PATH" CCT_ROUTING_STATE="$TSTATE" CCT_ROUTING_TICK_LOCK="$TK/held.tick.lock" bash -c '
+      source "$1"
+      ! rs_tick_trylock
+      [[ "$RS_TICK_LOCK_HELD" == 0 && "$(cat "$RS_TICK_LOCK/pid")" == "$2" ]]' _ "$SLIB" "$$"
+rm -rf "$TK/held.tick.lock"
+mkdir -p "$TK/held-ledger.json.lock"; printf '%s\n' "$$" > "$TK/held-ledger.json.lock/pid"
+assert "probe ledger lock (#530): _rb_lock refuses a held lock even when mkdir reports success" \
+    env PATH="$MKDIR_SHIM:$PATH" CCT_ROUTING_PROBE_LEDGER="$TK/held-ledger.json" RB_LOCK_WAIT_SEC=1 bash -c '
+      source "$1"
+      ! _rb_lock 2>/dev/null
+      [[ "$(cat "${RB_LEDGER}.lock/pid")" == "$2" ]]' _ "$PLIB" "$$"
+rm -rf "$TK/held-ledger.json.lock"
+
 # CONCURRENCY, not a lock fixture: two real ticks, one due event. The
 # claim (select + mark `probing` in ONE locked write) is what stops
 # them sharing it — a tick that selected under the lock and probed
@@ -1347,6 +1385,9 @@ assert "runlock: the tick refuses to wake a run a LIVE supervisor holds" \
     grep -q "holds the run lock" <<< "$OUT"
 assert_eq "runlock: ...and does not claim the generation" "null" \
     "$(jq -r '.routing_wake.claimed | tostring' "$LRUN")"
+OUT=$(PATH="$MKDIR_SHIM:$PATH" WAKE live "$WK/unatt-recovered.json")
+assert "runlock (#530): a tick whose mkdir reports success for the held lock still refuses, and keeps the owner's pid" \
+    bash -c "grep -q 'holds the run lock' <<< \"\$1\" && [[ \$(cat '$LIVE_LOCK/pid') == '$LIVE_PID' ]]" _ "$OUT"
 SECOND=$( set +e; cd "$REPO_DIR"
     env CCT_ROUTING_REGISTRY="$TK/reg.toml" CCT_ROUTING_STATE="$WK/live-state.json" \
         bash "$SUPV" demo-live --routing --worktree "$WK/live" --profile unattended 2>&1 )
@@ -1432,6 +1473,14 @@ rm -f "$GAP_LOCK/pid"
 GAP_OUT=$(gap_supervisor)
 assert "lock-gap: a lock that stays without a pid is still refused as unverifiable" \
     bash -c "grep -q 'owner is unverifiable' <<< \"\$1\" && grep -q '^rc=5$' <<< \"\$1\"" _ "$GAP_OUT"
+rm -rf "$GAP_LOCK"
+# #530: a mkdir that reports success for the held lock, as uutils' mkdir can
+# for one of two simultaneous callers, still starts no second supervisor.
+mkdir -p "$GAP_LOCK"; printf '%s\n' "$GAP_OWNER" > "$GAP_LOCK/pid"
+GAP_OUT=$(PATH="$MKDIR_SHIM:$PATH" gap_supervisor)
+assert "lock-gap (#530): a mkdir that reports success for a held lock starts no second supervisor" \
+    bash -c "grep -q 'already running feature' <<< \"\$1\" && grep -q '^rc=5$' <<< \"\$1\"" _ "$GAP_OUT"
+assert_eq "lock-gap (#530): ...and the owner's pid stays" "$GAP_OWNER" "$(cat "$GAP_LOCK/pid" 2>/dev/null)"
 rm -rf "$GAP_LOCK"
 
 # ── the mode discriminator: bounded work is never auto-woken ──

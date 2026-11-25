@@ -9,8 +9,10 @@
 #
 #   ATOMIC   every write is temp+rename in the state file's own
 #            directory; a reader can never observe a torn document.
-#   LOCKED   read-modify-write happens under an exclusive mkdir lock
-#            (<state>.lock) carrying its OWNER PID. Stale takeover
+#   LOCKED   read-modify-write happens under a lock directory
+#            (<state>.lock) whose pid file, created exclusively
+#            (sf_dir_lock), names its OWNER PID: mkdir alone is not
+#            exclusive everywhere (uutils' is not, #530). Stale takeover
 #            requires threshold age AND a confirmed-dead owner; a
 #            hung-but-LIVE owner keeps the lock (safety over
 #            liveness — two writers would lose updates even though
@@ -40,6 +42,8 @@
 
 # shellcheck source=cct-home.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cct-home.sh"   # the CCT home (#411)
+# shellcheck source=cct-statefile.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cct-statefile.sh"   # sf_dir_lock (#530)
 RS_FILE="${CCT_ROUTING_STATE:-$(cct_home_path routing-state.json)}"
 RS_LOCK_STALE_SEC="${CCT_ROUTING_LOCK_STALE_SEC:-60}"
 RS_TICK_LOCK="${CCT_ROUTING_TICK_LOCK:-${RS_FILE}.tick.lock}"
@@ -57,8 +61,15 @@ fi
 
 # ── lock (owner-aware) ───────────────────────────────────────────────
 rs_lock() {
-    local dir="${RS_FILE}.lock" waited=0
-    while ! mkdir "$dir" 2>/dev/null; do
+    local dir="${RS_FILE}.lock" waited=0 rc
+    while :; do
+        rc=0
+        sf_dir_lock "$dir" pid "$$"$'\n' || rc=$?
+        [[ "$rc" -eq 0 ]] && return 0
+        if [[ "$rc" -eq 2 ]]; then
+            echo "routing-state: cannot record the owner of $dir" >&2
+            return 2
+        fi
         local age now mtime owner
         now=$(rs_now)
         mtime=$(stat -f %m "$dir" 2>/dev/null || stat -c %Y "$dir" 2>/dev/null || echo "$now")
@@ -88,16 +99,13 @@ rs_lock() {
             return 2
         fi
     done
-    if ! printf '%s\n' "$$" > "${dir}/pid"; then
-        rm -rf "$dir" 2>/dev/null || true
-        return 2
-    fi
 }
 # rs_trylock -> ACQUIRES the lock or fails immediately (rc 1).
 # A NON-BLOCKING acquisition for schedulers: rs_lock deliberately WAITS
 # (a supervisor should), but a cron tick must refuse rather than
 # pile up behind another writer. The refusal decision and the
-# acquisition are THE SAME mkdir — a separate "is it held?" predicate
+# acquisition are THE SAME step (sf_dir_lock: the mkdir, then the pid
+# file created exclusively) — a separate "is it held?" predicate
 # followed by a blocking rs_lock would be a TOCTOU that can still
 # queue behind a writer that arrives in between.
 # A scheduled writer never removes an existing lock. A PID liveness
@@ -107,14 +115,7 @@ rs_lock() {
 rs_trylock() {
     local dir="${RS_FILE}.lock"
     mkdir -p "$(dirname "$RS_FILE")" 2>/dev/null || true
-    if mkdir "$dir" 2>/dev/null; then
-        if ! printf '%s\n' "$$" > "${dir}/pid"; then
-            rm -rf "$dir" 2>/dev/null || true
-            return 1
-        fi
-        return 0
-    fi
-    return 1
+    sf_dir_lock "$dir" pid "$$"$'\n' || return 1
 }
 
 # The scheduler lock is distinct from the short state-write lock. A tick
@@ -123,11 +124,7 @@ rs_trylock() {
 rs_tick_trylock() {
     local dir="$RS_TICK_LOCK"
     mkdir -p "$(dirname "$dir")" 2>/dev/null || return 1
-    mkdir "$dir" 2>/dev/null || return 1
-    if ! printf '%s\n' "$$" > "$dir/pid"; then
-        rm -rf "$dir" 2>/dev/null || true
-        return 1
-    fi
+    sf_dir_lock "$dir" pid "$$"$'\n' || return 1
     RS_TICK_LOCK_HELD=1
 }
 

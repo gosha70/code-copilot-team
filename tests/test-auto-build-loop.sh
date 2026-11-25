@@ -4359,6 +4359,9 @@ LEDGER="$P/.cct/auto-build/demo-feat"
 DRIVER_FUNCS=$(mktemp)
 _stop=$(grep -n '^# ── Main ' "$DRIVER" | head -1 | cut -d: -f1)
 sed 's/^FEATURE_ID=""$/FEATURE_ID="dummy"/' <(head -n $((_stop - 1)) "$DRIVER") > "$DRIVER_FUNCS"
+# The ledger lock takes sf_dir_lock from the driver's lib/, which an
+# extraction run from tests/ cannot find beside itself (#530).
+printf 'source %q\n' "$SCRIPT_DIR/../scripts/lib/cct-statefile.sh" >> "$DRIVER_FUNCS"
 # shellcheck source=/dev/null
 source "$DRIVER_FUNCS"
 LEDGER_DIR="$LEDGER"
@@ -4440,6 +4443,14 @@ assert_eq "T5: an attempt can claim the ledger lock" "held" \
 assert_eq "T5: a rival process cannot claim the held lock" "refused" \
     "$(PROBE_FUNCS="$DRIVER_FUNCS" PROBE_PROJECT="$P" PROBE_LEDGER="$LEDGER" PROBE_MODE=acquire \
         bash "$LOCK_PROBE" 2>/dev/null)"
+# #530: the lock is its owner file, created exclusively. A rival whose mkdir
+# reports success for the held lock, as uutils' mkdir can for one of two
+# simultaneous callers, still cannot claim it, and the owner stays.
+XMK=$(mktemp -d); printf '#!/bin/sh\nexec /bin/mkdir -p "$@"\n' > "$XMK/mkdir"; chmod +x "$XMK/mkdir"
+assert_eq "T5 (#530): ...even when its mkdir reports that it made the lock directory" "refused|attempt-A" \
+    "$(PATH="$XMK:$PATH" PROBE_FUNCS="$DRIVER_FUNCS" PROBE_PROJECT="$P" PROBE_LEDGER="$LEDGER" PROBE_MODE=acquire \
+        bash "$LOCK_PROBE" 2>/dev/null)|$(cat "${LEDGER}.init.lock/owner" 2>/dev/null)"
+rm -rf "$XMK"
 
 # 2. Every creator contends: a rival initialiser is excluded outright,
 #    so it can never publish a ledger inside another attempt's window.
@@ -4602,6 +4613,48 @@ rm -f "${LEDGER}.init.lock/stray"
 ledger_lock_release
 assert_eq "T5: a verified release clears ownership" "unheld" \
     "$([[ "$LEDGER_LOCK_HELD" == "true" ]] && echo held || echo unheld)"
+
+# 6. #530: where mkdir is not exclusive, another attempt can create its owner
+#    file the moment this one's is removed, before this one's rmdir. The lock
+#    is then that attempt's: this one is released, and never removes the
+#    other's owner file.
+ATTEMPT_ID="attempt-A"
+LEDGER_LOCK_HELD=false
+ledger_lock_acquire
+rmdir() {   # attempt B's exclusive create lands between A's removal and A's rmdir
+    [[ "$1" == "${LEDGER}.init.lock" && ! -e "$1/owner" ]] && printf 'attempt-B\n' > "$1/owner"
+    command rmdir "$@"
+}
+REL_RC=0
+ledger_lock_release 2>/dev/null || REL_RC=$?
+unset -f rmdir
+assert_eq "T5 (#530): a lock another attempt takes as ours is removed leaves this one released" "0|unheld|attempt-B" \
+    "$REL_RC|$([[ "$LEDGER_LOCK_HELD" == "true" ]] && echo held || echo unheld)|$(cat "${LEDGER}.init.lock/owner" 2>/dev/null)"
+LEDGER_LOCK_HELD=true; LEDGER_LOCK_HELD_PATH="${LEDGER}.init.lock"
+ledger_lock_release 2>/dev/null
+assert_eq "T5 (#530): ...and a release never removes another attempt's owner file" "attempt-B" \
+    "$(cat "${LEDGER}.init.lock/owner" 2>/dev/null)"
+rm -f "${LEDGER}.init.lock/owner"; rmdir "${LEDGER}.init.lock"
+LEDGER_LOCK_HELD=false; LEDGER_LOCK_HELD_PATH=""
+# Another attempt can also remove the emptied directory just before this
+# one's rmdir: a lock no longer on disk is released, never reported stuck.
+ledger_lock_acquire
+rmdir() {
+    if [[ "$1" == "${LEDGER}.init.lock" ]]; then command rmdir "$1" 2>/dev/null; return 1; fi
+    command rmdir "$@"
+}
+REL_RC=0
+ledger_lock_release 2>/dev/null || REL_RC=$?
+unset -f rmdir
+assert_eq "T5 (#530): a lock directory another attempt removed is released, not reported stuck" "0|unheld" \
+    "$REL_RC|$([[ "$LEDGER_LOCK_HELD" == "true" ]] && echo held || echo unheld)"
+LEDGER_LOCK_HELD=false; LEDGER_LOCK_HELD_PATH=""
+# 7. #530: an owner that cannot be recorded (here, its write fails) is an
+#    error at once, never a wait for a lock nobody holds, and leaves no lock.
+ACQ_START=$(date +%s)
+ACQ_RC=$( (trap '' XFSZ; ulimit -f 0; LEDGER_LOCK_WAIT_SEC=5; rc=0; ledger_lock_acquire || rc=$?; echo "$rc") )
+assert_eq "T5 (#530): an owner that cannot be recorded fails at once, leaving no lock" "2|now|absent" \
+    "$ACQ_RC|$([[ $(( $(date +%s) - ACQ_START )) -lt 5 ]] && echo now || echo waited)|$([[ -e "${LEDGER}.init.lock" ]] && echo present || echo absent)"
 
 rm -f "$LOCK_PROBE"
 rm -f "$DRIVER_FUNCS"
@@ -6457,6 +6510,8 @@ free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0)
 VG_FUNCS=$(mktemp)
 _stop=$(grep -n '^# ── Main ' "$DRIVER" | head -1 | cut -d: -f1)
 sed 's/^FEATURE_ID=""$/FEATURE_ID="demo-feat"/' <(head -n $((_stop - 1)) "$DRIVER") > "$VG_FUNCS"
+# park() takes the ledger lock, whose sf_dir_lock is in the driver's lib/ (#530).
+printf 'source %q\n' "$SCRIPT_DIR/../scripts/lib/cct-statefile.sh" >> "$VG_FUNCS"
 
 # vg_case <fixture-dir> — run verifier_gate in a subshell with recording
 # stubs; prints "<reason>\t<detail>" (empty reason = the gate passed).
