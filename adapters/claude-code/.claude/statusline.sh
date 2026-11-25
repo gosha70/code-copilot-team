@@ -26,8 +26,14 @@ CACHE_FILE="/tmp/claude-statusline-git-${CACHE_KEY}"
 CACHE_MAX_AGE=5
 
 cache_is_stale() {
-  [ ! -f "$CACHE_FILE" ] || \
-  [ $(($(date +%s) - $(stat -f %m "$CACHE_FILE" 2>/dev/null || stat -c %Y "$CACHE_FILE" 2>/dev/null || echo 0))) -gt $CACHE_MAX_AGE ]
+  [ -f "$CACHE_FILE" ] || return 0
+  local mtime
+  # GNU first: BSD stat rejects -c, while GNU's -f is a file-system query
+  # that reads %m as a second file (#530). An mtime that is not a number
+  # never reaches the arithmetic: the cache is refreshed.
+  mtime=$(stat -c %Y "$CACHE_FILE" 2>/dev/null || stat -f %m "$CACHE_FILE" 2>/dev/null) || mtime=""
+  case "$mtime" in ''|*[!0-9]*) return 0 ;; esac
+  [ $(( $(date +%s) - mtime )) -gt $CACHE_MAX_AGE ]
 }
 
 if cache_is_stale; then

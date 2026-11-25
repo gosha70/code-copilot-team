@@ -272,6 +272,45 @@ if kill -0 "$LP" 2>/dev/null; then kill "$LP" 2>/dev/null; echo "rc=hung" > "$D/
 wait "$LP" 2>/dev/null
 assert_contains "a lock that cannot be created is an error, not an endless retry" "$(cat "$D/long-rc")" "rc=1 cannot create the lock $LONG.lock"
 
+# sf_dir_lock, the take of CCT's other shell locks (#530): the owner file,
+# created exclusively, decides. XMK is a mkdir that reports success for a
+# directory already there, as uutils' mkdir can for one of two simultaneous
+# callers.
+DL="$D/dirlock"
+XMK="$D/xmk"; mkdir -p "$XMK"; printf '#!/bin/sh\nexec /bin/mkdir -p "$@"\n' > "$XMK/mkdir"; chmod +x "$XMK/mkdir"
+assert_eq "sf_dir_lock: a free lock is taken, and its owner file written" "0|me" \
+    "$(rc=0; sf_dir_lock "$DL" pid me || rc=$?; echo "$rc|$(cat "$DL/pid")")"
+assert_eq "sf_dir_lock: a held lock is refused, and its owner file kept" "1|me" \
+    "$(rc=0; sf_dir_lock "$DL" pid you || rc=$?; echo "$rc|$(cat "$DL/pid")")"
+assert_eq "sf_dir_lock: ...even when mkdir reports that it made the directory" "1|me" \
+    "$(PATH="$XMK:$PATH"; rc=0; sf_dir_lock "$DL" pid you || rc=$?; echo "$rc|$(cat "$DL/pid")")"
+rm -f "$DL/pid"
+assert_eq "sf_dir_lock: a lock directory already there is held, as before, even without an owner file" "1|kept" \
+    "$(rc=0; sf_dir_lock "$DL" pid you || rc=$?; echo "$rc|$([[ -d "$DL" ]] && echo kept || echo gone)")"
+rmdir "$DL"
+assert_eq "sf_dir_lock: an owner file that cannot be created is an error, and the directory made for it goes" "2|gone" \
+    "$(rc=0; sf_dir_lock "$DL" missing/pid x || rc=$?; echo "$rc|$([[ -e "$DL" ]] && echo kept || echo gone)")"
+# A create refused by an owner file that its holder removes before the look
+# (here, a first create that fails and leaves nothing) met a release: it is
+# tried again and takes the lock, never reported as an error.
+assert_eq "sf_dir_lock: a lock released between its create and the look is taken on a retry" "0|me" \
+    "$(n=0; _sf_create() { n=$((n + 1)); [[ "$n" -eq 1 ]] && return 1; ( set -C; printf '%s' "$2" > "$1" ); }
+       rc=0; sf_dir_lock "$DL" pid me || rc=$?; echo "$rc|$(cat "$DL/pid")")"
+rm -f "$DL/pid"; rmdir "$DL"
+# A create refused while its holder releases, the directory going with it,
+# met a busy lock, not an error, and nothing is removed: the directory there
+# next may be another writer's, just made. The stub removes the directory, as
+# that release does. rmdir counts its calls, and first makes the directory
+# again, as another writer's mkdir landing just before it would.
+assert_eq "sf_dir_lock: a create refused while its holder releases is busy, and removes no directory" "1|0" \
+    "$(_sf_create() { command rmdir -- "${1%/*}"; return 1; }
+       n=0; rmdir() { local d; for d; do :; done; n=$((n + 1)); mkdir -p -- "$d"; command rmdir "$@"; }
+       rc=0; sf_dir_lock "$DL" pid me || rc=$?; echo "$rc|$n")"
+# A write that fails after the exclusive open (here, a file size limit of 0)
+# leaves no empty owner file to stand for a holder, and prints nothing.
+assert_eq "sf_dir_lock: an owner file whose write fails is removed, with its directory, as an error" "2|gone" \
+    "$( (trap '' XFSZ; ulimit -f 0; rc=0; sf_dir_lock "$DL" pid me || rc=$?; echo "$rc") )|$([[ -e "$DL" ]] && echo kept || echo gone)"
+
 echo ""
 echo "========================================="
 echo "  cct-statefile tests: $PASS passed, $FAIL failed"

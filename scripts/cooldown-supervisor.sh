@@ -71,6 +71,8 @@ source "$SCRIPT_DIR/lib/supervisor-defaults.sh"
 source "$SCRIPT_DIR/lib/cct-home.sh"   # the CCT home (#411)
 # shellcheck source=lib/cct-endpoint.sh
 source "$SCRIPT_DIR/lib/cct-endpoint.sh"   # rt_sanitize_origin, shared with the LLM catalog (#479)
+# shellcheck source=lib/cct-statefile.sh
+source "$SCRIPT_DIR/lib/cct-statefile.sh"   # sf_dir_lock, the run lock (#530)
 
 err()  { echo "[$PROG] ERROR: $*" >&2; }
 info() { echo "[$PROG] $*"; }
@@ -245,8 +247,11 @@ RL_PID_WAIT_STEP_SEC=0.1
 mkdir -p "$LEDGER_DIR"
 run_unlock() {
   [[ -n "${RUN_LOCK:-}" ]] || return 0
+  # Only its own pid file, then the directory: a release never deletes a
+  # file it did not write (#530).
   if [[ "$(cat "$RUN_LOCK/pid" 2>/dev/null)" == "$$" ]]; then
-    rm -rf "$RUN_LOCK" 2>/dev/null || true
+    rm -f "$RUN_LOCK/pid"
+    rmdir "$RUN_LOCK" 2>/dev/null || true
   fi
 }
 # ── Temp-file hygiene ──
@@ -266,11 +271,20 @@ rt_tmp_cleanup() {
 }
 
 if [[ "$ROUTING" == "1" ]]; then
-  if ! mkdir "$RUN_LOCK" 2>/dev/null; then
-    # #507: the owner takes the lock in two steps, the mkdir above and then
-    # its pid below, so a supervisor that loses the mkdir race can arrive
-    # between them. Re-read the pid for about a second before calling the
-    # lock ownerless: "remove it" is the wrong advice while its owner runs.
+  # The pid file, created exclusively after the mkdir, is what holds the lock
+  # (sf_dir_lock): mkdir alone may tell two supervisors both that they made
+  # the directory (#530).
+  RL_RC=0
+  sf_dir_lock "$RUN_LOCK" pid "$$"$'\n' || RL_RC=$?
+  if [[ "$RL_RC" -eq 2 ]]; then
+    err "cannot record ownership of the run lock $RUN_LOCK"
+    exit 5
+  fi
+  if [[ "$RL_RC" -ne 0 ]]; then
+    # #507: the owner takes the lock in two steps, the mkdir and then its pid
+    # file, so a supervisor that loses the race can arrive between them.
+    # Re-read the pid for about a second before calling the lock ownerless:
+    # "remove it" is the wrong advice while its owner runs.
     RL_OWNER=""
     _rl_try=0
     while (( _rl_try < RL_PID_WAIT_TRIES )); do
@@ -291,11 +305,6 @@ if [[ "$ROUTING" == "1" ]]; then
     fi
     err "the run lock $RUN_LOCK records dead owner pid $RL_OWNER."
     err "Refusing racy automatic takeover. Confirm no supervisor is running, remove that lock, then retry."
-    exit 5
-  fi
-  if ! printf '%s\n' "$$" > "$RUN_LOCK/pid"; then
-    rm -rf "$RUN_LOCK" 2>/dev/null || true
-    err "cannot record ownership of the run lock $RUN_LOCK"
     exit 5
   fi
   trap 'rt_tmp_cleanup; run_unlock' EXIT
