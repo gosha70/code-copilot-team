@@ -102,7 +102,9 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   lock and took it as well. It now frees a stale lock under a guard
   (`<state>.lock.reclaim`, created exclusively) after judging the lock
   again, as the state-file lock does. A guard left by a writer killed
-  inside it is waited for and named (#534).
+  inside it is waited for and named. A waiter that read the lock's age just
+  before another waiter freed it no longer refuses it as having an
+  unverifiable owner: it reads the owner first, and waits (#534).
 - **Six shell locks admit one holder where `mkdir` is not exclusive.** The
   routing-state locks (the state write, its scheduler variant, the tick),
   the probe ledger's, a routed supervisor's run lock and the auto-build

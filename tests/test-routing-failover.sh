@@ -203,6 +203,27 @@ OUT=$(CCT_ROUTING_LOCK_STALE_SEC=1 bash -c "set +e; CCT_ROUTING_STATE='$GD' sour
 assert "takeover (#534): a reclaim guard left behind is waited for and named, never removed by guesswork" \
     bash -c '[[ "$1" == 2 ]] && grep -qF "cannot be reclaimed while $2.lock.reclaim exists" <<< "$3" && [[ -e "$2.lock.reclaim" && "$(cat "$2.lock/pid")" == "$4" ]]' \
     _ "$RC" "$GD" "$OUT" "$GDEAD"
+# The owner is read before the age. Another waiter's reclaim landing between
+# a waiter's two reads (whichever comes first: the pid file's or the age's),
+# with that waiter then holding the lock for a second, leaves this waiter
+# waiting and then taking the lock, never refusing as "unverifiable" an owner
+# that was there a moment ago.
+BR="$TMP/between.json"
+mkdir -p "$BR.lock"; ( : ) & BDEAD=$!; wait "$BDEAD" 2>/dev/null || true
+echo "$BDEAD" > "$BR.lock/pid"; touch -t 202001010000 "$BR.lock"
+OUT=$(CCT_ROUTING_STATE="$BR" bash -c '
+  set +e; source "$1"; L="${RS_FILE}.lock"; fired=0
+  reclaim_once() {
+      [[ "$fired" -eq 0 ]] || return 0; fired=1
+      rm -f "$L/pid"; rmdir "$L"
+      ( sleep 0.3; mkdir "$L" && printf "%s\n" "$2" > "$L/pid"; sleep 1; rm -f "$L/pid"; rmdir "$L" ) &
+  }
+  cat() { command cat "$@"; local r=$?; [[ "$1" == "$L/pid" && "$r" -eq 0 ]] && reclaim_once; return "$r"; }
+  stat() { local o r; o=$(command stat "$@" 2>/dev/null); r=$?; [[ -n "$o" ]] && printf "%s\n" "$o"
+           [[ "$r" -eq 0 && "$o" =~ ^[0-9]+$ ]] && reclaim_once; return "$r"; }
+  rc=0; rs_lock || rc=$?; echo "rc=$rc"; [[ "$rc" -eq 0 ]] && rs_unlock; wait' _ "$SLIB" "$$" 2>&1)
+assert "takeover (#535 review): a reclaim between a waiter's two reads leaves it waiting, then holding the lock" \
+    bash -c 'grep -q "^rc=0$" <<< "$1" && ! grep -q "unverifiable" <<< "$1"' _ "$OUT"
 
 
 echo ""

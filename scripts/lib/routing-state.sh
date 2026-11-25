@@ -97,6 +97,11 @@ rs_lock() {
             return 2
         fi
         local age now mtime owner
+        # The owner first, then the age: another waiter's reclaim that removes
+        # the pid file between the two reads freshens or removes the directory,
+        # so the lock reads as fresh and this waiter waits, never refusing an
+        # owner that was there a moment ago as unverifiable.
+        owner=$(cat "$dir/pid" 2>/dev/null || echo "")
         now=$(rs_now)
         # GNU first: BSD stat rejects -c, while GNU's -f is a file-system
         # query that reads %m as a second file (#530). A value that is not a
@@ -105,7 +110,6 @@ rs_lock() {
         [[ "$mtime" =~ ^[0-9]+$ ]] || mtime="$now"
         age=$((now - mtime))
         if [[ "$age" -ge "$RS_LOCK_STALE_SEC" ]]; then
-            owner=$(cat "$dir/pid" 2>/dev/null || echo "")
             if [[ ! "$owner" =~ ^[0-9]+$ ]]; then
                 # Threshold passed but the owner cannot be verified —
                 # FAIL CLOSED rather than steal an unattributable lock.
