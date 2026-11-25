@@ -27,6 +27,7 @@ origin:
     - specs/llm-catalog/origin/2026-11-10-issue-400-origin.md
     - specs/llm-catalog/origin/2026-11-19-launch-first-ruling.md
     - specs/llm-catalog/origin/2026-11-23-replan-rulings.md
+    - specs/llm-catalog/origin/2026-11-25-s4-rulings.md
   origin_claim: |
     Configure multiple named LLM targets once in a user-level catalog
     (providers, endpoints, llms, bindings; credentials as references),

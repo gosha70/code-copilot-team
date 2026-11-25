@@ -16,6 +16,7 @@ origin:
   transcripts:
     - specs/llm-catalog/origin/2026-11-10-issue-400-origin.md
     - specs/llm-catalog/origin/2026-11-19-launch-first-ruling.md
+    - specs/llm-catalog/origin/2026-11-25-s4-rulings.md
 ---
 
 # Spec: harness-agnostic LLM catalog and per-launch `--llm` selection
@@ -153,7 +154,9 @@ target, and the rest are put to the owner with the PR.
    so the launcher can neither restore a session's target nor refuse a
    different one. `--llm` is accepted with `--continue` and `--resume`;
    the help and the guide say to resume with the target a session was
-   started with. The refusals arrive with the stamps.
+   started with. The refusals arrive with the stamps. *Retired
+   2026-11-25 by S4:* the stamps exist, and FR-17 to FR-19 apply, with
+   S4's notes there.
 3. **A Claude Code binding to a `managed` provider.** FR-14 gives
    Claude Code one protocol and reserves `managed` for Kiro. This slice
    accepts `harness = "claude-code"` on a managed provider's llm, with
@@ -624,7 +627,22 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   and enriched with the effective model, only from the harness's own
   session evidence (its transcript or session record for that id),
   observed at a later resume or by `cct llm sessions`; a stamp never
-  implies that a session or model was established.
+  implies that a session or model was established. *S4 note
+  (2026-11-25):* for Claude Code the stamp is
+  `llm-sessions/claude-code/<session-id>.json` under the user home,
+  written through `cct-statefile.sh`; it also lists the names the
+  launch clears (FR-30, `env_clear`), and its gate reads `none yet`
+  until S3 builds D7's gate. Its compatibility state is computed at
+  launch, so a rule table or compatibility record that cannot be read
+  refuses the launch, naming it (FR-29). The session evidence is Claude Code's
+  transcript, `~/.claude/projects/<project path, every other character
+  a dash>/<id>.jsonl` (`verification/claude-code-session-capture.md`,
+  section 7), or, where Claude Code shortened a long path, the file of
+  that id under `~/.claude/projects/`. The model of its last reply is
+  the effective model. Not a reply of the session: an API error Claude
+  Code records as its own assistant entry (model `<synthetic>`), and in
+  a fork the source's history copied into its transcript (each entry
+  marked `forkedFrom`).
 - **FR-18 Resume rules.** New session, no `--llm`: native. New
   session with `--llm`: bind and stamp. Resume by exact id, no
   `--llm`: restore the stamped binding when a stamp exists, else
@@ -639,6 +657,23 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   mid-session; the remedy names `--resume <id> --llm <target>` or a
   new session. Identity-safe continuation is not claimed until the
   launcher can establish the exact session the harness will choose.
+  *S4 notes (2026-11-25), on the owner's rulings of that date
+  (`origin/2026-11-25-s4-rulings.md`), whose choices the owner accepted
+  the same day:* an exact id is a UUID, after `--resume` or attached
+  (`-r<id>`); `--resume` with a session's name or a search term is the
+  picker, and arguments after `--` are text. The flags are read in
+  Claude Code's own order (2.1.332):
+  `--continue` wins over `--resume`, so beside an exact id it is still
+  refused with `--llm` and restores nothing without; `--teleport` and
+  `--from-pr` resume a session Claude Code finds for itself and are
+  refused with `--llm` like the picker. A resume by exact id with
+  `--llm` and no stamp is refused: the target the session was started
+  with is unknown, and the refusal names the ways out, a resume without
+  `--llm` or `--fork-session`. A fork (`--resume <id> --fork-session`)
+  is a new session: with `--llm` any target, stamped under its own id
+  with the id it came from; without, native. *S4 departure from this text, accepted by the owner
+  2026-11-25:* the native notice prints only where stamps exist, so a
+  launcher that never used `--llm` stays as it was (FR-11, FR-27).
 - **FR-19 Restored target is re-resolved.** A restored stamp goes
   through the same resolver and compatibility gate as a fresh `--llm`.
   A launch-identity digest that differs from the stamp's (another
@@ -647,7 +682,11 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   An options-digest change (a tuning key) is reported in the notice
   and allowed. An evidence-digest change alone (harness or rule
   version) only degrades the state to `unverified`, which
-  `--allow-unverified` may bypass.
+  `--allow-unverified` may bypass. *S4 note (2026-11-25):* until S3
+  builds the gate, the checks are a fresh launch's static refusals
+  (FR-12): `--allow-unverified` does not exist yet, and an
+  evidence-digest change refuses nothing. `cct llm sessions` says, for
+  each stamp, whether a resume by its id would pass them now.
 
 ### Adapter contracts
 
@@ -678,7 +717,21 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   version: the one the #399 work pinned for the retry behaviour. The
   adapter is implemented in slice B after B's capture; until then a
   `claude-code` launch **with `--llm`** refuses with "adapter not
-  implemented", and a launch without `--llm` is untouched.
+  implemented", and a launch without `--llm` is untouched. *Amended
+  2026-11-25, S4, plan amendment 4:* the capture is re-run on the
+  installed `claude` by `verification/capture-claude.sh`, which stamps
+  the CLI version; `verification/claude-code-session-capture.md` is its
+  record for 2.1.332. The 30 `CLAUDE_CODE_*` variables it finds that
+  2.1.329 did not carry (31 strings; the other is a fragment of a
+  regular expression) stay off the clear-list (FR-30, D-S4-env). *S4
+  note (2026-11-25):* the minimum version is 2.1.305, the version PR
+  #425 (the #399 work) recorded for the retry behaviour, and nothing
+  enforced: from it Claude Code can retry a request without tool search
+  after a 400 or 422 (its MCP documentation, "Tool search through an
+  LLM gateway"). It is the rule table's `min_version`, from rule version
+  2. No launch is refused on it before S3's gate: it sets the
+  compatibility state that `cct llm compatibility`, `cct doctor` and a
+  session's stamp show.
 - **FR-21 Codex.** With `--llm`: `--model <remote>` and `-c`
   overrides that define `model_provider = cct-<binding>` and the
   `model_providers.cct-<binding>` table (`name`, `base_url`,
@@ -824,7 +877,13 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   (FR-11). Removal uses `env -u` for each name, the primitive
   `pi-code`'s worktree hand-off already uses. Proof: the sentinel
   control in FR-15 and a launcher test that a planted ambient key and
-  switch are absent from the stub harness's environment.
+  switch are absent from the stub harness's environment. *Ruled
+  2026-11-25 by the owner (D-S4-env):* "CCT clears only environment
+  variables for which executable evidence demonstrates that inherited
+  state can override or alter the CCT-selected LLM target. Newly
+  discovered Claude Code variables remain untouched until their
+  semantics are demonstrated. Variable names or binary-string presence
+  alone are not sufficient evidence."
 
 ## Constraints / What NOT to Build
 
@@ -922,6 +981,13 @@ before slice D builds; the approved spec's history stays in git.
   native. Project-latest restoration was withdrawn: the harness's
   "most recent" and CCT's "most recent stamp" are different sets.
   Recommended. **Ruled 2026-11-10 by the owner: accepted as recommended.**
+  *S4 notes (2026-11-25):* the owner ruled that day that CCT owns the
+  session identity: it generates the UUID, stamps the attempted launch
+  before Claude Code runs, and passes `--session-id` itself; the cmux
+  wrapper's own injection is not relied on. So a `--session-id` given
+  with `--llm` is refused, and the refusal says to drop it: it could
+  name an existing session, whose stamp would be replaced before Claude
+  Code refused the id. Accepted by the owner 2026-11-25.
 - **D10 Codex overlay form.** `-c` overrides (names and URLs, no
   secret, nothing to clean up), adopted only after the capture proves
   nested keys on the installed CLI; a disproving capture stops the
