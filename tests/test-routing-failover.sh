@@ -171,6 +171,60 @@ mkdir -p "$FO.lock"; echo "999999" > "$FO.lock/pid"
 assert_eq "owner-aware unlock: a non-owner cannot remove the lock" "999999" \
     "$(cat "$FO.lock/pid" 2>/dev/null)"
 
+# #534: a stale lock is taken over under a reclaim guard. Two waiters judge
+# one dead owner's stale lock; B is held up (by the hook given) while A takes
+# the lock over, and B must never free A's live lock: their critical
+# sections never overlap.
+takeover_race() {  # <shell code defining B's hook> -> the log of both sections
+    local X dead; X=$(mktemp -d "$TMP/race.XXXXXX")
+    ( : ) & dead=$!; wait "$dead" 2>/dev/null || true
+    mkdir "$X/s.json.lock"; echo "$dead" > "$X/s.json.lock/pid"; touch -t 202001010000 "$X/s.json.lock"
+    ( set +e; export CCT_ROUTING_STATE="$X/s.json"; source "$SLIB"; eval "$1"
+      rs_lock 2>/dev/null; echo "B enter" >> "$X/log"; sleep 1; echo "B leave" >> "$X/log"; rs_unlock ) &
+    sleep 0.5
+    ( set +e; export CCT_ROUTING_STATE="$X/s.json"; rs_journal() { :; }; source "$SLIB"
+      rs_lock 2>/dev/null; echo "A enter" >> "$X/log"; sleep 3; echo "A leave" >> "$X/log"; rs_unlock ) &
+    wait
+    paste -sd' ' "$X/log"
+}
+NO_OVERLAP='^(A enter A leave B enter B leave|B enter B leave A enter A leave)$'
+RACE=$(takeover_race 'rs_journal() { [[ "$1" == lock_takeover ]] && sleep 2; return 0; }')
+assert "takeover (#534): a waiter held up in its takeover never frees the lock another took over" \
+    bash -c '[[ "$1" =~ $2 ]]' _ "$RACE" "$NO_OVERLAP"
+RACE=$(takeover_race '_sf_create() { [[ "$1" == *.reclaim ]] && sleep 2; ( set -C; printf "%s" "${2:-}" > "$1" ) 2>/dev/null; }')
+assert "takeover (#534): ...nor one held up before the reclaim guard, which judges the lock again under it" \
+    bash -c '[[ "$1" =~ $2 ]]' _ "$RACE" "$NO_OVERLAP"
+# A guard left by a reclaimer killed inside it is waited for and named.
+GD="$TMP/guarded.json"
+mkdir -p "$GD.lock"; ( : ) & GDEAD=$!; wait "$GDEAD" 2>/dev/null || true
+echo "$GDEAD" > "$GD.lock/pid"; touch -t 202001010000 "$GD.lock"; : > "$GD.lock.reclaim"
+RC=0
+OUT=$(CCT_ROUTING_LOCK_STALE_SEC=1 bash -c "set +e; CCT_ROUTING_STATE='$GD' source '$SLIB'; rs_lock" 2>&1) || RC=$?
+assert "takeover (#534): a reclaim guard left behind is waited for and named, never removed by guesswork" \
+    bash -c '[[ "$1" == 2 ]] && grep -qF "cannot be reclaimed while $2.lock.reclaim exists" <<< "$3" && [[ -e "$2.lock.reclaim" && "$(cat "$2.lock/pid")" == "$4" ]]' \
+    _ "$RC" "$GD" "$OUT" "$GDEAD"
+# The owner is read before the age. Another waiter's reclaim landing between
+# a waiter's two reads (whichever comes first: the pid file's or the age's),
+# with that waiter then holding the lock for a second, leaves this waiter
+# waiting and then taking the lock, never refusing as "unverifiable" an owner
+# that was there a moment ago.
+BR="$TMP/between.json"
+mkdir -p "$BR.lock"; ( : ) & BDEAD=$!; wait "$BDEAD" 2>/dev/null || true
+echo "$BDEAD" > "$BR.lock/pid"; touch -t 202001010000 "$BR.lock"
+OUT=$(CCT_ROUTING_STATE="$BR" bash -c '
+  set +e; source "$1"; L="${RS_FILE}.lock"; fired=0
+  reclaim_once() {
+      [[ "$fired" -eq 0 ]] || return 0; fired=1
+      rm -f "$L/pid"; rmdir "$L"
+      ( sleep 0.3; mkdir "$L" && printf "%s\n" "$2" > "$L/pid"; sleep 1; rm -f "$L/pid"; rmdir "$L" ) &
+  }
+  cat() { command cat "$@"; local r=$?; [[ "$1" == "$L/pid" && "$r" -eq 0 ]] && reclaim_once; return "$r"; }
+  stat() { local o r; o=$(command stat "$@" 2>/dev/null); r=$?; [[ -n "$o" ]] && printf "%s\n" "$o"
+           [[ "$r" -eq 0 && "$o" =~ ^[0-9]+$ ]] && reclaim_once; return "$r"; }
+  rc=0; rs_lock || rc=$?; echo "rc=$rc"; [[ "$rc" -eq 0 ]] && rs_unlock; wait' _ "$SLIB" "$$" 2>&1)
+assert "takeover (#535 review): a reclaim between a waiter's two reads leaves it waiting, then holding the lock" \
+    bash -c 'grep -q "^rc=0$" <<< "$1" && ! grep -q "unverifiable" <<< "$1"' _ "$OUT"
+
 
 echo ""
 echo "=== T2: class->action — the total table, executable ==="
