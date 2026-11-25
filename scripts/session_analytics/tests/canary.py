@@ -92,7 +92,7 @@ def corpus(*, git_repo: bool = False) -> Iterator[tuple[Path, Path]]:
         source.mkdir(parents=True)
         template = (FIXTURE / "session.jsonl.template").read_text(encoding="utf-8")
         (source / "session.jsonl").write_text(
-            template.replace("{{PROJECT_ROOT}}", str(project)), encoding="utf-8"
+            template.replace("{{PROJECT_ROOT}}", json.dumps(str(project))[1:-1]), encoding="utf-8"
         )
         yield source.parent, project
     finally:
