@@ -1236,6 +1236,40 @@ else
   PASS=$((PASS + 1))
 fi
 
+# #530: the cache's mtime is read GNU-first. Read BSD-first under GNU stat,
+# `stat -f %m` printed a file-system report; the arithmetic on it failed on
+# every call once the cache existed, printing an error, and the cache was
+# never refreshed. The shim is GNU stat as #530 found it: `stat -f %m <file>`
+# reads %m as a second file and exits 1.
+SL_STAT_SHIM=$(mktemp -d)
+cat > "$SL_STAT_SHIM/stat" << 'SHIM'
+#!/usr/bin/env bash
+if [[ "$1" == "-f" ]]; then
+  shift; rc=0
+  for a in "$@"; do
+    if [[ -e "$a" ]]; then printf '  File: "%s"\n    ID: 0        Namelen: 255     Type: ext2/ext3\n' "$a"
+    else echo "stat: cannot read file system information for '$a': No such file or directory" >&2; rc=1; fi
+  done
+  exit "$rc"
+fi
+if [[ "$1" == "-c" && "$2" == "%Y" ]]; then
+  /usr/bin/stat -c %Y "$3" 2>/dev/null || /usr/bin/stat -f %m "$3"
+  exit
+fi
+exec /usr/bin/stat "$@"
+SHIM
+chmod +x "$SL_STAT_SHIM/stat"
+SL_WS="/tmp/cct-statusline-530-$$"
+SL_CACHE="/tmp/claude-statusline-git-$(printf '%s' "$SL_WS" | cksum | cut -d' ' -f1)"
+SL_INPUT="{\"model\":{\"display_name\":\"Opus\"},\"workspace\":{\"current_dir\":\"$SL_WS\"},\"cwd\":\"$SL_WS\",\"context_window\":{\"used_percentage\":0},\"cost\":{\"total_cost_usd\":0,\"total_duration_ms\":0,\"total_lines_added\":0,\"total_lines_removed\":0}}"
+printf 'cached-530|0|0\n' > "$SL_CACHE"
+SL_OUT=$(printf '%s' "$SL_INPUT" | PATH="$SL_STAT_SHIM:$PATH" bash "$STATUSLINE" 2>&1)
+assert_not_contains "under GNU stat, a fresh cache is read without an error (#530)" "$SL_OUT" "syntax error"
+printf 'stale-530|0|0\n' > "$SL_CACHE"; touch -t 202001010000 "$SL_CACHE"
+SL_OUT=$(printf '%s' "$SL_INPUT" | PATH="$SL_STAT_SHIM:$PATH" bash "$STATUSLINE" 2>&1)
+assert_not_contains "...and a stale cache is refreshed (#530)" "$SL_OUT" "stale-530"
+rm -f "$SL_CACHE"; rm -rf "$SL_STAT_SHIM"
+
 echo ""
 
 echo "=== setup.sh statusLine wiring ==="

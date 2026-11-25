@@ -96,6 +96,20 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Fixed
 
+- **Six shell locks admit one holder where `mkdir` is not exclusive.** The
+  routing-state locks (the state write, its scheduler variant, the tick),
+  the probe ledger's, a routed supervisor's run lock and the auto-build
+  ledger's took the lock when `mkdir` succeeded. uutils' `mkdir` (Ubuntu's
+  coreutils since 25.10) can tell two simultaneous callers both that it
+  made the directory, so two writers could hold one lock: lost routing
+  state and ledger updates, or two supervisors on one ledger. Each lock is
+  now held by its owner file, created exclusively after the `mkdir`, and
+  keeps its own rules for a lock it finds held. Two files read an mtime
+  BSD-first: on GNU/Linux, `stat -f %m` reads `%m` as a second file and
+  prints a file-system report. There, a routing writer waiting on a lock
+  died at the arithmetic, and the status line printed an error and never
+  refreshed its git cache. Both read GNU-first now, and a value that is not
+  a number is never used (#530).
 - **A routed supervisor that starts while another is taking the run lock
   names the running one.** The lock is taken in two steps, its directory
   and then the owner's pid. A second supervisor arriving between them found

@@ -36,12 +36,32 @@ printf '#!/usr/bin/env bash\ncat > /dev/null\necho "test default canary: this ca
 export CCT_ROUTING_PROBE_CMD="bash $TMP/default-probe/unreachable.sh"
 export CCT_ROUTING_PROBE_LEDGER="$TMP/default-probe/ledger.json"
 
-# #530 shim. MKDIR_SHIM reports success for a directory already there,
+# #530 shims. MKDIR_SHIM reports success for a directory already there,
 # which is what uutils' mkdir tells one of two simultaneous callers, made
-# deterministic.
+# deterministic. STAT_SHIM is GNU stat as #530 found it: -f takes no format,
+# so `stat -f %m <file>` reads %m as a second file, prints <file>'s
+# file-system report and exits 1.
 MKDIR_SHIM="$TMP/mkdir-shim"; mkdir -p "$MKDIR_SHIM"
 printf '#!/bin/sh\nexec /bin/mkdir -p "$@"\n' > "$MKDIR_SHIM/mkdir"
 chmod +x "$MKDIR_SHIM/mkdir"
+STAT_SHIM="$TMP/stat-shim"; mkdir -p "$STAT_SHIM"
+cat > "$STAT_SHIM/stat" << 'SHIM'
+#!/usr/bin/env bash
+if [[ "$1" == "-f" ]]; then
+    shift; rc=0
+    for a in "$@"; do
+        if [[ -e "$a" ]]; then printf '  File: "%s"\n    ID: 0        Namelen: 255     Type: ext2/ext3\n' "$a"
+        else echo "stat: cannot read file system information for '$a': No such file or directory" >&2; rc=1; fi
+    done
+    exit "$rc"
+fi
+if [[ "$1" == "-c" && "$2" == "%Y" ]]; then
+    /usr/bin/stat -c %Y "$3" 2>/dev/null || /usr/bin/stat -f %m "$3"
+    exit
+fi
+exec /usr/bin/stat "$@"
+SHIM
+chmod +x "$STAT_SHIM/stat"
 
 PASS=0; FAIL=0
 assert() {
@@ -863,6 +883,15 @@ assert "probe ledger lock (#530): _rb_lock refuses a held lock even when mkdir r
       ! _rb_lock 2>/dev/null
       [[ "$(cat "${RB_LEDGER}.lock/pid")" == "$2" ]]' _ "$PLIB" "$$"
 rm -rf "$TK/held-ledger.json.lock"
+# #530: rs_lock read the lock's mtime BSD-first. Under GNU stat the
+# arithmetic on `stat -f %m`'s report ended the waiting writer; read
+# GNU-first, a dead owner's stale lock is taken over.
+mkdir -p "$TK/stale-state.json.lock"; printf '%s\n' "$DEAD_SCHED_PID" > "$TK/stale-state.json.lock/pid"
+touch -t 202001010000 "$TK/stale-state.json.lock"
+assert "state lock (#530): under GNU stat, rs_lock reads a stale lock's age and takes over from a dead owner" \
+    env PATH="$STAT_SHIM:$PATH" CCT_ROUTING_STATE="$TK/stale-state.json" bash -c '
+      source "$1"
+      rs_lock 2>/dev/null && [[ "$(cat "${RS_FILE}.lock/pid")" == "$$" ]] && rs_unlock' _ "$SLIB"
 
 # CONCURRENCY, not a lock fixture: two real ticks, one due event. The
 # claim (select + mark `probing` in ONE locked write) is what stops

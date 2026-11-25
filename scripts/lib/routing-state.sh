@@ -72,7 +72,11 @@ rs_lock() {
         fi
         local age now mtime owner
         now=$(rs_now)
-        mtime=$(stat -f %m "$dir" 2>/dev/null || stat -c %Y "$dir" 2>/dev/null || echo "$now")
+        # GNU first: BSD stat rejects -c, while GNU's -f is a file-system
+        # query that reads %m as a second file (#530). A value that is not a
+        # number never reaches the arithmetic: the lock reads as fresh.
+        mtime=$(stat -c %Y "$dir" 2>/dev/null || stat -f %m "$dir" 2>/dev/null) || mtime=""
+        [[ "$mtime" =~ ^[0-9]+$ ]] || mtime="$now"
         age=$((now - mtime))
         if [[ "$age" -ge "$RS_LOCK_STALE_SEC" ]]; then
             owner=$(cat "$dir/pid" 2>/dev/null || echo "")
