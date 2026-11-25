@@ -189,7 +189,10 @@ _rb_unlock() {
         echo "routing-probe: cannot release accounting lock $dir because ownership is no longer provable" >&2
         return 1
     fi
-    rm -rf "$dir" 2>/dev/null || return 1
+    # Only its own pid file, then the directory: a release never deletes a
+    # file it did not write (#530).
+    rm -f "$dir/pid"
+    rmdir "$dir" 2>/dev/null || return 1
 }
 
 rb_debit() {

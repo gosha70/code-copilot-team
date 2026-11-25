@@ -878,7 +878,10 @@ tick)
             fi
             release_rl() {
                 [[ "$(cat "$rl/pid" 2>/dev/null)" == "$$" ]] || return 1
-                rm -rf "$rl" 2>/dev/null || return 1
+                # Only its own pid file, then the directory: a release never
+                # deletes a file it did not write (#530).
+                rm -f "$rl/pid"
+                rmdir "$rl" 2>/dev/null || return 1
                 [[ ! -e "$rl" ]]
             }
 

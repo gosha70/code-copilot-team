@@ -247,8 +247,11 @@ RL_PID_WAIT_STEP_SEC=0.1
 mkdir -p "$LEDGER_DIR"
 run_unlock() {
   [[ -n "${RUN_LOCK:-}" ]] || return 0
+  # Only its own pid file, then the directory: a release never deletes a
+  # file it did not write (#530).
   if [[ "$(cat "$RUN_LOCK/pid" 2>/dev/null)" == "$$" ]]; then
-    rm -rf "$RUN_LOCK" 2>/dev/null || true
+    rm -f "$RUN_LOCK/pid"
+    rmdir "$RUN_LOCK" 2>/dev/null || true
   fi
 }
 # ── Temp-file hygiene ──

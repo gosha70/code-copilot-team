@@ -883,6 +883,17 @@ assert "probe ledger lock (#530): _rb_lock refuses a held lock even when mkdir r
       ! _rb_lock 2>/dev/null
       [[ "$(cat "${RB_LEDGER}.lock/pid")" == "$2" ]]' _ "$PLIB" "$$"
 rm -rf "$TK/held-ledger.json.lock"
+# #530: a release removes only its own pid file, then the directory, so it
+# never deletes a file it did not write (here, one standing in for another
+# writer's).
+assert "state lock (#530): rs_unlock removes only its own pid file" \
+    env CCT_ROUTING_STATE="$TK/own-state.json" bash -c '
+      source "$1"
+      rs_trylock || exit 1
+      printf x > "${RS_FILE}.lock/other"
+      rs_unlock
+      [[ ! -e "${RS_FILE}.lock/pid" && -e "${RS_FILE}.lock/other" ]]' _ "$SLIB"
+rm -rf "$TK/own-state.json.lock"
 # #530: rs_lock read the lock's mtime BSD-first. Under GNU stat the
 # arithmetic on `stat -f %m`'s report ended the waiting writer; read
 # GNU-first, a dead owner's stale lock is taken over.

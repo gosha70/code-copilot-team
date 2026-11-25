@@ -138,16 +138,22 @@ rs_tick_unlock() {
         echo "routing-state: cannot release scheduler lock $RS_TICK_LOCK because ownership is no longer provable" >&2
         return 1
     fi
-    rm -rf "$RS_TICK_LOCK" 2>/dev/null || return 1
+    # Only its own pid file, then the directory: a release never deletes a
+    # file it did not write (#530).
+    rm -f "$RS_TICK_LOCK/pid"
+    rmdir "$RS_TICK_LOCK" 2>/dev/null || return 1
     RS_TICK_LOCK_HELD=0
 }
 
 rs_unlock() {
     local dir="${RS_FILE}.lock"
     # Owner-aware: only the recording process may remove the lock, so
-    # one process can never remove a replacement lock.
+    # one process can never remove a replacement lock. Only its own pid
+    # file, then the directory: a release never deletes a file it did not
+    # write (#530).
     if [[ "$(cat "$dir/pid" 2>/dev/null)" == "$$" ]]; then
-        rm -rf "$dir" 2>/dev/null || true
+        rm -f "$dir/pid"
+        rmdir "$dir" 2>/dev/null || true
     fi
 }
 
