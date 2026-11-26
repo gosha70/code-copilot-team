@@ -93,7 +93,7 @@ rs_lock() {
         sf_dir_lock "$dir" pid "$$"$'\n' || rc=$?
         [[ "$rc" -eq 0 ]] && return 0
         if [[ "$rc" -eq 2 ]]; then
-            echo "routing-state: cannot record the owner of $dir" >&2
+            echo "routing-state: ${SF_ERR:-cannot record the owner of $dir}" >&2
             return 2
         fi
         local age now mtime owner
@@ -140,7 +140,8 @@ rs_lock() {
         fi
     done
 }
-# rs_trylock -> ACQUIRES the lock or fails immediately (rc 1).
+# rs_trylock -> ACQUIRES the lock or fails immediately: rc 1 held, rc 2 its
+# owner cannot be recorded (said on stderr; never read as held, #541).
 # A NON-BLOCKING acquisition for schedulers: rs_lock deliberately WAITS
 # (a supervisor should), but a cron tick must refuse rather than
 # pile up behind another writer. The refusal decision and the
@@ -153,18 +154,24 @@ rs_lock() {
 # release and a new writer can acquire between those operations. The
 # scheduler fails closed and names the lock for operator recovery.
 rs_trylock() {
-    local dir="${RS_FILE}.lock"
+    local dir="${RS_FILE}.lock" rc=0
     mkdir -p "$(dirname "$RS_FILE")" 2>/dev/null || true
-    sf_dir_lock "$dir" pid "$$"$'\n' || return 1
+    sf_dir_lock "$dir" pid "$$"$'\n' || rc=$?
+    [[ "$rc" -eq 2 ]] && echo "routing-state: $SF_ERR" >&2
+    return "$rc"
 }
 
 # The scheduler lock is distinct from the short state-write lock. A tick
 # holds this for its complete probe/apply/wake pass, so overlapping cron
 # invocations refuse instead of both operating on different snapshots.
-rs_tick_trylock() {
-    local dir="$RS_TICK_LOCK"
+rs_tick_trylock() {  # rc 1 held by another tick; rc 2 its owner cannot be recorded (said)
+    local dir="$RS_TICK_LOCK" rc=0
     mkdir -p "$(dirname "$dir")" 2>/dev/null || return 1
-    sf_dir_lock "$dir" pid "$$"$'\n' || return 1
+    sf_dir_lock "$dir" pid "$$"$'\n' || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+        [[ "$rc" -eq 2 ]] && echo "routing-state: $SF_ERR" >&2
+        return "$rc"
+    fi
     RS_TICK_LOCK_HELD=1
 }
 
@@ -709,7 +716,8 @@ rs_probe_qualified() {
 # write claimed, so two ticks can never probe the same due event and
 # manufacture a success streak out of one recovery.
 #   - non-blocking (rs_trylock): a scheduled tick refuses (rc 3)
-#     rather than queueing behind another writer;
+#     rather than queueing behind another writer, and fails (rc 1)
+#     on a lock whose owner it cannot record;
 #   - the claim CONSUMES the schedule: `probing` is set AND
 #     next_probe_at is cleared in that same write. Marking alone is
 #     not enough — a second tick arriving after the first RELEASED the
@@ -731,8 +739,12 @@ rs_probe_qualified() {
 #   - nothing due => NO WRITE AT ALL, so an idle tick leaves the
 #     store byte-identical.
 rs_claim_due() {
-    local now="${1:-$(rs_now)}" doc out claims
-    rs_trylock || return 3
+    local now="${1:-$(rs_now)}" doc out claims trc=0
+    rs_trylock || trc=$?
+    # Held by another writer: a refusal (3). A lock whose owner could not
+    # be recorded is an error, which rs_trylock has said (#541).
+    [[ "$trc" -eq 1 ]] && return 3
+    [[ "$trc" -eq 0 ]] || return 1
     doc=$(rs_read) || { local rc=$?; rs_unlock; return "$rc"; }
     if ! out=$(jq -ce --argjson now "$now" --argjson abandon "$RS_PROBE_ABANDON_SEC" '
         ( [ .profiles | to_entries[]

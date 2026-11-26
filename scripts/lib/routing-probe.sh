@@ -170,7 +170,10 @@ _rb_lock() {
         rc=0
         sf_dir_lock "$dir" pid "$$"$'\n' || rc=$?
         [[ "$rc" -eq 0 ]] && return 0
-        [[ "$rc" -eq 2 ]] && return 1   # its owner could not be recorded
+        if [[ "$rc" -eq 2 ]]; then      # its owner could not be recorded
+            echo "routing-probe: $SF_ERR — refusing to debit unserialised" >&2
+            return 1
+        fi
         # Do not reclaim by PID check. The observed owner can release
         # and a replacement can acquire before deletion, causing this
         # process to remove a live writer's lock. Accounting refuses

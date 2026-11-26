@@ -277,7 +277,7 @@ if [[ "$ROUTING" == "1" ]]; then
   RL_RC=0
   sf_dir_lock "$RUN_LOCK" pid "$$"$'\n' || RL_RC=$?
   if [[ "$RL_RC" -eq 2 ]]; then
-    err "cannot record ownership of the run lock $RUN_LOCK"
+    err "cannot record ownership of the run lock $RUN_LOCK: ${SF_ERR:-the owner file could not be written}"
     exit 5
   fi
   if [[ "$RL_RC" -ne 0 ]]; then

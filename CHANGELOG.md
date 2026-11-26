@@ -133,6 +133,20 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Fixed
 
+- **A lock that cannot be taken no longer removes another writer's.** The
+  six shell locks of #530 removed their lock directory after the last of
+  their failed attempts to create an owner file. By then the directory
+  there could be another writer's, made a moment before, which then
+  failed in turn. A take now undoes only a lock it held: when the owner
+  file it created cannot be written, that file goes, then the directory
+  while empty, as before. A directory whose owner file it never created
+  is left, and the error names it. An owner file whose write failed and
+  which cannot be removed either is now reported, with the lock it leaves
+  held, where before it was left standing for a holder unannounced; the
+  state-file lock refuses on it at once. Every caller now says why a lock
+  could not be taken. The routing tick no longer reports a lock it could
+  not write, its own or the routing-state lock, as held by another
+  writer: it exits 1 for it, and keeps exit 3 for contention (#541).
 - **Two writers waiting on one dead writer's routing-state lock no longer
   both take it.** `rs_lock` judged the lock stale and removed it, so a
   second waiter that had judged it too then removed the first one's new

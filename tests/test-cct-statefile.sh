@@ -288,8 +288,13 @@ rm -f "$DL/pid"
 assert_eq "sf_dir_lock: a lock directory already there is held, as before, even without an owner file" "1|kept" \
     "$(rc=0; sf_dir_lock "$DL" pid you || rc=$?; echo "$rc|$([[ -d "$DL" ]] && echo kept || echo gone)")"
 rmdir "$DL"
-assert_eq "sf_dir_lock: an owner file that cannot be created is an error, and the directory made for it goes" "2|gone" \
-    "$(rc=0; sf_dir_lock "$DL" missing/pid x || rc=$?; echo "$rc|$([[ -e "$DL" ]] && echo kept || echo gone)")"
+# An owner file never created means the lock was never held here, and by
+# the last try the directory may be another writer's: it is left, and the
+# error names it (#541).
+assert_eq "sf_dir_lock: an owner file that cannot be created is an error naming it, and the directory is left" \
+    "2|kept|cannot create the owner file $DL/missing/pid; $DL is left in place, since it may be another writer's by now: if it still has no owner file, remove it" \
+    "$(rc=0; sf_dir_lock "$DL" missing/pid x || rc=$?; echo "$rc|$([[ -e "$DL" ]] && echo kept || echo gone)|$SF_ERR")"
+rmdir "$DL"
 # A create refused by an owner file that its holder removes before the look
 # (here, a first create that fails and leaves nothing) met a release: it is
 # tried again and takes the lock, never reported as an error.
@@ -310,6 +315,28 @@ assert_eq "sf_dir_lock: a create refused while its holder releases is busy, and 
 # leaves no empty owner file to stand for a holder, and prints nothing.
 assert_eq "sf_dir_lock: an owner file whose write fails is removed, with its directory, as an error" "2|gone" \
     "$( (trap '' XFSZ; ulimit -f 0; rc=0; sf_dir_lock "$DL" pid me || rc=$?; echo "$rc") )|$([[ -e "$DL" ]] && echo kept || echo gone)"
+# The last refused create meets a replacement: the previous holder released
+# and another writer made a fresh directory just before this call gives up.
+# This call never held it, so it is not removed, and the other writer's
+# survives (#541).
+assert_eq "sf_dir_lock: a directory replaced during the last retry survives the failed call" "2|10|kept" \
+    "$(n=0; _sf_create() { n=$((n + 1)); if [[ "$n" -eq "$SF_LOCK_CREATE_TRIES" ]]; then command rmdir -- "${1%/*}"; command mkdir -- "${1%/*}"; fi; return 1; }
+       rc=0; sf_dir_lock "$DL" pid me || rc=$?; echo "$rc|$n|$([[ -d "$DL" ]] && echo kept || echo removed)")"
+rmdir "$DL"
+# A failed write whose unlink is refused too (here, rm stubbed to fail): the
+# empty owner file left behind is reported, never taken for a holder (#541).
+mkdir -p "$DL"
+assert_eq "_sf_create: an owner file it cannot remove after a failed write is reported (3), and left" "3|present" \
+    "$(rm() { return 1; }; rc=$( (trap '' XFSZ; ulimit -f 0; r=0; _sf_create "$DL/pid" me || r=$?; echo "$r") ); echo "$rc|$([[ -e "$DL/pid" ]] && echo present || echo absent)")"
+command rm -f "$DL/pid"; rmdir "$DL"
+assert_eq "sf_dir_lock: ...an error that names the file left, and the lock it holds until removed" \
+    "2|cannot write the owner file $DL/pid, nor remove the empty file left there: $DL reads as held until it is removed" \
+    "$(rm() { return 1; }; (trap '' XFSZ; ulimit -f 0; r=0; sf_dir_lock "$DL" pid me || r=$?; echo "$r|$SF_ERR"))"
+command rm -f "$DL/pid"; rmdir "$DL"
+F3="$D/three.json"
+assert_eq "sf_write: ...and its lock refuses at once, naming the file left, rather than waiting on it" \
+    "1|cannot record the owner of $F3.lock, nor remove the empty $F3.lock/owner left there, which reads as a holder: remove it" \
+    "$(rm() { return 1; }; (trap '' XFSZ; ulimit -f 0; r=0; sf_write "$F3" '{}' >/dev/null 2>&1 || r=$?; echo "$r|$SF_ERR"))"
 
 echo ""
 echo "========================================="
