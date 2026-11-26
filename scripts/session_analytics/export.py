@@ -18,7 +18,6 @@
 from __future__ import annotations
 
 import csv
-import os
 from dataclasses import dataclass
 from typing import Any, Iterator, Optional
 
@@ -375,19 +374,6 @@ _FLOOR_RULES: dict[str, _FloorRule] = {
 }
 
 
-def _under_any(path: Any, roots: frozenset) -> bool:
-    """Whether ``path`` is one of ``roots`` or inside one, by whole path
-    components (``/a/bc`` is not inside ``/a/b``)."""
-    if not path or not roots:
-        return False
-    p = os.path.normpath(str(path))
-    for root in roots:
-        r = os.path.normpath(str(root))
-        if p == r or p.startswith(r.rstrip(os.sep) + os.sep):
-            return True
-    return False
-
-
 def _count(n: int, noun: str) -> str:
     return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
 
@@ -464,7 +450,7 @@ class ExportFloor:
         before = list(r)
         if rule.keeps_row and sid is not None and not policy.keeps(sid):
             r[rule.session_idx] = None
-        if rule.run_dir_idx is not None and _under_any(r[rule.run_dir_idx], policy.excluded_projects):
+        if rule.run_dir_idx is not None and policy.names_project(r[rule.run_dir_idx]):
             r[rule.run_dir_idx] = None
         if r != before:
             changes.append(_EMPTIED)

@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from typing import Any, Mapping, Optional
 
@@ -161,6 +162,10 @@ def current_mode(cfg: Any, override: Any) -> tuple[str, bool]:
     return cfg.redaction_mode, ingest_off
 
 
+def _path_form(path: Any) -> str:
+    return os.path.normcase(os.path.normpath(str(path)))
+
+
 class OutboundPolicy:
     """The floor for every session in a store, computed once per call.
 
@@ -191,6 +196,7 @@ class OutboundPolicy:
         self.skip_ids = skip_ids
         self.skip_keys = skip_keys
         self.excluded_projects = excluded_projects
+        self._project_roots: Optional[tuple[str, ...]] = None
         self._floored = dict(floored or {})
         self._current = dict(current or {})
         self._recorded = dict(recorded or {})
@@ -253,6 +259,20 @@ class OutboundPolicy:
     def keeps_project(self, project_path: Any) -> bool:
         """Whether a project path may be named or broken down by."""
         return project_path not in self.excluded_projects
+
+    def names_project(self, path: Any) -> bool:
+        """Whether ``path`` is an opted-out project's path or inside one, by
+        whole path components (``/a/bc`` is not inside ``/a/b``), however the
+        separators are written and, on Windows, whatever the letter case."""
+        if not path or not self.excluded_projects:
+            return False
+        if self._project_roots is None:
+            self._project_roots = tuple(_path_form(root) for root in self.excluded_projects)
+        value = _path_form(path)
+        return any(
+            value == root or value.startswith(root.rstrip(os.path.sep) + os.path.sep)
+            for root in self._project_roots
+        )
 
     @property
     def any_floored(self) -> bool:

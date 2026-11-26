@@ -156,6 +156,15 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Fixed
 
+- **`ask` no longer returns a path from an opted-out project on Windows.** The
+  check that drops a graph value naming an opted-out project looked for the
+  project's path followed by a literal `/`, so a file inside the project,
+  written with backslashes as Windows stores it, was not recognised and went to
+  the Ask model. `OutboundPolicy.names_project` now decides it by whole path
+  components after `os.path.normcase(os.path.normpath(...))`, so either slash
+  style, a trailing separator and (on Windows) letter case name the same
+  project. Export's check for a benchmark run directory uses it too, in place
+  of its own copy. Closes #548.
 - **A lock that cannot be taken no longer removes another writer's.** The
   six shell locks of #530 removed their lock directory after the last of
   their failed attempts to create an owner file. By then the directory
