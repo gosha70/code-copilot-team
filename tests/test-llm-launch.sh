@@ -464,9 +464,12 @@ assert_exit "usage: --llm does not apply to a wrapper subcommand" 1 "$RC"
 assert_contains "usage: ...and says so" "$OUTPUT" "--llm selects the LLM for a session; it does not apply to 'init'"
 
 # ── Interactive, already inside a multiplexer: this process becomes claude ──
+INPANE_STAMPS=$(ls "$FAKE_HOME/.cct/llm-sessions/claude-code" 2>/dev/null | wc -l | tr -d ' ')
 new_logs
 run_launcher "${DIRTY[@]}" CMUX_WORKSPACE_ID=1 -- --llm deepseek "$PROJ"
 assert_exit "in-pane: launch succeeds" 0 "$RC"
+assert_eq "in-pane: the session is stamped once, under the one id claude gets (#400 S4)" "1 $((INPANE_STAMPS + 1))" \
+    "$(grep '^ARGV:' "$CLAUDE_LOG" | grep -oE -- '--session-id' | wc -l | tr -d ' ') $(ls "$FAKE_HOME/.cct/llm-sessions/claude-code" | wc -l | tr -d ' ')"
 assert_eq "in-pane: claude ran once, in the project" "$PROJ" "$(grep -m1 '^PWD:' "$CLAUDE_LOG" | sed 's/^PWD://')"
 assert_contains "in-pane: claude gets no --llm" "$(grep '^ARGV:' "$CLAUDE_LOG")" "ARGV:"
 assert_not_contains "in-pane: ...none at all" "$(grep '^ARGV:' "$CLAUDE_LOG")" "llm"
@@ -479,9 +482,14 @@ run_launcher CMUX_WORKSPACE_ID=1 -- --peer-review deepseek --llm opus "$PROJ"
 assert_eq "in-pane: peer review and --llm compose" "true opus" "$(claude_env CCT_PEER_REVIEW_ENABLED) $(claude_env ANTHROPIC_MODEL)"
 
 # ── Interactive, a new cmux workspace: the typed command carries ids only ──
+stamp_count() { ls "$FAKE_HOME/.cct/llm-sessions/claude-code" 2>/dev/null | wc -l | tr -d ' '; }
+TYPED_STAMPS=$(stamp_count)
 new_logs
 run_launcher "${DIRTY[@]}" -- --shell cmux --verbose --llm deepseek "$PROJ"
 assert_exit "typed: launch succeeds" 0 "$RC"
+# The session is stamped where it runs: in the pane, whose environment can
+# differ from this launcher's, which stamps nothing (#400 S4).
+assert_eq "typed: the launcher that opens the pane writes no stamp" "$TYPED_STAMPS" "$(stamp_count)"
 TYPED=$(cat "$MUX_LOG")
 assert_eq "typed: the outer launcher does not run claude" "0" "$(claude_ran)"
 assert_contains "typed: the banner says which LLM was selected" "$OUTPUT" "LLM:     deepseek (DeepSeek · deepseek-main[1m] · https://api.deepseek.example)"
@@ -501,12 +509,20 @@ pane() {  # [VAR=value ...] : runs $TYPED as the pane's shell would
 }
 pane "${DIRTY[@]}"
 assert_exit "typed: the pane's command runs" 0 "$RC"
-assert_contains "typed: claude gets the forwarded flag and no --llm" "$(grep '^ARGV:' "$CLAUDE_LOG")" "ARGV: --verbose"
+assert_eq "typed: claude gets the forwarded flag and no --llm" "yes no" \
+    "$(grep '^ARGV:' "$CLAUDE_LOG" | grep -q -- ' --verbose' && echo yes || echo no) $(grep '^ARGV:' "$CLAUDE_LOG" | grep -q -- '--llm' && echo yes || echo no)"
 assert_eq "typed: the pane applies the selection" "https://api.deepseek.example/anthropic" "$(claude_env ANTHROPIC_BASE_URL)"
 assert_eq "typed: the credential is read in the pane" "$SECRET" "$(claude_env ANTHROPIC_AUTH_TOKEN)"
 assert_eq "typed: the ambient key is removed in the pane" "<unset>" "$(claude_env ANTHROPIC_API_KEY)"
 assert_eq "typed: the pane marker does not reach claude" "<unset>" "$(claude_env CCT_LLM_CHILD)"
 assert_eq "typed: the session runs in the project" "$PROJ" "$(grep -m1 '^PWD:' "$CLAUDE_LOG" | sed 's/^PWD://')"
+TYPED_ID=$(grep '^ARGV:' "$CLAUDE_LOG" | tail -1 | grep -oE -- '--session-id [0-9a-f-]{36}' | awk '{print $2}')
+assert_eq "typed: the pane stamps the session, one stamp, under the id claude gets" "$((TYPED_STAMPS + 1)) deepseek@deepseek-claude" \
+    "$(stamp_count) $(jq -r '"\(.llm)@\(.binding)"' "$FAKE_HOME/.cct/llm-sessions/claude-code/$TYPED_ID.json" 2>/dev/null)"
+# The id goes right after claude, ahead of the forwarded flags, so that none
+# of them can take it as its value.
+assert_eq "typed: ...and claude gets that id ahead of the forwarded flags" "yes" \
+    "$(grep -qE -- "^ARGV: --session-id $TYPED_ID --verbose\$" "$CLAUDE_LOG" && echo yes || echo no)"
 
 new_logs
 run_launcher -- --shell cmux --peer-review deepseek --llm opus "$PROJ"
@@ -599,8 +615,10 @@ RC=0; OUTPUT=$(cd "$RUN_IN" && env -i HOME="$FAKE_HOME" PATH="$MOCK_BIN:$PATH" T
     bash -c "$TYPED" 2>&1) || RC=$?
 assert_eq "tmux: the session command applies the selection" "https://api.deepseek.example/anthropic" "$(claude_env ANTHROPIC_BASE_URL)"
 # An existing session runs whatever it was started with: never attached to.
+TMUX_STAMPS=$(stamp_count)
 refused "tmux: an existing session is refused, not attached to" "already exists, and attaching to it would not apply the selection" \
     MOCK_TMUX_HAS_SESSION=0 -- --shell tmux --llm deepseek "$PROJ"
+assert_eq "tmux: ...and no stamp is written for a session that never starts" "$TMUX_STAMPS" "$(stamp_count)"
 assert_not_contains "tmux: ...and never killed" "$(cat "$MUX_LOG.calls")" "kill-session"
 assert_not_contains "tmux: ...nor attached" "$(cat "$MUX_LOG.calls")" "attach-session"
 
@@ -759,6 +777,113 @@ for cl in -cp -pc -cd; do
 done
 assert_eq "sessions: ...nothing typed, and the named session's stamp never refreshed" "same|" \
     "$(cmp -s "$STAMPS/$S1.json" "$TMP/s1.before" && echo same || echo changed)|$(cat "$MUX_LOG")"
+# The options the launcher reads as taking a value are those the capture
+# asked of Claude Code 2.1.332 itself (its section 12).
+CAPTURE_REC="$REPO_DIR/specs/llm-catalog/verification/claude-code-session-capture.md"
+cap_opts() { grep -m1 "^$1 (" "$CAPTURE_REC" | grep -oE '`[^`]+`' | tr -d '`' | LC_ALL=C sort | paste -sd' ' -; }
+launcher_opts() { sed -n "s/^$1=\" \(.*\) \"$/\1/p" "$LAUNCHER" | tr ' ' '\n' | grep . | LC_ALL=C sort | paste -sd' ' -; }
+OPTS_REQ=$(launcher_opts LLM_CC_OPTS_REQUIRED); OPTS_OPT=$(launcher_opts LLM_CC_OPTS_OPTIONAL)
+assert_eq "options: those the launcher reads as requiring a value are the capture's (section 12)" \
+    "listed $(cap_opts 'Require a value')" "$([[ -n "$OPTS_REQ" ]] && echo listed || echo none) $OPTS_REQ"
+assert_eq "options: ...and those taking an optional value" \
+    "listed $(cap_opts 'Take an optional value')" "$([[ -n "$OPTS_OPT" ]] && echo listed || echo none) $OPTS_OPT"
+# A letter that takes a value takes the rest of its cluster, or the next
+# argument, as Claude Code's option parser reads them: -pr <id> is -p -r <id>
+# and -pr<id> is -p -r<id>, a resume of that session (capture section 13).
+for form in next attached; do
+    if [[ "$form" == next ]]; then CL=(-pr "$S1"); CLN="-pr <id>"; else CL=("-pr$S1"); CLN="-pr<id>"; fi
+    jq -c '.refreshed_at = "2026-01-01T00:00:00Z"' "$STAMPS/$S1.json" > "$TMP/s1.aged"; cat "$TMP/s1.aged" > "$STAMPS/$S1.json"
+    new_logs
+    run_launcher -- --llm deepseek -p cluster "${CL[@]}"
+    assert_eq "sessions: $CLN with --llm resumes that session on its target: no new id, its stamp refreshed" "0:1 0 yes" \
+        "$RC:$(claude_ran) $(grep '^ARGV:' "$CLAUDE_LOG" | grep -c -- '--session-id') $(stamp "$S1" | jq -r 'if .refreshed_at != "2026-01-01T00:00:00Z" then "yes" else "no" end')"
+    new_logs
+    run_launcher "${DIRTY[@]}" -- -p cluster "${CL[@]}"
+    assert_contains "sessions: ...and without --llm its stamped target is restored" "$OUTPUT" "session $S1 was started with --llm deepseek@deepseek-claude: resuming it on that target"
+    assert_eq "sessions: ...and applied" "https://api.deepseek.example/anthropic" "$(claude_env ANTHROPIC_BASE_URL)"
+done
+# -rc is -r c, a resume by the name or search term "c": the picker, not
+# --continue.
+refused "sessions: -rc with --llm is the resume picker: -r takes c as its value" \
+    "the resume picker lets Claude Code choose the session" -- --llm deepseek -p x -rc
+# An option that requires a value takes the next argument, whatever it is:
+# with --append-system-prompt --resume <id>, "--resume" is that prompt and the
+# id a prompt of its own, and Claude Code starts a new session (capture
+# section 14). The session named there is neither resumed nor refreshed.
+cp "$STAMPS/$S1.json" "$TMP/s1.swallow"
+new_logs
+run_launcher -- --llm deepseek -p --append-system-prompt --resume "$S1"
+SW=$(session_of)
+assert_eq "sessions: --append-system-prompt --resume <id> with --llm is a new session: a new id, and its own stamp" "0 yes yes" \
+    "$RC $([[ "$SW" =~ $UUID_RE && "$SW" != "$S1" ]] && echo yes || echo no) $([[ -e "$STAMPS/$SW.json" ]] && echo yes || echo no)"
+new_logs
+run_launcher "${DIRTY[@]}" -- -p --append-system-prompt --resume "$S1"
+assert_eq "sessions: ...and without --llm a native one: nothing restored, no id added" "no https://ambient-gateway.example 0" \
+    "$(grep -q 'resuming it on' <<< "$OUTPUT" && echo yes || echo no) $(claude_env ANTHROPIC_BASE_URL) $(grep '^ARGV:' "$CLAUDE_LOG" | grep -c -- '--session-id')"
+assert_eq "sessions: ...and in neither is the stamp of the session named there refreshed" "same" \
+    "$(cmp -s "$STAMPS/$S1.json" "$TMP/s1.swallow" && echo same || echo changed)"
+# In a new pane the stamp is refreshed once, by the pane, where the session
+# runs; the launcher that opens the pane only checks, and writes nothing.
+jq -c '.refreshed_at = "2026-01-01T00:00:00Z"' "$STAMPS/$S1.json" > "$TMP/s1.aged"; cat "$TMP/s1.aged" > "$STAMPS/$S1.json"
+new_logs
+run_launcher -- --shell cmux --llm deepseek --resume "$S1" "$PROJ"
+TYPED=$(cat "$MUX_LOG")
+assert_eq "sessions: a resume in a new pane: the launcher that opens it leaves the stamp as it was" "0 same" \
+    "$RC $(cmp -s "$STAMPS/$S1.json" "$TMP/s1.aged" && echo same || echo changed)"
+pane
+assert_eq "sessions: ...the pane resumes it, with no new id, and refreshes its stamp" "0 1 0 yes" \
+    "$RC $(grep '^ARGV:' "$CLAUDE_LOG" | grep -c -- "--resume $S1") $(grep '^ARGV:' "$CLAUDE_LOG" | grep -c -- '--session-id') $(stamp "$S1" | jq -r 'if .refreshed_at != "2026-01-01T00:00:00Z" then "yes" else "no" end')"
+# A pane's environment need not be the launcher's (a new cmux workspace or
+# tmux session does not inherit it), so the pane checks the launch identity
+# in its own. Here the endpoint's URL comes from a variable that the pane
+# sets differently: resuming would move the session to another endpoint.
+cp "$FAKE_HOME/.cct/llms.toml" "$TMP/llms.envurl"
+cat >> "$FAKE_HOME/.cct/llms.toml" << 'EOF'
+
+[providers.gw]
+kind = "api"
+credential_mode = "none"
+
+[endpoints.gw]
+provider = "gw"
+protocol = "anthropic-messages"
+base_url_env = "TEST_GW_URL"
+auth_header = "none"
+
+[llms.gw]
+provider = "gw"
+model = "gw-model"
+
+[bindings.gw-claude]
+harness = "claude-code"
+llm = "gw"
+endpoint = "gw"
+EOF
+new_logs
+run_launcher TEST_GW_URL=https://gw-a.example -- --llm gw -p first
+GW1=$(session_of)
+new_logs
+run_launcher TEST_GW_URL=https://gw-a.example -- --shell cmux --llm gw --resume "$GW1" "$PROJ"
+TYPED=$(cat "$MUX_LOG")
+cp "$STAMPS/$GW1.json" "$TMP/gw1.before"
+new_logs
+pane TEST_GW_URL=https://gw-b.example
+assert_eq "sessions: a pane whose environment moves the endpoint refuses the resume, and runs nothing (FR-19)" "3:0" "$RC:$(claude_ran)"
+assert_contains "sessions: ...naming the change" "$OUTPUT" "the launch identity of gw@gw-claude changed since session $GW1 was stamped"
+assert_eq "sessions: ...and leaves the stamp as it was" "same" "$(cmp -s "$STAMPS/$GW1.json" "$TMP/gw1.before" && echo same || echo changed)"
+# A new session opened in such a pane is stamped with the pane's launch
+# identity, the one claude runs on.
+new_logs
+run_launcher TEST_GW_URL=https://gw-b.example -- --llm gw -p reference
+GWB=$(stamp "$(session_of)" | jq -r .digests.launch_identity)
+new_logs
+run_launcher TEST_GW_URL=https://gw-a.example -- --shell cmux --llm gw "$PROJ"
+TYPED=$(cat "$MUX_LOG")
+new_logs
+pane TEST_GW_URL=https://gw-b.example
+assert_eq "sessions: ...and a new session in that pane is stamped with the pane's launch identity, not the launcher's" "0 yes yes" \
+    "$RC $([[ "$(stamp "$(session_of)" | jq -r .digests.launch_identity)" == "$GWB" ]] && echo yes || echo no) $([[ "$GWB" != "$(stamp "$GW1" | jq -r .digests.launch_identity)" ]] && echo yes || echo no)"
+cat "$TMP/llms.envurl" > "$FAKE_HOME/.cct/llms.toml"
 new_logs
 run_launcher "${DIRTY[@]}" -- -p fork-native --resume "$S1" --fork-session
 assert_eq "sessions: a fork without --llm is a new native session: nothing restored, no id added" \

@@ -58,9 +58,15 @@ lcm_load_rules() {  # -> LCM_RULES; 2 with LCM_ERR when the table is unusable
         LCM_ERR="cannot read the compatibility rule table: $LCM_RULES_FILE"
         return 2
     fi
+    _LCM_RV=$(jq -r '.rule_version' <<< "$LCM_RULES"); _LCM_RV_OF="$LCM_RULES"
 }
 
-lcm_rule_version() { jq -r '.rule_version' <<< "$LCM_RULES"; }
+lcm_rule_version() {   # read once per rule table
+    if [[ "${_LCM_RV_OF:-}" != "$LCM_RULES" ]]; then
+        _LCM_RV=$(jq -r '.rule_version' <<< "$LCM_RULES"); _LCM_RV_OF="$LCM_RULES"
+    fi
+    printf '%s\n' "$_LCM_RV"
+}
 
 _lcm_rule_list() {  # <harness> <field> -> the field's elements, one per line
     jq -r --arg h "$1" --arg f "$2" '.harnesses[$h][$f] // [] | .[]' <<< "$LCM_RULES"
@@ -266,7 +272,12 @@ lcm_state() {
     local h="$1" conclusive outcome at changed failed missing c min
     LCM_STATE="" LCM_REASON="" LCM_DEGRADED="[]" LCM_EVIDENCE="null" LCM_RECORD="" LCM_ERR="" LCM_EXE=""
     lcm_load_rules || return 2
-    if ! lr_resolve "$h" "$2"; then LCM_ERR="$LR_REFUSAL"; return 1; fi
+    # A target the caller has just resolved is not resolved again, so its
+    # digests stay computed: a launch computes them once (S4). LR_BINDING
+    # is set only by a resolution that succeeded.
+    if [[ "${LR_HARNESS:-}" != "$h" || -z "${LR_BINDING:-}" || "$LR_LLM@$LR_BINDING" != "$2" ]]; then
+        if ! lr_resolve "$h" "$2"; then LCM_ERR="$LR_REFUSAL"; return 1; fi
+    fi
 
     _lcm_static "$h"
     if [[ -z "$LCM_STATE" && "$LR_STATE" != "unverified" ]]; then
@@ -292,6 +303,10 @@ lcm_state() {
         fi
     fi
     [[ -n "$LCM_STATE" ]] && return 0
+    if [[ -z "$LCM_RECORD" ]]; then   # no record: no test at all
+        LCM_STATE="unverified" LCM_REASON="never tested"
+        return 0
+    fi
 
     conclusive=$(jq -c '.latest_conclusive // null' <<< "${LCM_RECORD:-null}")
     if [[ "$conclusive" == "null" ]]; then

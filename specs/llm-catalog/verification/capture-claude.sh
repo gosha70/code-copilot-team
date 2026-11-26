@@ -13,7 +13,10 @@
 #     does, which session a bare --continue takes, and that a --session-id
 #     beside --resume or --continue is refused without --fork-session;
 #   - the ANTHROPIC_* and CLAUDE_CODE_* names in the binary that an earlier
-#     binary did not carry.
+#     binary did not carry;
+#   - which options take a value, required or optional, asked of the binary
+#     itself, and how a cluster (-pr <id>) and a required value
+#     (--append-system-prompt --resume <id>) are read.
 # No real provider, no real credential: the only credential is a planted
 # sentinel. The record names the CLI version it ran against, so a newer
 # Claude Code is re-captured by running this script again.
@@ -175,6 +178,80 @@ run fork "$BEARER" -- "${ASK[@]}" --resume "$S1" --fork-session --session-id "$S
 S4="$(uuid)"; S5="$(uuid)"
 run resume-with-id "$BEARER" -- "${ASK[@]}" --resume "$S1" --session-id "$S4"
 run continue-with-id "$BEARER" -- "${ASK[@]}" --continue --session-id "$S5"
+# The arguments as Claude Code's option parser reads them, which the
+# launcher reads the same way: a letter that takes a value takes the next
+# argument (-pr <S1> is -p -r <S1>) or the rest of its cluster (-pr<S1>);
+# an option that requires a value takes the next argument whatever it is,
+# so --append-system-prompt --resume <S1> makes <S1> a prompt.
+run cluster-next "$BEARER" -- "${ASK[@]}" -pr "$S1"
+run cluster-attached "$BEARER" -- "${ASK[@]}" "-pr$S1"
+run value-swallows "$BEARER" -- -p --output-format json --max-turns 1 --append-system-prompt --resume "$S1"
+# The new session it starts, named <S6> in the record, as the others are.
+S6="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("session_id") or "")' "$W/runs/value-swallows.out" 2>/dev/null)"
+[[ -n "$S6" ]] || S6="no-session-id-in-the-run-$$"   # matches nothing in the record
+
+# ── the options that take a value ────────────────────────────────────
+# Every option name the binary holds, asked of the binary itself, in the
+# throwaway home and with the runs' own settings: the stub for an endpoint,
+# the planted credential, no autoupdater and no nonessential traffic. A
+# probe of an option the parser reads ends in a parse error, an unknown
+# option last, so commander stops before any action:
+#   P1 <opt>=v --zu1       the error names --zu1, or reports the value v:
+#                          <opt> takes a value; names <opt>=v: it takes none
+#   P2 <opt> --zu1 --zu2   the error names <opt>: unknown; --zu1: no value, or
+#                          an optional one; --zu2, or --zu1 read as the
+#                          value: a required one
+#   P3 -L=v --zu1          (a letter that P2 left open) the error names
+#                          --zu1: an optional value; -=: none
+# An entry mode the binary takes before its parser (it runs instead of a
+# session) gives no parse error: its P2 runs it, under the same settings and
+# the time limit, and the record lists it as such.
+probe() {  # <args...>: the binary's first lines for them
+  ( cd "$W/proj" && env -i HOME="$H" PATH="$RUN_PATH" TERM=dumb \
+      ANTHROPIC_BASE_URL="http://127.0.0.1:$PORT" ANTHROPIC_AUTH_TOKEN=capture-planted-credential \
+      DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
+      perl -e 'alarm shift; exec @ARGV' 20 claude "$@" < /dev/null 2>&1 | head -3 )
+}
+named() { [[ "$1" == *"unknown option '$2"* ]]; }   # <output> <arg>: the parse error names it
+took() { named "$1" --zu2 || { [[ "$1" == *--zu1* ]] && ! named "$1" --zu1; }; }   # <P2 output>: --zu1 was read as the value
+arity() {  # <option> -> required | optional | none | unknown | early | unresolved
+  local o="$1" p
+  if [[ "$o" == --* ]]; then
+    p=$(probe "$o=v" --zu1)
+    if named "$p" "$o=v"; then
+      p=$(probe "$o" --zu1 --zu2)
+      if named "$p" "$o'"; then echo unknown; elif named "$p" --zu1; then echo none; else echo early; fi
+      return
+    fi
+    p=$(probe "$o" --zu1 --zu2)
+    # Only a parse error naming --zu1 shows that the next argument was left
+    # alone; anything else (a probe that timed out, say) is for a person.
+    if took "$p"; then echo required; elif named "$p" --zu1; then echo optional; else echo unresolved; fi
+    return
+  fi
+  p=$(probe "$o" --zu1 --zu2)
+  if named "$p" "$o'"; then echo unknown; return; fi
+  if took "$p"; then echo required; return; fi
+  if ! named "$p" --zu1; then echo unresolved; return; fi
+  p=$(probe "$o=v" --zu1)
+  if named "$p" --zu1; then echo optional
+  elif [[ "$p" == *"unknown option '-"* ]]; then echo none
+  else echo unresolved; fi
+}
+# The names: every quoted option definition in the binary, the main
+# command's and its subcommands' alike (a subcommand's is unknown to the main
+# command), and every letter. --help, --version, -h and -v print and exit.
+{ LC_ALL=C grep -a -o -E '"(-[a-zA-Z], )?--[a-z][a-zA-Z0-9-]*(, --[a-z][a-zA-Z0-9-]*)?( (<[^">]*>|\[[^"\]]*\]))?"' "$CLAUDE_REAL" 2>/dev/null \
+    | grep -o -E -- '--[a-zA-Z][a-zA-Z0-9-]*' | grep -v -x -E -- '--help|--version' | sort -u
+  for l in a b c d e f g i j k l m n o p q r s t u w x y z A B C D E F G H I J K L M N O P Q R S T U V W X Y Z; do printf -- '-%s\n' "$l"; done
+} > "$W/optnames"
+while IFS= read -r o; do printf '%s\t%s\n' "$o" "$(arity "$o")"; done < "$W/optnames" > "$W/arity"
+opts() {  # the names of one kind, each in backticks, or "none"
+  local o
+  o=$(awk -F'\t' -v k="$1" '$2 == k { print $1 }' "$W/arity" | sort | paste -sd' ' - | sed 's/\([^ ]*\)/`\1`/g')
+  printf '%s\n' "${o:-none}"
+}
+count() { awk -F'\t' -v k="$1" '$2 == k' "$W/arity" | wc -l | tr -d ' '; }
 
 # ── the variable names ───────────────────────────────────────────────
 BASELINE="${CAPTURE_BASELINE_BIN:-$HOME/.local/share/claude/versions/2.1.329}"
@@ -215,7 +292,7 @@ fi
   echo "## 8. \`--continue --session-id <S5>\`, without \`--fork-session\`"
   echo; summary continue-with-id | sed "s/$S1/<S1>/g; s/$S5/<S5>/g"; echo
   echo "## 9. The transcripts the runs left"
-  echo; transcripts | sed "s/$S1/<S1>/g; s/$S2/<S2>/g; s/$S3/<S3>/g; s/$S4/<S4>/g; s/$S5/<S5>/g"; echo
+  echo; transcripts | sed "s/$S1/<S1>/g; s/$S2/<S2>/g; s/$S3/<S3>/g; s/$S4/<S4>/g; s/$S5/<S5>/g; s/$S6/<S6>/g"; echo
   echo "## 10. Variable names"
   echo
   if [[ -n "${BASE_VERSION:-}" ]]; then
@@ -238,5 +315,40 @@ fi
   echo "2026-11-25, says Claude Code retries a request without tool search after a 400 or 422 from"
   echo "v2.1.305 on. That is the version the #399 work pinned, and the rule table's \`min_version\` for"
   echo "\`claude-code\`."
+  echo
+  echo "## 12. The options that take a value"
+  echo
+  echo "Every quoted option definition in the binary ($(wc -l < "$W/optnames" | tr -d ' ') names with the letters), asked of the binary"
+  echo "itself in the throwaway home, with the runs' settings above. A probe of an option the parser"
+  echo "reads ends in a parse error, an unknown option last, so its action never runs:"
+  echo "\`<option>=v --zu1\` (does it take a value?), \`<option> --zu1 --zu2\` (is it known, and is a"
+  echo "value required, so that the next argument is read as it whatever it is?), and for a letter"
+  echo "\`-L=v --zu1\` (is the value optional?). An entry mode the binary takes before its parser gives no"
+  echo "parse error, so its probe runs it, within the time limit; the list below names them. The"
+  echo "launcher reads a launch's arguments with these two lists"
+  echo "(\`LLM_CC_OPTS_REQUIRED\` and \`LLM_CC_OPTS_OPTIONAL\`); every other option takes none, and one"
+  echo "Claude Code does not know is its own error, so it starts no session."
+  echo
+  echo "Require a value ($(count required)): $(opts required)"
+  echo
+  echo "Take an optional value ($(count optional)): $(opts optional)"
+  echo
+  echo "Take none: $(count none). Unknown to the main command (a subcommand's, or not an option): $(count unknown)."
+  echo
+  echo "Handled before the option parser, so that the probe ran them instead of failing to parse ($(count early)): $(opts early)"
+  echo
+  echo "Unresolved, a probe without the parse error that would settle it ($(count unresolved)): $(opts unresolved)"
+  echo
+  echo "## 13. \`-pr <S1>\` and \`-pr<S1>\`"
+  echo
+  echo "A letter that takes a value takes the next argument, or the rest of its cluster: \`-pr <S1>\` is"
+  echo "\`-p -r <S1>\`, and \`-pr<S1>\` is \`-p -r<S1>\`."
+  echo; summary cluster-next | sed "s/$S1/<S1>/g"; echo
+  summary cluster-attached | sed "s/$S1/<S1>/g"; echo
+  echo "## 14. \`--append-system-prompt --resume <S1>\`"
+  echo
+  echo "An option that requires a value takes the next argument whatever it is: \`--resume\` is the"
+  echo "system prompt here, and \`<S1>\` the prompt, so the session is a new one, \`<S6>\`."
+  echo; summary value-swallows | sed "s/$S1/<S1>/g; s/$S6/<S6>/g"
 } > "$RECORD"
 echo "wrote $RECORD ($VERSION)"

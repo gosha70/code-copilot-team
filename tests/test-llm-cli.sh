@@ -232,6 +232,13 @@ assert_ne "digests: a tuning key changes the options digest" "$(field 3 "$D1")" 
 assert_eq "digests: ...and not the launch identity" "$(field 2 "$D1")" "$(field 2 "$D_TUNE")"
 D_COMPACT=$(digests_of "$(home compact awk '{print} /^llm = "m"$/ {print "auto_compact_window = 120000"}')" m)
 assert_ne "digests: auto_compact_window is a tuning key" "$(field 3 "$D1")" "$(field 3 "$D_COMPACT")"
+# A value that starts with a dash is text to the digests like any other: a
+# jq run that took it for an option would hash nothing at all.
+D_DASH1=$(digests_of "$(home dash1 awk '{print} /^llm = "m"$/ {print "small_fast_model = \"--fast\""}')" m)
+D_DASH2=$(digests_of "$(home dash2 awk '{print} /^llm = "m"$/ {print "small_fast_model = \"--slow\""}')" m)
+EMPTY_SHA256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+assert_eq "digests: a value that starts with a dash is text: it moves the options digest, and no digest is that of nothing" "moved|no" \
+    "$([[ "$(field 3 "$D_DASH1")" != "$(field 3 "$D_DASH2")" ]] && echo moved || echo same)|$(grep -q "$EMPTY_SHA256" <<< "$D_DASH1 $D_DASH2" && echo yes || echo no)"
 # Each further input of the launch identity moves it; the catalog digest
 # moves with the declared tables, and the options digest never does.
 moves() {  # <digests> <other digests> -> catalog|launch|options, each moved or same

@@ -34,8 +34,8 @@ LR_HARNESSES="claude-code codex pi kiro"
 # departure 8; spec amendment of 2026-11-23).
 LR_TUNING_KEYS="small_fast_model max_output_tokens reasoning_effort thinking auto_compact_window"
 
-_lr_sha256() {
-    { command -v shasum >/dev/null 2>&1 && shasum -a 256 || sha256sum; } | cut -d' ' -f1
+_lr_sha256() {   # sha256sum first: shasum is a perl script, four times slower to start
+    { command -v sha256sum >/dev/null 2>&1 && sha256sum || shasum -a 256; } | cut -d' ' -f1
 }
 
 _lr_value_json() {  # <ctx> <key> -> the value as JSON, typed as the file wrote it
@@ -48,13 +48,28 @@ _lr_value_json() {  # <ctx> <key> -> the value as JSON, typed as the file wrote 
     esac
 }
 
-_lr_table_json() {  # <ctx> -> the table as a JSON object, keys sorted
-    local key out='{}'
+# _lr_table_json <ctx> -> the table as a JSON object, keys sorted: each value
+# typed as _lr_value_json types it, in one jq run for the whole table (an
+# array still takes its own two). Each key and value goes in its own --arg,
+# which jq never reads as an option, whatever the value starts with; the
+# program names them by number only.
+_lr_table_json() {
+    local key type i=0 args=() prog=""
     while IFS= read -r key; do
         [[ -z "$key" ]] && continue
-        out=$(jq -c --arg k "$key" --argjson v "$(_lr_value_json "$1" "$key")" '. + {($k): $v}' <<< "$out")
+        if ! type=$(lc_type "$1" "$key"); then type=null; fi
+        case "$type" in
+            null) args+=(--arg "k$i" "$key" --arg "v$i" null) ;;
+            array) args+=(--arg "k$i" "$key" --arg "v$i" "$(_lr_value_json "$1" "$key")") ;;
+            *) args+=(--arg "k$i" "$key" --arg "v$i" "$(lc_get "$1" "$key")") ;;
+        esac
+        case "$type" in
+            null|array|int|bool) prog+="{(\$k$i): (\$v$i | fromjson)}," ;;
+            *) prog+="{(\$k$i): \$v$i}," ;;
+        esac
+        i=$((i + 1))
     done <<< "$(lc_keys "$1")"
-    jq -cS . <<< "$out"
+    jq -ncS ${args[@]+"${args[@]}"} "[${prog%,}] | add // {}"
 }
 
 _lr_identity() {  # <binding-id>: what the plan names, without a digest
@@ -78,12 +93,14 @@ _lr_identity() {  # <binding-id>: what the plan names, without a digest
 lr_digests() {
     [[ -n "$LR_BINDING" ]] || return 1
     local b="bindings.$LR_BINDING" l e="$LR_ENDPOINT_ID" ep="" url="" header="" mode="" cred="" quirks='[]'
-    local endpoint_json='null' endpoint_provider_json='null' tuning='{}' key
+    local bt pt et='null' ept='null'
     l=$(lc_get "$b" llm) || l=""
+    bt=$(_lr_table_json "$b")
+    pt=$(_lr_table_json "providers.$LR_PROVIDER")
     if [[ -n "$e" ]]; then
         ep=$(lc_get "endpoints.$e" provider) || ep=""
-        endpoint_json=$(jq -nc --arg id "$e" --argjson t "$(_lr_table_json "endpoints.$e")" '{id: $id, table: $t}')
-        endpoint_provider_json=$(jq -nc --arg id "$ep" --argjson t "$(_lr_table_json "providers.$ep")" '{id: $id, table: $t}')
+        et=$(_lr_table_json "endpoints.$e")
+        if [[ "$ep" == "$LR_PROVIDER" ]]; then ept="$pt"; else ept=$(_lr_table_json "providers.$ep"); fi
         header=$(lc_get "endpoints.$e" auth_header) || header=""
         mode=$(lc_get "providers.$ep" credential_mode) || mode=""
         cred=$(lc_get "providers.$ep" credential_env) || cred=""
@@ -93,23 +110,25 @@ lr_digests() {
         mode=$(lc_get "providers.$LR_PROVIDER" credential_mode) || mode=""
     fi
     LR_DIGEST_CATALOG=$(jq -ncS \
-        --arg b "$LR_BINDING" --argjson bt "$(_lr_table_json "$b")" \
-        --arg l "$l" --argjson lt "$(_lr_table_json "llms.$l")" \
-        --arg p "$LR_PROVIDER" --argjson pt "$(_lr_table_json "providers.$LR_PROVIDER")" \
-        --argjson endpoint "$endpoint_json" --argjson endpoint_provider "$endpoint_provider_json" \
+        --arg b "$LR_BINDING" --argjson bt "$bt" --arg l "$l" --argjson lt "$(_lr_table_json "llms.$l")" \
+        --arg p "$LR_PROVIDER" --argjson pt "$pt" --arg e "$e" --argjson et "$et" --arg ep "$ep" --argjson ept "$ept" \
         '{binding: {id: $b, table: $bt}, llm: {id: $l, table: $lt}, provider: {id: $p, table: $pt},
-          endpoint: $endpoint, endpoint_provider: $endpoint_provider}' | _lr_sha256)
+          endpoint: (if $e == "" then null else {id: $e, table: $et} end),
+          endpoint_provider: (if $e == "" then null else {id: $ep, table: $ept} end)}' | _lr_sha256)
     LR_DIGEST_LAUNCH=$(jq -nc \
         --arg h "$LR_HARNESS" --arg kind "$LR_PROVIDER_KIND" --arg url "$url" --arg proto "$LR_PROTOCOL" \
         --arg header "$header" --arg mode "$mode" --arg cred "$cred" --arg model "$LR_MODEL" --argjson quirks "$quirks" \
         '[$h, $kind, $url, $proto, $header, $mode, $cred, $model, $quirks]' | _lr_sha256)
-    for key in $LR_TUNING_KEYS; do
-        if lc_type "$b" "$key" >/dev/null; then
-            tuning=$(jq -c --arg k "$key" --argjson v "$(_lr_value_json "$b" "$key")" '. + {($k): $v}' <<< "$tuning")
-        fi
-    done
-    LR_DIGEST_OPTIONS=$(jq -cS . <<< "$tuning" | _lr_sha256)
+    # The tuning keys the binding sets, typed as its table types them.
+    LR_DIGEST_OPTIONS=$(jq -cS --arg keys "$LR_TUNING_KEYS" '($keys | split(" ")) as $k | with_entries(select(.key | IN($k[])))' <<< "$bt" | _lr_sha256)
     return 0
+}
+
+# lr_digests_once: the digests of the last lr_resolve, computed on first
+# use (lr_resolve clears them), so that the resume rules, the stamp and the
+# evidence of one launch compute them once (S4).
+lr_digests_once() {
+    [[ -n "$LR_DIGEST_CATALOG" && -n "$LR_DIGEST_LAUNCH" && -n "$LR_DIGEST_OPTIONS" ]] || lr_digests
 }
 
 # lr_resolve <harness> <target> [<project-dir>]

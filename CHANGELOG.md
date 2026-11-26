@@ -110,8 +110,11 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   `--teleport` or `--session-id` is refused.** For each of the first four
   Claude Code chooses the session (it acts on `--continue` even beside
   `--resume <id>`), so the selection could switch that session's model;
-  the refusal names `--resume <id>` instead. A single-dash cluster is read
-  as Claude Code reads it: `c` in `-cd` or `-pc` is `--continue`. The
+  the refusal names `--resume <id>` instead. The arguments are read as
+  Claude Code's option parser reads them: `c` in `-cd` or `-pc` is
+  `--continue`; `-pr <id>` is `-p --resume <id>`, a resume of that
+  session; and an option that requires a value takes the next argument,
+  so `--append-system-prompt --resume <id>` starts a new session. The
   launcher chooses a `--llm` session's id itself, and the refusal says to
   drop `--session-id`. Without `--llm`, a stamped session resumed by id
   beside any of these is refused too, since Claude Code would resume

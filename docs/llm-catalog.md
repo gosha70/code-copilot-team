@@ -231,11 +231,17 @@ A resumed target is resolved again, as for a new launch. These are refused, befo
 | `--resume <id> --llm <target>` for a session with no stamp | the target it was started with is unknown. Resume it without `--llm`, or fork it |
 | `--llm` with `--continue` (also beside `--resume <id>`: Claude Code acts on `--continue` first), with `--resume` and no id, or with a session's name instead of its id | Claude Code picks the session, so the selection would be ignored or would switch that session's model |
 | `--llm` with `--from-pr` or `--teleport` | Claude Code finds that session for itself, the same way |
-| a single-dash cluster such as `-cd` or `-pc` | Claude Code reads it letter by letter, so `c` in it is `--continue` and `r` a resume without an id, refused as above |
+| a single-dash cluster in which `c` is a letter of its own, such as `-cd` or `-pc` | Claude Code reads it letter by letter, so that `c` is `--continue`, refused as above. In `-dc` or `-rc`, `c` is the value of the letter before it |
 | `--resume <id>` of a stamped session, without `--llm`, beside any of these | Claude Code would resume another session, on the target restored for this one |
 | `--llm` with `--session-id` | the launcher chooses the session's id; drop `--session-id` |
 
+The launcher reads the arguments as Claude Code reads them:
+- **A letter that takes a value** takes the rest of its cluster, or the next argument. `-pr <id>` and `-pr<id>` are `-p --resume <id>`, a resume of that session, while `-rp` is a resume by the name `p`.
+- **An option that requires a value** takes the next argument, whatever it is. In `--append-system-prompt --resume <id>`, `--resume` is the system prompt and the id is the prompt, so the session is a new one. With `--llm` it gets a new stamp, and the session named there is left as it was.
+
 Without `--llm`, `--continue` and the picker work as before; where stamps exist, they print a note that they check no target. A session started without `--llm` resumes as it always has, and a fork without `--llm` is a new session that runs as any other launch without it.
+
+`/resume` inside a session can open a stamped session on the current session's target, which the launcher can't check: it runs only at launch. To keep a stamped session on its own target, resume it from the shell with `--resume <id>`.
 
 `cct llm sessions` lists the stamped sessions, newest first: each one's id, target, model, state, project, and whether a resume by its id would go ahead now, with the reason when it would not. `--project <dir>` shows only the sessions started in that directory, and `--harness <h>` another harness's (only Claude Code's are stamped so far). A session is `attempted` until Claude Code's own transcript for it records a reply; it is then `established`, with the model that reply names. An API error, which Claude Code also records in the transcript, is not a reply, and neither is the history a fork copies from its source. `--json` prints the same, with the stamps' directory.
 

@@ -44,64 +44,20 @@ lss_new_id() {
     printf '%s\n' "$id"
 }
 
-# lss_classify <harness args...>: how a launch starts its session, in Claude
-# Code's own order (2.1.332): --continue first, then --teleport and
-# --from-pr, then --resume.
+# How a launch starts its session is read by the launcher, from the
+# arguments as Claude Code's option parser reads them (llm_classify_launch in
+# adapters/claude-code/claude-code), into:
 #   LSS_MODE  new | continue (--continue, whose session the harness picks;
 #             it wins over --resume) | linked (--teleport or --from-pr: a
 #             session the harness finds for itself) | picker (--resume with
 #             no value, or with a name or a search term) | exact (--resume
-#             <uuid>, or -r<uuid>) | fork (exact plus --fork-session: a new
-#             session from an existing one)
+#             <uuid>) | fork (exact plus --fork-session: a new session from
+#             an existing one)
 #   LSS_RESUME_ID    the session resumed or forked from (exact, fork)
 #   LSS_CONT_FLAG    the continue flag as written: --continue, -c, or
-#                    "-c (in -cd)"
+#                    "-c (in -pc)"
 #   LSS_LINKED_FLAG  the flag that made it linked
 #   LSS_ID_GIVEN     1 when the arguments pass a --session-id of their own
-# Arguments after -- are text, as Claude Code reads them. A single-dash
-# cluster of letters is read by its letters, as Claude Code reads -cd as
-# -c -d: c is --continue, r a resume without an id. Otherwise an argument
-# that only starts with -r is a resume only when an id follows it, since a
-# prompt or an option's value may begin that way. The last --resume wins.
-lss_classify() {
-    local resume="" has_resume=0 cont=0 fork=0 picker=0
-    LSS_MODE="new" LSS_RESUME_ID="" LSS_CONT_FLAG="" LSS_LINKED_FLAG="" LSS_ID_GIVEN=0
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --) break ;;
-            --continue|-c) cont=1; [[ -n "$LSS_CONT_FLAG" ]] || LSS_CONT_FLAG="$1" ;;
-            --resume|-r)
-                has_resume=1; resume=""
-                if [[ $# -gt 1 && -n "$2" && "${2:0:1}" != "-" ]]; then resume="$2"; shift; fi ;;
-            --resume=*) has_resume=1; resume="${1#*=}" ;;
-            -[!-]?*)
-                if [[ "$1" =~ ^-[A-Za-z]+$ ]]; then
-                    if [[ "$1" == *c* ]]; then cont=1; [[ -n "$LSS_CONT_FLAG" ]] || LSS_CONT_FLAG="-c (in $1)"; fi
-                    if [[ "$1" == *r* ]]; then has_resume=1; picker=1; fi
-                elif [[ "$1" == -r* && "${1#-r}" =~ $LSS_UUID_RE ]]; then
-                    has_resume=1; resume="${1#-r}"
-                fi ;;
-            --teleport|--teleport=*|--from-pr|--from-pr=*)
-                [[ -n "$LSS_LINKED_FLAG" ]] || LSS_LINKED_FLAG="${1%%=*}" ;;
-            --fork-session) fork=1 ;;
-            --session-id) LSS_ID_GIVEN=1; [[ $# -gt 1 ]] && shift ;;
-            --session-id=*) LSS_ID_GIVEN=1 ;;
-        esac
-        shift
-    done
-    if [[ "$cont" -eq 1 ]]; then
-        LSS_MODE="continue"
-    elif [[ -n "$LSS_LINKED_FLAG" ]]; then
-        LSS_MODE="linked"
-    elif [[ "$has_resume" -eq 1 ]]; then
-        if [[ "$picker" -eq 0 && "$resume" =~ $LSS_UUID_RE ]]; then
-            LSS_RESUME_ID=$(printf '%s' "$resume" | tr 'A-F' 'a-f')
-            if [[ "$fork" -eq 1 ]]; then LSS_MODE="fork"; else LSS_MODE="exact"; fi
-        else
-            LSS_MODE="picker"
-        fi
-    fi
-}
 
 # lss_read <harness> <session-id>: LSS_STAMP (JSON) and LSS_STAMP_TARGET.
 # 0 read; 1 no stamp; 2 a stamp that cannot be read (LSS_ERR).
@@ -119,7 +75,8 @@ lss_read() {
 }
 
 # lss_rules <harness>: FR-18 and FR-19 for a --llm launch, on the classified
-# launch (lss_classify) and the resolved target (LR_*, its digests). 0 to go
+# launch (LSS_MODE and the rest) and the resolved target (LR_*, its
+# digests). 0 to go
 # on, with LSS_NOTICE when something is worth one line; 3 refused, with
 # LSS_REFUSAL and the remedy lines in LSS_REMEDY (one per line).
 lss_rules() {
@@ -153,7 +110,7 @@ lss_rules() {
         LSS_REMEDY="Resume it with --llm $LSS_STAMP_TARGET, or without --llm to restore that target."$'\n'"Or fork it onto $target: --resume $LSS_RESUME_ID --fork-session --llm $target."
         return 3
     fi
-    lr_digests || true
+    lr_digests_once || true
     if [[ "$(jq -r '.digests.launch_identity // ""' <<< "$LSS_STAMP")" != "$LR_DIGEST_LAUNCH" ]]; then
         LSS_REFUSAL="the launch identity of $target changed since session $LSS_RESUME_ID was stamped (its provider, endpoint, protocol, auth header, model, credential or quirks): resuming would switch the session's model or endpoint mid-session"
         LSS_REMEDY="Start a new session with --llm $target, or fork this one: --resume $LSS_RESUME_ID --fork-session --llm $target."
@@ -177,7 +134,7 @@ _lss_stamp_json() {
         printf 'the compatibility state of %s cannot be computed: %s' "$target" "${LCM_ERR:-unknown}"
         return 1
     fi
-    lr_digests || true
+    lr_digests_once || true
     evidence=$(jq -r '.digest // empty' <<< "${LCM_EVIDENCE:-null}" 2>/dev/null) || evidence=""
     now=$(lss_now)
     jq -nc \

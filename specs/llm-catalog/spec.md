@@ -642,7 +642,16 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   the effective model. Not a reply of the session: an API error Claude
   Code records as its own assistant entry (model `<synthetic>`), and in
   a fork the source's history copied into its transcript (each entry
-  marked `forkedFrom`).
+  marked `forkedFrom`). *Note on the owner's second review of #539
+  (2026-11-25):* a launch computes the stamp once, in the process that
+  runs claude, whose environment is the session's. That is the launcher
+  itself, or the pane it opens, which need not share the launcher's
+  environment: the pane resolves, applies the resume rules and stamps in
+  its own, so that a launch identity read elsewhere is never trusted
+  (FR-19). The digests are computed once per process
+  (`lr_digests_once`), and the compatibility state without resolving the
+  target again. The session id goes right after `claude`, ahead of the
+  forwarded flags, so that none of them can take it as its value.
 - **FR-18 Resume rules.** New session, no `--llm`: native. New
   session with `--llm`: bind and stamp. Resume by exact id, no
   `--llm`: restore the stamped binding when a stamp exists, else
@@ -661,9 +670,16 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   (`origin/2026-11-25-s4-rulings.md`), whose choices the owner accepted
   the same day:* an exact id is a UUID, after `--resume` or attached
   (`-r<id>`); `--resume` with a session's name or a search term is the
-  picker, and arguments after `--` are text. A single-dash cluster of
-  letters is read by its letters, as Claude Code reads `-cd` as `-c
-  -d`: `c` is `--continue`, `r` a resume without an id. The flags are
+  picker, and arguments after `--` are text. The arguments are read as
+  Claude Code's option parser reads them, with the options of 2.1.332
+  that take a value (`verification/claude-code-session-capture.md`,
+  section 12). An option that requires a value takes the next argument
+  whatever it is, so `--append-system-prompt --resume <id>` starts a new
+  session (section 14). A single-dash cluster is read letter by letter,
+  and a letter that takes a value takes the rest of the cluster or the
+  next argument: `-cd` is `-c -d`, so its `c` is `--continue`; `-pr
+  <id>` is `-p -r <id>`, a resume of that id (section 13); `-rc` is a
+  resume by the name `c`. The flags are
   read in Claude Code's own order (2.1.332): `--continue` wins over
   `--resume`; `--teleport` and `--from-pr` resume a session Claude Code
   finds for itself and are refused with `--llm` like the picker. A
@@ -677,6 +693,10 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   with the id it came from; without, native. *S4 departure from this text, accepted by the owner
   2026-11-25:* the native notice prints only where stamps exist, so a
   launcher that never used `--llm` stays as it was (FR-11, FR-27).
+  *Note on the owner's second review of #539 (2026-11-25):* `/resume`
+  inside a session can open a stamped session on the current
+  session's target. The launcher runs only at launch and cannot check
+  it, so the guide says to resume a stamped session from the shell.
 - **FR-19 Restored target is re-resolved.** A restored stamp goes
   through the same resolver and compatibility gate as a fresh `--llm`.
   A launch-identity digest that differs from the stamp's (another
