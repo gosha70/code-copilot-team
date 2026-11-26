@@ -64,6 +64,9 @@ SHIM
 chmod +x "$STAT_SHIM/stat"
 
 PASS=0; FAIL=0
+# A fixture that needs file modes is skipped where they have no effect (run
+# as root) and counted, so the pin holds.
+SKIPPED=0
 assert() {
     local name="$1"; shift
     if "$@" >/dev/null 2>&1; then PASS=$((PASS+1)); echo "  PASS: $name";
@@ -811,6 +814,43 @@ assert "tick: a concurrent scheduler is REFUSED by the global tick lock" \
     grep -q "another scheduler holds" <<< "$OUT"
 assert_eq "tick: the global-lock refusal is IMMEDIATE" "yes" \
     "$( [[ "$TICK_LOCK_ELAPSED" -le 5 ]] && echo yes || echo no )"
+# A scheduler lock whose owner file cannot be written (here, its create
+# stubbed to fail the write) is an error, said, never read as held by
+# another scheduler (#541).
+assert_eq "tick lock: one whose owner cannot be recorded is an error (2), said, never read as held" "2|yes" \
+    "$(env CCT_ROUTING_STATE="$TSTATE" CCT_ROUTING_TICK_LOCK="$TK/unwritable.tick.lock" bash -c '
+      source "$1"
+      _sf_create() { return 2; }
+      rc=0; err=$(rs_tick_trylock 2>&1) || rc=$?
+      printf "%s|%s" "$rc" "$(grep -q "routing-state: cannot write the owner file" <<< "$err" && echo yes || echo no)"' _ "$SLIB")"
+# The tick end to end: a scheduler lock made read-only by the tick's umask
+# takes no owner file, and the tick fails as an error (1), saying the lock
+# could not be taken. Where modes have no effect (run as root), skipped and
+# counted.
+RO_PROBE="$TK/ro-probe"; ( umask 0222; mkdir -p "$RO_PROBE" )
+if ( : > "$RO_PROBE/f" ) 2>/dev/null; then
+    SKIPPED=$((SKIPPED+1)); echo "  SKIP: tick: a scheduler lock it cannot record its owner in fails the tick (modes have no effect here, as when run as root)"
+else
+    RO_OUT=$( ( set +e; cd "$REPO_DIR"; CCT_ROUTING_REGISTRY="$TK/reg.toml" CCT_ROUTING_STATE="$TSTATE" \
+        CCT_ROUTING_TICK_LOCK="$TK/ro.tick.lock" bash -c 'umask 0222; bash "$1" tick --due --once' _ "$CLI" 2>&1; echo "rc=$?" ) )
+    assert "tick: a scheduler lock it cannot record its owner in fails the tick (1), said, never read as held" \
+        bash -c "grep -q 'the scheduler lock .* could not be taken' <<< \"\$1\" && ! grep -q 'another scheduler holds' <<< \"\$1\" && grep -q '^rc=1$' <<< \"\$1\"" _ "$RO_OUT"
+fi
+chmod u+w "$RO_PROBE" "$TK/ro.tick.lock" 2>/dev/null; rm -f "$RO_PROBE/f"; rmdir "$RO_PROBE" "$TK/ro.tick.lock" 2>/dev/null
+# The tick's claim of due profiles, on a state lock whose owner file cannot
+# be written (its create stubbed to fail the write), is an error that
+# rs_trylock says, never the "held" refusal (3), and claims nothing: here
+# a profile is due, so a claim made without the lock would change the file.
+CDUE="$TK/claim-due.json"
+( set +e; CCT_ROUTING_STATE="$CDUE" bash -c "source '$SLIB'; rs_schedule_probe q-due alpha $((NOW - 5)) due" ) >/dev/null 2>&1
+assert_eq "tick claim: a state lock whose owner cannot be recorded is an error (1), said, and claims nothing" "due|1|yes|same" \
+    "$(printf '%s|' "$(jq -r --argjson now "$NOW" 'if (.profiles.alpha.next_probe_at // ($now + 1)) <= $now then "due" else "not due" end' "$CDUE" 2>/dev/null)"
+      before=$(cksum < "$CDUE"); env CCT_ROUTING_STATE="$CDUE" bash -c '
+      source "$1"
+      _sf_create() { return 2; }
+      rc=0; err=$(rs_claim_due "$2" 2>&1 >/dev/null) || rc=$?
+      printf "%s|%s" "$rc" "$(grep -q "routing-state: cannot write the owner file" <<< "$err" && echo yes || echo no)"' _ "$SLIB" "$NOW"
+      printf '|%s' "$( [[ "$(cksum < "$CDUE")" == "$before" ]] && echo same || echo changed)")"
 assert "tick: release retains ownership state when the scheduler lock is no longer provably ours" \
     env CCT_ROUTING_STATE="$TSTATE" CCT_ROUTING_TICK_LOCK="$TK/owned.tick.lock" bash -c '
       source "$1"
@@ -2011,11 +2051,11 @@ assert_eq "isolation: no launcher log of a probe appeared in the invoking home" 
 
 echo ""
 echo "========================================="
-echo "  routing-recovery tests: $PASS passed, $FAIL failed"
+echo "  routing-recovery tests: $PASS passed, $FAIL failed$( [[ $SKIPPED -gt 0 ]] && echo ", $SKIPPED skipped")"
 echo "========================================="
 
-if [[ "$PASS" -ne "${TEST_ROUTING_RECOVERY_EXPECTED_PASS:-0}" ]]; then
-    echo "  FAIL: assertion-count drift (expected ${TEST_ROUTING_RECOVERY_EXPECTED_PASS:-0}, got $PASS)"
+if [[ "$((PASS + SKIPPED))" -ne "${TEST_ROUTING_RECOVERY_EXPECTED_PASS:-0}" ]]; then
+    echo "  FAIL: assertion-count drift (expected ${TEST_ROUTING_RECOVERY_EXPECTED_PASS:-0}, got $PASS passed + $SKIPPED skipped)"
     FAIL=$((FAIL+1))
 fi
 [[ $FAIL -eq 0 ]]

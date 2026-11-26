@@ -456,7 +456,12 @@ tick)
     # routing-state lock still makes each state publication atomic; this
     # scheduler lock prevents overlapping cron invocations from acting on
     # different snapshots while provider work is outside that write lock.
-    if ! rs_tick_trylock; then
+    tl_rc=0
+    rs_tick_trylock || tl_rc=$?
+    if [[ "$tl_rc" -eq 2 ]]; then
+        echo "routing tick: the scheduler lock $RS_TICK_LOCK could not be taken — refusing" >&2
+        exit 1
+    elif [[ "$tl_rc" -ne 0 ]]; then
         echo "routing tick: another scheduler holds $RS_TICK_LOCK — refusing (a scheduled tick never queues)" >&2
         exit 3
     fi
@@ -864,7 +869,7 @@ tick)
             rl_rc=0
             sf_dir_lock "$rl" pid "$$"$'\n' || rl_rc=$?
             if [[ "$rl_rc" -eq 2 ]]; then
-                skip "cannot record ownership of the run lock — refusing"; continue
+                skip "${SF_ERR:-cannot record ownership of the run lock} — refusing"; continue
             fi
             if [[ "$rl_rc" -ne 0 ]]; then
                 rlo=$(cat "$rl/pid" 2>/dev/null || echo "")
@@ -977,7 +982,7 @@ tick)
                     rl_rc=0
                     sf_dir_lock "$rl" pid "$$"$'\n' || rl_rc=$?
                     if [[ "$rl_rc" -eq 2 ]]; then
-                        lfail "the acknowledgement check could not record run-lock ownership — the claim is left intact"; continue
+                        lfail "the acknowledgement check could not record run-lock ownership (${SF_ERR:-the owner file}) — the claim is left intact"; continue
                     fi
                     if [[ "$rl_rc" -ne 0 ]]; then
                         rlo2=$(cat "$rl/pid" 2>/dev/null || echo "")

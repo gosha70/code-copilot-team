@@ -3839,7 +3839,7 @@ resolve_evidence_destination() {
         why="the canonical ledger belongs to another attempt ($(jq -r '.attempt_id // "unknown"' "$STATE" 2>/dev/null))"
         ledger_lock_release || true
     elif [[ "$lrc" -eq 2 ]]; then
-        why="this attempt could not record itself as the owner of the ledger lock $LEDGER_SHARED_LOCK"
+        why="this attempt could not record itself as the owner of the ledger lock $LEDGER_SHARED_LOCK${SF_ERR:+ ($SF_ERR)}"
     else
         why="the ledger lock $LEDGER_SHARED_LOCK was not free within ${LEDGER_LOCK_WAIT_SEC}s"
     fi
@@ -3867,6 +3867,7 @@ init_ledger() {
     if [[ "$lrc" -eq 2 ]]; then
         echo "Error: this attempt could not record itself as the owner of the" >&2
         echo "ledger lock $(ledger_lock_path) for '$FEATURE_ID'." >&2
+        [[ -n "${SF_ERR:-}" ]] && echo "$SF_ERR." >&2
         exit 1
     fi
     if [[ "$lrc" -ne 0 ]]; then
