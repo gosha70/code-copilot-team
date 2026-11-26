@@ -17,6 +17,7 @@ origin:
     - specs/llm-catalog/origin/2026-11-10-issue-400-origin.md
     - specs/llm-catalog/origin/2026-11-19-launch-first-ruling.md
     - specs/llm-catalog/origin/2026-11-25-s4-rulings.md
+    - specs/llm-catalog/origin/2026-11-26-s3-rulings.md
 ---
 
 # Spec: harness-agnostic LLM catalog and per-launch `--llm` selection
@@ -517,6 +518,11 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   never bypasses a launch-identity mismatch (FR-19) (D7). The
   controlled probe path `cct llm test` is exempt from the
   `unverified` and `incompatible` refusals and bound by FR-15.
+  *Amended 2026-11-26, S3, open decision 1, by the owner
+  (`origin/2026-11-26-s3-rulings.md`):* a plan that is `supported` on
+  a record measured on an older harness version (FR-13) launches with a
+  notice naming both versions and the `cct llm test` command that tests
+  the target again. Every other refusal stands.
 
 ### Compatibility
 
@@ -538,7 +544,15 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   do what was asked). An authentication failure is `unavailable`
   evidence, and a transport failure, timeout, crash or unparseable
   output is `unverifiable`; neither ever produces `incompatible` and
-  neither overwrites a conclusive record.
+  neither overwrites a conclusive record. *Amended 2026-11-26, S3,
+  open decision 1, by the owner (`origin/2026-11-26-s3-rulings.md`):*
+  `supported` also covers a newer harness. The latest conclusive record
+  whose evidence matches the current evidence in everything but the
+  harness version passed, and the installed harness is newer than the
+  version that record was measured on. The state then names that
+  version, and FR-12 launches it with a notice. A changed endpoint,
+  option or rule version, a latest conclusive record that failed, and
+  a harness older than the record's still give `unverified`.
 - **FR-14 Rule table.** The static rules are data with a
   `rule_version`: per harness the protocols it speaks (`claude-code`:
   anthropic-messages; `codex`: openai-responses, and openai-chat only
@@ -651,7 +665,11 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   (FR-19). The digests are computed once per process
   (`lr_digests_once`), and the compatibility state without resolving the
   target again. The session id goes right after `claude`, ahead of the
-  forwarded flags, so that none of them can take it as its value.
+  forwarded flags, so that none of them can take it as its value. A
+  resume opened in a new pane thus checks its launch identity twice: in
+  the launcher, which can refuse before the pane opens, and in the pane.
+  The owner ruled on 2026-11-26 to keep both checks
+  (`origin/2026-11-25-s4-rulings.md`).
 - **FR-18 Resume rules.** New session, no `--llm`: native. New
   session with `--llm`: bind and stamp. Resume by exact id, no
   `--llm`: restore the stamped binding when a stamp exists, else
@@ -709,7 +727,12 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   builds the gate, the checks are a fresh launch's static refusals
   (FR-12): `--allow-unverified` does not exist yet, and an
   evidence-digest change refuses nothing. `cct llm sessions` says, for
-  each stamp, whether a resume by its id would pass them now.
+  each stamp, whether a resume by its id would pass them now. *S3 note
+  (2026-11-26):* S3 builds the gate under the owner's ruling of that
+  day (FR-13's amendment). A restored target whose only change is a
+  newer harness launches with FR-12's notice. An options-digest change,
+  which the identity check allows, and a rule-version change read
+  `unverified`, which the gate refuses unless `--allow-unverified`.
 
 ### Adapter contracts
 
@@ -993,6 +1016,13 @@ before slice D builds; the approved spec's history stays in git.
   could ever exist. The earlier recommendation (launch with a notice)
   was withdrawn: a notice is not a gate. Recommended: refuse by
   default. **Ruled 2026-11-10 by the owner: accepted as recommended.**
+  **Amended 2026-11-26 by the owner (S3, open decision 1,
+  `origin/2026-11-26-s3-rulings.md`):** a target whose latest
+  conclusive record passed launches with a notice when only the
+  harness version is newer than that record's. A target never tested,
+  one whose latest conclusive record failed, one whose launch identity,
+  options or rule version changed, and a harness older than the
+  record's are refused, as ruled.
 - **D8 Endpoint quirks.** `quirks = ["rejects-dynamic-tools"]` on the
   endpoint drives the three #399 variables for selected launches and
   enters the launch-identity digest; the declaration is never evidence; the
