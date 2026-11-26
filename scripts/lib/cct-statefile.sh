@@ -115,15 +115,22 @@ _sf_lock_stale() {
 # coreutils since 25.10) tells two simultaneous callers both that it made
 # the directory. Returns 0 created; 1 not (something is at <path>, or it
 # cannot be opened); 2 created but <line> could not be written, and the
-# file is removed again, so an empty file never stands for an owner.
+# file is removed again, so an empty file never stands for an owner; 3 the
+# same, but the file could not be removed (rm's own result, not a second
+# look at the path, which another creator may have taken meanwhile): an
+# empty file is left at <path>, which reads as a holder, so the caller
+# says so and never takes it for contention (#541).
 _sf_create() {
     # stdout too goes nowhere: bash flushes what a failed write left
-    # buffered to the subshell's own stdout.
+    # buffered to the subshell's own stdout. The file write is cat's, which
+    # reports its failure: bash's own printf, failing on the file under a
+    # caller that sent stdout to /dev/null, still flushed the line to that
+    # caller's stdout (#541), while into a pipe it never fails.
     ( set -C
       exec 3> "$1" || exit 1
-      printf '%s' "${2:-}" >&3 && exit 0
+      printf '%s' "${2:-}" | cat >&3 && exit 0
       exec 3>&-
-      rm -f -- "$1"
+      rm -f -- "$1" || exit 3
       exit 2
     ) >/dev/null 2>&1
 }
@@ -135,28 +142,37 @@ _sf_create() {
 # the directory. A directory that was already there is held, as before.
 # Returns 0 held; 1 held by another (the directory was there, or another
 # caller created the owner file first); 2 the owner file could not be
-# created or written, and the directory made here is removed again while
-# still empty. A create refused by an owner file that is gone a moment later
-# met a holder releasing: it is tried again, up to SF_LOCK_CREATE_TRIES, or,
-# when the directory went with that holder, the lock was busy (1) and nothing
-# is removed, since the directory there now may be another writer's.
+# created or written, with SF_ERR saying which. A create refused by an owner
+# file that is gone a moment later met a holder releasing: it is tried
+# again, up to SF_LOCK_CREATE_TRIES, or, when the directory went with that
+# holder, the lock was busy (1). Only a lock this call held is undone: an
+# owner file it created but could not write is removed, then the directory
+# while still empty, as a holder releases. A directory whose owner file it
+# never created may be another writer's by then, made a moment before, so it
+# is never removed (#541): SF_ERR names it instead.
 sf_dir_lock() {
     local rc tries=0
+    SF_ERR=""
     mkdir -- "$1" 2>/dev/null || return 1
     while :; do
         rc=0
         _sf_create "$1/$2" "$3" || rc=$?
-        [[ "$rc" -eq 0 ]] && return 0
-        if [[ "$rc" -eq 1 ]]; then
-            [[ -e "$1/$2" || -L "$1/$2" ]] && return 1   # another writer holds it
-            [[ -d "$1" ]] || return 1                    # gone with its releasing holder: busy, not an error
-            tries=$((tries + 1))
-            [[ "$tries" -lt "$SF_LOCK_CREATE_TRIES" ]] && continue
+        case "$rc" in
+            0) return 0 ;;
+            2) rmdir -- "$1" 2>/dev/null || return 1   # an owner file arrived meanwhile: not ours
+               SF_ERR="cannot write the owner file $1/$2"
+               return 2 ;;
+            3) SF_ERR="cannot write the owner file $1/$2, nor remove the empty file left there: $1 reads as held until it is removed"
+               return 2 ;;
+        esac
+        [[ -e "$1/$2" || -L "$1/$2" ]] && return 1   # another writer holds it
+        [[ -d "$1" ]] || return 1                    # gone with its releasing holder: busy, not an error
+        tries=$((tries + 1))
+        if [[ "$tries" -ge "$SF_LOCK_CREATE_TRIES" ]]; then
+            SF_ERR="cannot create the owner file $1/$2; $1 is left in place, since it may be another writer's by now: if it still has no owner file, remove it"
+            return 2
         fi
-        break
     done
-    rmdir -- "$1" 2>/dev/null || return 1   # an owner file arrived meanwhile: not ours
-    return 2
 }
 
 # Free a stale lock, one reclaimer at a time. Its staleness is judged again
@@ -179,7 +195,7 @@ _sf_reclaim() {  # <lock>
 # _sf_lock <file>: take <file>.lock. The lock directory holds an owner file
 # (pid host time), and whoever creates that file holds the lock.
 _sf_lock() {  # <file>
-    local lock="$1.lock" waited=0 holder stale mkerr="" tries=0
+    local lock="$1.lock" waited=0 holder stale mkerr="" tries=0 crc
     while :; do
         if [[ -L "$lock" ]]; then SF_ERR="refusing a symlinked lock: $lock"; return 1; fi
         if [[ ! -d "$lock" ]]; then
@@ -187,10 +203,17 @@ _sf_lock() {  # <file>
             [[ -d "$(dirname "$lock")" ]] || { SF_ERR="no directory for $lock"; return 1; }
             mkerr=$(mkdir -- "$lock" 2>&1) || mkerr="${mkerr:-mkdir failed}"
         fi
-        if [[ -d "$lock" && ! -L "$lock" ]] \
-            && _sf_create "$lock/owner" "$$ $(_sf_host) $(_sf_now)"$'\n'; then
-            _sf_trace "took $lock"
-            return 0
+        if [[ -d "$lock" && ! -L "$lock" ]]; then
+            crc=0
+            _sf_create "$lock/owner" "$$ $(_sf_host) $(_sf_now)"$'\n' || crc=$?
+            if [[ "$crc" -eq 0 ]]; then
+                _sf_trace "took $lock"
+                return 0
+            fi
+            if [[ "$crc" -eq 3 ]]; then
+                SF_ERR="cannot record the owner of $lock, nor remove the empty $lock/owner left there, which reads as a holder: remove it"
+                return 1
+            fi
         fi
         if [[ ! -e "$lock/owner" && ! -L "$lock/owner" ]]; then
             # Neither held nor taken: released or removed in between, so try
