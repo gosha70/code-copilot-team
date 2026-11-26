@@ -147,6 +147,14 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   could not be taken. The routing tick no longer reports a lock it could
   not write, its own or the routing-state lock, as held by another
   writer: it exits 1 for it, and keeps exit 3 for contention (#541).
+- **A state-file write that fails no longer prints the file's content.**
+  When the file refused the write, as on a full disk or past a file size
+  limit, bash 3.2's own `printf` still printed what it could not write to
+  the caller's stdout, even one sent to `/dev/null`: the record's target
+  names and digests, in a stream that may carry JSON. The write failed all
+  the same and left no temporary file. The content now reaches the file
+  through `cat`, which reports its own failure, as the owner-file write
+  does since #541. The files written are byte for byte the same (#542).
 - **Two writers waiting on one dead writer's routing-state lock no longer
   both take it.** `rs_lock` judged the lock stale and removed it, so a
   second waiter that had judged it too then removed the first one's new

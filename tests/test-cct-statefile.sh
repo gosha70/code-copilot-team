@@ -337,6 +337,17 @@ F3="$D/three.json"
 assert_eq "sf_write: ...and its lock refuses at once, naming the file left, rather than waiting on it" \
     "1|cannot record the owner of $F3.lock, nor remove the empty $F3.lock/owner left there, which reads as a holder: remove it" \
     "$(rm() { return 1; }; (trap '' XFSZ; ulimit -f 0; r=0; sf_write "$F3" '{}' >/dev/null 2>&1 || r=$?; echo "$r|$SF_ERR"))"
+# A failed write prints none of the content to the caller's stdout, even one
+# sent to /dev/null: bash 3.2's printf flushed the bytes the file refused
+# there (#542). A 1 KiB limit lets the lock's owner line through and refuses
+# this content, so the write fails in _sf_put; under a limit of 0 it fails in
+# the lock first. A leak needs content past the limit but small enough to sit
+# in stdio's buffer, as 1,500 bytes is.
+F4="$TMP/leak/four.json"
+LONG=$(printf '%*s' 1500 '' | tr ' ' x)
+assert_eq "sf_write: a write the file refuses prints none of its content, fails, and leaves no temporary file" \
+    "1|cannot write $F4|0" \
+    "$( (trap '' XFSZ; ulimit -f 1; r=0; sf_write "$F4" "$LONG" >/dev/null 2>&1 || r=$?; echo "$r|$SF_ERR") )|$(temps_in "$TMP/leak")"
 
 echo ""
 echo "========================================="

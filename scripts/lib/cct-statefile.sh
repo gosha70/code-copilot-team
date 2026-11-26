@@ -280,7 +280,10 @@ _sf_put() {  # <dir> <base> <content>
         trap 'exit 130' INT
         trap 'exit 143' TERM
         tmp=$(umask 077; mktemp "$1/.$2.tmp.XXXXXX") || exit 1
-        printf '%s\n' "$3" > "$tmp" || exit 1
+        # The file write is cat's, which reports its failure: bash's own
+        # printf, failing on the file under a caller that sent stdout to
+        # /dev/null, still flushed the content to that caller's stdout (#542).
+        printf '%s\n' "$3" | cat > "$tmp" || exit 1
         chmod 600 "$tmp" || exit 1
         mv -f -- "$tmp" "$1/$2" || exit 1
         tmp=""
