@@ -23,7 +23,14 @@
 LSS_REL="llm-sessions"
 LSS_SCHEMA_VERSION=1
 LSS_UUID_RE='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
-LSS_GATE_NONE="none yet"   # S3's D7 gate is not enforced before S3
+# The gate a stamp records (#400 FR-12, FR-17, D7; S3): the state the
+# launcher's gate admitted (supported, or unverified under
+# --allow-unverified) and whether it was bypassed. The launcher sets both
+# before it stamps; a stamp written without the gate says so.
+LSS_GATE_NONE="no gate ran"
+LSS_GATE_STATE=""
+LSS_GATE_BYPASSED=false
+LSS_GATE_TARGET=""   # <harness>:<target> whose state (LCM_*) the gate computed in this process
 
 lss_dir() { cct_home_path "$LSS_REL/$1"; }   # <harness>
 lss_path() { printf '%s/%s.json\n' "$(lss_dir "$1")" "$2"; }   # <harness> <session-id>
@@ -130,7 +137,9 @@ lss_rules() {
 _lss_stamp_json() {
     local h="$1" now evidence target
     target="$LR_LLM@$LR_BINDING"
-    if ! lcm_state "$h" "$target"; then
+    # The launcher's gate computed this target's state in this process just
+    # before (S3): it is used as it is, not computed again.
+    if [[ "$LSS_GATE_TARGET" != "$h:$target" || -z "${LCM_STATE:-}" ]] && ! lcm_state "$h" "$target"; then
         printf 'the compatibility state of %s cannot be computed: %s' "$target" "${LCM_ERR:-unknown}"
         return 1
     fi
@@ -142,7 +151,8 @@ _lss_stamp_json() {
         --arg llm "$LR_LLM" --arg b "$LR_BINDING" --arg p "$LR_PROVIDER" --arg m "$LR_MODEL" \
         --arg proto "$LR_PROTOCOL" --arg origin "$LR_ORIGIN" \
         --arg dc "$LR_DIGEST_CATALOG" --arg dl "$LR_DIGEST_LAUNCH" --arg do "$LR_DIGEST_OPTIONS" --arg de "$evidence" \
-        --arg cs "$LCM_STATE" --argjson rv "$(lcm_rule_version)" --arg gate "$LSS_GATE_NONE" \
+        --arg cs "$LCM_STATE" --argjson rv "$(lcm_rule_version)" --arg gate "${LSS_GATE_STATE:-$LSS_GATE_NONE}" \
+        --argjson bypassed "${LSS_GATE_BYPASSED:-false}" \
         --arg proj "$(pwd -P)" --arg fork "$4" --arg now "$now" --argjson clear "$(_lr_clear_json)" \
         '{schema_version: $v, session_id: $id, status: $st, harness: $h, harness_version: $hv,
           llm: $llm, binding: $b, provider: $p, requested_model: $m, effective_model: null,
@@ -150,7 +160,7 @@ _lss_stamp_json() {
           env_clear: $clear,
           digests: {catalog: $dc, launch_identity: $dl, options: $do, evidence: (if $de == "" then null else $de end)},
           compatibility: {state: $cs, rule_version: $rv},
-          gate: {state: $gate, bypassed: false},
+          gate: {state: $gate, bypassed: $bypassed},
           project: $proj, forked_from: (if $fork == "" then null else $fork end),
           created_at: $now, refreshed_at: $now, established_at: null}'
 }

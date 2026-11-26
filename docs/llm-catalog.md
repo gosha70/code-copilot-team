@@ -5,6 +5,7 @@ Pick the LLM for one session when you start it, from a catalog of named targets 
 ```bash
 cct llm list                       # the targets, and whether each can launch
 cct harness explain claude-code --llm deepseek   # what that launch would set and remove
+cct llm test deepseek              # run Claude Code on it once; a launch needs this to pass
 cct start --llm deepseek .         # this session only, on DeepSeek
 cct start --llm opus .             # this session only, on Anthropic
 cct start .                        # unchanged: Claude Code as you configured it
@@ -28,6 +29,7 @@ cp shared/templates/llm/llms.toml.example ~/.cct/llms.toml    # from your checko
 $EDITOR ~/.cct/llms.toml
 cct llm validate
 cct llm list
+cct llm test <target>        # once per target, before its first launch
 ```
 
 A credential stays where it is: export the key itself (`export DEEPSEEK_API_KEY=…`) in your shell profile, and name that variable in the catalog. A key on its own routes nothing. Remove any `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL` or `ANTHROPIC_DEFAULT_*_MODEL` export from your profile: those are what the catalog replaces.
@@ -148,7 +150,7 @@ It also prints three digests:
 - **launch identity:** changes only when what the launch executes as changes: the endpoint's full URL (its path too, which is never shown), the protocol, the auth header, the credential's variable and mode, the model, the quirks;
 - **options:** the tuning keys (`small_fast_model`, `max_output_tokens`, `reasoning_effort`, `auto_compact_window`).
 
-Compatibility records and session stamps are keyed on them. `shared/schemas/llm-catalog-cli.schema.json` describes the `--json` output. When a command cannot answer (a usage error, no catalog, a catalog with violations, `show` naming an llm the catalog does not define, or `compatibility` unable to read its rule table or resolve its target), `--json` still prints the envelope, with an `error` field and nothing else, and exits as the text form does. A usage error's envelope has no `catalog`, and its `command` is null when no command was recognized. A harness other than `claude-code`, and `pi-code --llm`, are refused with "not implemented" until their slice of #400 lands.
+Compatibility records and session stamps are keyed on them. `shared/schemas/llm-catalog-cli.schema.json` describes the `--json` output. When a command cannot answer (a usage error, no catalog, a catalog with violations, `show` naming an llm the catalog does not define, `compatibility` or `test` unable to read its rule table or resolve its target, or `test` refusing a target or unable to run its probe), `--json` still prints the envelope, with an `error` field and nothing else, and exits as the text form does. A usage error's envelope has no `catalog`, and its `command` is null when no command was recognized. A harness other than `claude-code`, and `pi-code --llm`, are refused with "not implemented" until their slice of #400 lands.
 
 ## Compatibility
 
@@ -160,13 +162,38 @@ cct doctor                             # its "LLM catalog" section shows the sam
 
 Each target is in one of five states:
 
-- **supported:** its latest conclusive test passed every capability the binding needs, and nothing has changed since.
-- **unverified:** it was never tested, or something changed since its test. The reason says what changed: the launch identity, the options, the version of `claude`, or the rule version.
+- **supported:** its latest conclusive test passed every capability the binding needs, and nothing has changed since but, at most, a newer `claude`. The reason says so when the test ran on an older one.
+- **unverified:** it was never tested, or something changed since its test. The reason says what changed: the launch identity, the options, the version of `claude` (an older one than the test's, or one that cannot be read), or the rule version.
 - **unavailable:** its credential or base URL variable is not set, or `claude` is not installed or older than the rule table's minimum, 2.1.305.
 - **unsupported:** `claude` cannot speak the endpoint's protocol or honour a quirk it declares. The rules are data, in `shared/llm/compat-rules.json`, with a version.
 - **incompatible:** its latest conclusive test failed.
 
-The state is computed from the catalog, the rule table, the environment and the test records in `${CCT_HOME:-~/.cct}/llm-compat/`, and nothing is sent anywhere. A test that could not reach a verdict, for example one that timed out, never replaces a conclusive result. Launches do not use these states yet: an `unverified` target still launches with a notice, and the test that writes the records arrives with a later slice of #400. A `--llm` session's stamp records the state it was launched in, so a rule table or a record that cannot be read refuses the launch, naming the file.
+The state is computed from the catalog, the rule table, the environment and the test records in `${CCT_HOME:-~/.cct}/llm-compat/`, and nothing is sent anywhere. A test that could not reach a verdict, for example one that timed out, never replaces a conclusive result. A rule table or a record that cannot be read refuses a `--llm` launch, naming the file.
+
+### Testing a target
+
+```bash
+cct llm test deepseek          # the capabilities, the outcome, and the state that follows
+cct llm test deepseek --json
+```
+
+`cct llm test` runs `claude` once, headless, on the target, with the environment a launch of it gets, and records what each capability did: `pass`, `fail`, `unverifiable` (it could not tell) or `not_applicable`. Claude Code is asked to run one shell command through its Bash tool and to answer one line: a marker, a token from a system prompt it was given, and what the command printed. From that run it checks the credential, the model the endpoint reports, streaming, the system prompt, the tool call and its result, its own output, a clean exit, and the binding's `max_output_tokens` when it sets one. When the llm declares `reasoning = true`, it checks that thinking came back; when it declares `input = ["text", "image"]`, a second run sends a small image and asks its colour.
+
+A run that passed or failed is conclusive and decides the state. A credential the endpoint refused, a timeout, a crash or an answer that cannot be read is recorded, says so, and decides nothing. Each run is cut off after 120 seconds (`CCT_LLM_PROBE_TIMEOUT_SEC`), Claude Code's whole process group with it, and its scratch directory is removed, also when you interrupt it. The record holds no credential: the reply it keeps has the credential, the endpoint's path, the scratch directory and your home directory taken out. An `unsupported` or `unavailable` target is refused before anything runs, as a launch would be, and so is a test that a settings file's `env` block would redirect (see [Refusals](#refusals)). `cct llm test` exits 0 when the target passed, 1 when it did not, and 3 when it was refused.
+
+### Launches need a passing test
+
+A `--llm` launch, and a resume that restores a session's target, go ahead only when the target is `supported`. Otherwise they are refused before Claude Code starts, with exit code 3 and the way out:
+
+| State | The launch |
+|---|---|
+| `supported` | goes ahead |
+| `supported`, tested on an older `claude` | goes ahead, with a notice naming both versions and the `cct llm test` that tests it again |
+| `unverified` | refused: test it with `cct llm test`, or add `--allow-unverified` to launch it untested, with a notice that its session's stamp records |
+| `incompatible` | refused; `--allow-unverified` does not apply. Fix the endpoint or the binding, then test it again |
+| `unavailable`, `unsupported` | refused, with the reason |
+
+A newer `claude` keeps a passing test, because Claude Code updates often; anything else that changes since the test, including a tuning option or the rule table, needs a new one. The launcher that opens a new cmux workspace or tmux session checks before it opens it, and the launcher in the new pane checks again in that pane's own environment.
 
 ## A project's allow-list
 
@@ -191,7 +218,9 @@ Each happens before Claude Code starts, with exit code 3 and the reason.
 |---|---|
 | unknown llm or binding; several bindings and no `@<binding>` | the target does not name one binding |
 | `unsupported` | the endpoint speaks a protocol Claude Code does not |
-| `unavailable` | the credential variable is not set, or the base-URL variable is unset or holds a refused URL |
+| `unavailable` | the credential variable is not set, the base-URL variable is unset or holds a refused URL, or `claude` is missing or older than 2.1.305 |
+| `unverified`, unless `--allow-unverified` | no test of the target has passed, or something changed since it did; see [Launches need a passing test](#launches-need-a-passing-test) |
+| `incompatible` | the target's latest conclusive test failed |
 | the catalog is missing or not valid | the violations are listed |
 | a settings file sets an endpoint, credential, model, switch or quirk variable of the launch | Claude Code applies a `settings.json` `env` block over the environment it is started with, so the selection would be undone. Remove the key from the `env` block. |
 | a tmux session for the project already exists | attaching would not apply the selection |
@@ -227,7 +256,7 @@ A resumed target is resolved again, as for a new launch. These are refused, befo
 | Refused | Because |
 |---|---|
 | `--resume <id> --llm <target>` naming a target other than the session's | it would switch the session's model; the refusal names both targets |
-| `--resume <id>` after the target's launch identity changed (its endpoint, protocol, auth header, model, credential or quirks) | the same. A change of tuning only is said, and the resume goes ahead |
+| `--resume <id>` after the target's launch identity changed (its endpoint, protocol, auth header, model, credential or quirks) | the same. A change of tuning only is said, and the target, now untested, needs a new test or `--allow-unverified`, as for a new launch |
 | `--resume <id> --llm <target>` for a session with no stamp | the target it was started with is unknown. Resume it without `--llm`, or fork it |
 | `--llm` with `--continue` (also beside `--resume <id>`: Claude Code acts on `--continue` first), with `--resume` and no id, or with a session's name instead of its id | Claude Code picks the session, so the selection would be ignored or would switch that session's model |
 | `--llm` with `--from-pr` or `--teleport` | Claude Code finds that session for itself, the same way |
@@ -247,4 +276,4 @@ Without `--llm`, `--continue` and the picker work as before; where stamps exist,
 
 ## Not in this version
 
-Specified in #400 and not built yet: a compatibility probe (`cct llm test`), so no test records exist yet and every launchable target reads `unverified`; launches gated on the compatibility state; a Studio page; and `--llm` on the Codex, Pi and Kiro launchers.
+Specified in #400 and not built yet: a Studio page, and `--llm` on the Codex, Pi and Kiro launchers.

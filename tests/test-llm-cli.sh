@@ -357,7 +357,7 @@ assert_eq "harness --json, an unknown subcommand: a null command" \
     "2|null|usage: cct harness explain <harness> --llm <target> [--project <dir>] [--json]" "$(json_err)"
 cctx "$BASE_HOME" -- llm frob --json; ERR_NO_COMMAND="$OUT"
 assert_eq "--json, an unknown command: a null command" \
-    "2|null|cct llm: unknown command 'frob' (list | show | validate | compatibility | sessions)" "$(json_err)"
+    "2|null|cct llm: unknown command 'frob' (list | show | validate | compatibility | sessions | test)" "$(json_err)"
 cctx "$BASE_HOME" -- llm sessions extra --json; ERR_SESSIONS="$OUT"
 assert_eq "sessions --json, a usage error: exit 2 and the envelope alone" "2|sessions|cct llm sessions: unknown argument 'extra'" "$(json_err)"
 cctx "$BASE_HOME" -- llm sessions --harness bogus --json
@@ -390,6 +390,23 @@ assert_eq "sessions: none stamped yet, said, exit 0" \
 
 SA=aaaaaaaa-0000-4000-8000-00000000000a; SB=bbbbbbbb-0000-4000-8000-00000000000b
 stamp_session "$SESS_HOME" m "$SA"; stamp_session "$SESS_HOME" own "$SB"
+# A resume goes ahead only past S3's gate, so each target has a passing
+# test on record, under its evidence now, written by the probe's writer.
+seed_pass() {  # <home> <target>...
+    local h="$1"; shift
+    (cd "$SESS_PROJ" && env -u CCT_HOME CCT_HOME="$h" PATH="$TMP/bin:$PATH" TEST_LLM_KEY="$SECRET" bash -c '
+        r="$1"; shift
+        for l in llm-catalog llm-adapters/claude-code llm-resolve cct-statefile llm-compat; do source "$r/scripts/lib/$l.sh"; done
+        lc_validate "$(lc_catalog_path)" >/dev/null || { echo "seed_pass: the catalog is not valid"; exit 1; }
+        m="{\"auth\":\"pass\",\"model_identity\":\"pass\",\"streaming\":\"pass\",\"system_prompt\":\"pass\",\"tool_call\":\"pass\",\"tool_result\":\"pass\",\"output_parsing\":\"pass\",\"clean_exit\":\"pass\",\"limit_controls\":\"not_applicable\"}"
+        for t in "$@"; do
+            lcm_state claude-code "$t" || { echo "seed_pass: $t: $LCM_ERR"; exit 1; }
+            # Built apart: bash 3.2 misreads escaped quotes inside "$(...)".
+            a=$(jq -nc --argjson m "$m" --argjson e "$LCM_EVIDENCE" "{at: \"2026-11-26T12:00:00Z\", outcome: \"pass\", matrix: \$m, evidence: \$e}")
+            lcm_record_attempt claude-code "$LR_LLM" "$LR_BINDING" "$a" || { echo "seed_pass: $t: $LCM_ERR"; exit 1; }
+        done' _ "$REPO_DIR" "$@") || echo "  FAIL: seed_pass could not write a record"
+}
+seed_pass "$SESS_HOME" m own
 # Claude Code names a project's directory after its path, every other
 # character a dash (S4's capture). It also records an API error as its own
 # assistant entry, which is not a reply.
@@ -490,6 +507,271 @@ rm -f "$SESS_HOME/llm-sessions/claude-code/$BAD.json"
 assert_eq "sessions: no credential value or endpoint path in any output" "0" \
     "$(printf '%s\n' "$SESSIONS" "$SESSIONS_TEXT" "$SESSIONS_MOVED" | grep -cF -e "$SECRET" -e "$PATH_TOKEN")"
 
+# ── cct llm test (#400 S3: FR-15, FR-16, D6) ──
+# The probe runs the mock harness (CCT_LLM_PROBE_CMD) against the stub
+# gateway, one gateway per switch; the S3 capture runs the real Claude Code
+# behind the same gateway. A private TMPDIR shows what each run leaves.
+GATEWAY="$REPO_DIR/tests/fixtures/llm-stub-gateway.py"
+MOCK_HARNESS="$TMP/mock-harness-$$-$RANDOM.py"   # a path of this run's own, for pgrep
+cp "$REPO_DIR/tests/fixtures/llm-mock-claude.py" "$MOCK_HARNESS"
+PROBE_TMP="$TMP/probe-tmp"; mkdir -p "$PROBE_TMP"
+probe_home() {  # <name> <port>: a home whose target pm reaches the gateway, and cm an endpoint claude-code cannot speak to
+    mkdir -p "$TMP/$1"
+    cat > "$TMP/$1/llms.toml" <<EOF
+schema_version = 1
+
+[providers.p]
+display_name = "Provider P"
+kind = "api"
+credential_mode = "env"
+credential_env = "TEST_LLM_KEY"
+
+[endpoints.gw]
+provider = "p"
+protocol = "anthropic-messages"
+base_url = "http://127.0.0.1:$2/$PATH_TOKEN"
+auth_header = "bearer"
+
+[endpoints.chat]
+provider = "p"
+protocol = "openai-chat"
+base_url = "https://chat.example/v1"
+auth_header = "bearer"
+
+[llms.pm]
+provider = "p"
+model = "probe-model"
+reasoning = true
+input = ["text", "image"]
+
+[llms.cm]
+provider = "p"
+model = "chat-model"
+
+[bindings.pt]
+harness = "claude-code"
+llm = "pm"
+endpoint = "gw"
+max_output_tokens = 1000
+
+[bindings.ct]
+harness = "claude-code"
+llm = "cm"
+endpoint = "chat"
+EOF
+    printf '%s' "$TMP/$1"
+}
+gateway() {  # <log> [--switch <name>]...: a stub gateway; GW_PID and GW_PORT
+    local log="$1"; shift
+    rm -f "$log.port"
+    python3 "$GATEWAY" "$log" "$log.port" "$@" &
+    GW_PID=$!
+    for _ in $(seq 1 50); do [[ -s "$log.port" ]] && break; sleep 0.1; done
+    GW_PORT=$(cat "$log.port" 2>/dev/null)
+}
+gateway_stop() { kill "$GW_PID" 2>/dev/null; wait "$GW_PID" 2>/dev/null; }
+ptest() {  # <home> [VAR=value ...] -- <cct args>: cctx with the stand-in claude, the mock harness and the private TMPDIR
+    local h="$1"; shift
+    cctx "$h" PATH="$TMP/bin:$PATH" TMPDIR="$PROBE_TMP" CCT_LLM_PROBE_CMD="python3 $MOCK_HARNESS" CCT_LLM_PROBE_TIMEOUT_SEC=20 "$@"
+}
+
+gateway "$TMP/gw-base.jsonl"
+P_HOME=$(probe_home probe-base "$GW_PORT")
+ptest "$P_HOME" -- llm compatibility pm --json
+assert_eq "test: before any test the target is unverified" "unverified" "$(jq -r '.targets[0].state' <<< "$OUT")"
+ptest "$P_HOME" -- llm test pm --json; TEST_PASS="$OUT"
+assert_eq "test: one passing run moves unverified to supported (FR-15)" "0|pass|supported" \
+    "$RC|$(jq -r .outcome <<< "$OUT")|$(jq -r .state <<< "$OUT")"
+assert_eq "test: ...every capability passed, the declared reasoning and image ones included" \
+    "auth=pass model_identity=pass streaming=pass system_prompt=pass tool_call=pass tool_result=pass output_parsing=pass clean_exit=pass limit_controls=pass reasoning_control=pass image_input=pass" \
+    "$(jq -r '.matrix | to_entries | map("\(.key)=\(.value)") | join(" ")' <<< "$OUT")"
+PREC="$P_HOME/llm-compat/claude-code/pm@pt.json"
+assert_eq "test: ...recorded in both parts (FR-16), with the evidence digest and a redacted excerpt" "pass|pass|64|yes" \
+    "$(jq -r '"\(.latest_attempt.outcome)|\(.latest_conclusive.outcome)|\(.latest_attempt.evidence.digest | length)|\(if (.latest_attempt.redacted | test("^CCT_PROBE_OK:")) then "yes" else "no" end)"' "$PREC")"
+ptest "$P_HOME" -- llm test pm; TEST_TEXT="$OUT"
+assert_contains "test: the text form shows the matrix, the outcome and the state" "$OUT" "Outcome: pass: passed every capability this binding needs"
+gateway_stop
+
+probe_switch() {  # <switch> <capability> <value> <state> [<timeout>]
+    gateway "$TMP/gw-$1.jsonl" --switch "$1"
+    local h; h=$(probe_home "probe-$1" "$GW_PORT")
+    ptest "$h" CCT_LLM_PROBE_TIMEOUT_SEC="${5:-20}" -- llm test pm --json
+    gateway_stop
+    assert_eq "test: under $1, $2 is $3 and the target $4" "1|$3|$4" \
+        "$RC|$(jq -r --arg c "$2" '.matrix[$c]' <<< "$OUT")|$(jq -r .state <<< "$OUT")"
+    SWITCH_REC="$h/llm-compat/claude-code/pm@pt.json"
+}
+probe_switch drop-tool-calls tool_call fail incompatible
+probe_switch ignore-tool-results tool_result fail incompatible
+probe_switch no-stream streaming fail incompatible
+probe_switch other-model model_identity fail incompatible
+probe_switch ignore-system-prompt system_prompt fail incompatible
+probe_switch reject-shape output_parsing fail incompatible
+probe_switch exceed-limits limit_controls fail incompatible
+probe_switch drop-reasoning reasoning_control fail incompatible
+probe_switch ignore-images image_input fail incompatible
+probe_switch reject-auth auth fail unverified
+assert_eq "test: ...a refused credential is unavailable evidence, never conclusive" "unavailable|null" \
+    "$(jq -r '"\(.latest_attempt.outcome)|\(.latest_conclusive)"' "$SWITCH_REC")"
+probe_switch time-out clean_exit fail unverified 2
+assert_eq "test: ...a run cut off by the watchdog is unverifiable, never conclusive" "unverifiable|null" \
+    "$(jq -r '"\(.latest_attempt.outcome)|\(.latest_conclusive)"' "$SWITCH_REC")"
+probe_switch server-error output_parsing unverifiable unverified
+assert_eq "test: ...a server error decides nothing" "unverifiable|null" \
+    "$(jq -r '"\(.latest_attempt.outcome)|\(.latest_conclusive)"' "$SWITCH_REC")"
+probe_switch not-found output_parsing unverifiable unverified
+assert_eq "test: ...and an error naming the request path keeps the endpoint's path out of the record" "yes|0" \
+    "$(jq -r 'if (.latest_attempt.redacted | test("Cannot POST <endpoint-path>/v1/messages")) then "yes" else "no" end' "$SWITCH_REC")|$(grep -cF "$PATH_TOKEN" "$SWITCH_REC")"
+
+gateway "$TMP/gw-crash.jsonl"
+C_HOME=$(probe_home probe-crash "$GW_PORT")
+ptest "$C_HOME" CCT_PROBE_MOCK_CRASH=1 -- llm test pm --json
+gateway_stop
+assert_eq "test: a harness that crashes after its answer fails clean_exit, and nothing is conclusive (FR-13)" "1|unverifiable|fail|null" \
+    "$RC|$(jq -r .outcome <<< "$OUT")|$(jq -r .matrix.clean_exit <<< "$OUT")|$(jq -c .latest_conclusive "$C_HOME/llm-compat/claude-code/pm@pt.json")"
+gateway "$TMP/gw-crash-image.jsonl"
+CI_HOME=$(probe_home probe-crash-image "$GW_PORT")
+ptest "$CI_HOME" CCT_PROBE_MOCK_CRASH=image -- llm test pm --json
+gateway_stop
+assert_eq "test: ...so does one that crashes in the image run alone, after a correct answer" "1|unverifiable|fail|unverifiable|null" \
+    "$RC|$(jq -r .outcome <<< "$OUT")|$(jq -r .matrix.clean_exit <<< "$OUT")|$(jq -r .matrix.image_input <<< "$OUT")|$(jq -c .latest_conclusive "$CI_HOME/llm-compat/claude-code/pm@pt.json")"
+gateway "$TMP/gw-garbage.jsonl"
+GB_HOME=$(probe_home probe-garbage "$GW_PORT")
+ptest "$GB_HOME" CCT_PROBE_MOCK_GARBAGE=1 -- llm test pm --json
+gateway_stop
+assert_eq "test: output that cannot be parsed is unverifiable" "1|unverifiable|unverifiable" \
+    "$RC|$(jq -r .outcome <<< "$OUT")|$(jq -r .matrix.output_parsing <<< "$OUT")"
+gateway "$TMP/gw-1m.jsonl"
+M_HOME=$(probe_home probe-1m "$GW_PORT")
+sed -i.bak 's/^model = "probe-model"$/model = "probe-model[1m]"/' "$M_HOME/llms.toml"
+ptest "$M_HOME" -- llm test pm --json
+gateway_stop
+assert_eq "test: a model with Claude Code's [1m] suffix matches what the endpoint reports, sent without it" "0|pass|probe-model" \
+    "$RC|$(jq -r .matrix.model_identity <<< "$OUT")|$(jq -r .model "$TMP/gw-1m.jsonl" | sort -u | paste -sd, -)"
+gateway "$TMP/gw-space.jsonl"
+SP_HOME=$(probe_home probe-space "$GW_PORT")
+SPACE_TMP="$TMP/a tmp dir"; mkdir -p "$SPACE_TMP"
+ptest "$SP_HOME" TMPDIR="$SPACE_TMP" -- llm test pm --json
+gateway_stop
+assert_eq "test: a TMPDIR with a space in it changes nothing, and nothing is written outside it" "0|pass|0" \
+    "$RC|$(jq -r .outcome <<< "$OUT")|$(ls -A "$TMP" | grep -c -x 'a')"
+gateway "$TMP/gw-settings.jsonl"
+ST_HOME=$(probe_home probe-settings "$GW_PORT")
+mkdir -p "$TMP/claude-settings"
+printf '%s\n' '{"env":{"ANTHROPIC_BASE_URL":"https://elsewhere.example"}}' > "$TMP/claude-settings/settings.json"
+ptest "$ST_HOME" CLAUDE_CONFIG_DIR="$TMP/claude-settings" -- llm test pm
+assert_eq "test: a settings file that sets the endpoint refuses the test, as it refuses a launch, and nothing is sent (FR-30)" "3|1|0" \
+    "$RC|$(grep -c 'a Claude Code settings file sets a variable this test must control' <<< "$OUT")|$(cat "$TMP/gw-settings.jsonl" 2>/dev/null | wc -l | tr -d ' ')"
+printf '%s\n' '{"env":{"CLAUDE_CODE_MAX_OUTPUT_TOKENS":"1000"}}' > "$TMP/claude-settings/settings.json"
+ptest "$ST_HOME" CLAUDE_CONFIG_DIR="$TMP/claude-settings" -- llm test pm
+gateway_stop
+assert_eq "test: ...a tuning key in it is said, and the test runs" "0|1" \
+    "$RC|$(grep -c 'sets CLAUDE_CODE_MAX_OUTPUT_TOKENS in its env block; Claude Code applies it over this test' <<< "$OUT")"
+
+ptest "$P_HOME" -- llm test cm
+assert_eq "test: an unsupported target is refused as a launch refuses it, with nothing run" "3|1" \
+    "$RC|$(grep -c "refused: unsupported: endpoint 'chat' speaks openai-chat, claude-code speaks anthropic-messages" <<< "$OUT")"
+ptest "$P_HOME" -- llm test cm --json; ERR_TEST_REFUSED="$OUT"
+assert_eq "test: ...and under --json, the error envelope and exit 3" "3|test" "$RC|$(jq -r .command <<< "$OUT")"
+ptest "$P_HOME" TEST_LLM_KEY= -- llm test pm
+assert_eq "test: an unavailable target (its credential unset) is refused too" "3|1" \
+    "$RC|$(grep -c 'refused: unavailable: credential variable TEST_LLM_KEY is not set' <<< "$OUT")"
+ptest "$P_HOME" -- llm test --json; ERR_TEST_USAGE="$OUT"
+assert_eq "test: no target is a usage error" "2|test|usage: cct llm test <target> [--harness <h>] [--json]" \
+    "$RC|$(jq -r .command <<< "$OUT")|$(jq -r .error <<< "$OUT")"
+ptest "$P_HOME" -- llm test pm --bogus
+assert_eq "test: an unknown option is a usage error" "2|cct llm test: unknown option '--bogus'" "$RC|$OUT"
+ptest "$P_HOME" -- llm test pm --harness bogus
+assert_eq "test: an unknown harness is a usage error" "2|cct llm test: unknown harness 'bogus' (one of: claude-code, codex, pi, kiro)" "$RC|$OUT"
+ptest "$P_HOME" CCT_LLM_PROBE_TIMEOUT_SEC=0 -- llm test pm
+assert_eq "test: a watchdog bound that is not a positive number refuses to run" "2|1" \
+    "$RC|$(grep -c "CCT_LLM_PROBE_TIMEOUT_SEC='0' is not a positive whole number of seconds" <<< "$OUT")"
+
+gateway "$TMP/gw-ambient.jsonl"
+A_HOME=$(probe_home probe-ambient "$GW_PORT")
+# The selected credential is the gateway's own sentinel here, so its log
+# shows which credential arrived.
+ptest "$A_HOME" TEST_LLM_KEY=probe-planted-credential ANTHROPIC_API_KEY=probe-ambient-credential \
+    CLAUDE_CODE_USE_BEDROCK=probe-ambient-switch CCT_PROBE_MOCK_ENV_LOG="$TMP/mock-env.json" -- llm test pm --json
+gateway_stop
+assert_eq "test: the ambient sentinels reach neither the stub gateway nor the stub harness (FR-30)" "0|0|[]|false" \
+    "$RC|$(grep -c 'probe-ambient' "$TMP/gw-ambient.jsonl")|$(jq -c .sentinel_values "$TMP/mock-env.json")|$(jq -r '.names | index("CLAUDE_CODE_USE_BEDROCK") != null' "$TMP/mock-env.json")"
+assert_eq "test: ...while the selected credential reaches the gateway, as the plan sends it" "yes" \
+    "$(grep -q '"authorization": "Bearer probe-planted-credential"' "$TMP/gw-ambient.jsonl" && echo yes || echo no)"
+assert_eq "test: no credential value or endpoint path in any output or record" "0" \
+    "$(printf '%s\n' "$TEST_PASS" "$TEST_TEXT" "$ERR_TEST_REFUSED" "$(cat "$P_HOME"/llm-compat/claude-code/*.json)" | grep -cF -e "$SECRET" -e "$PATH_TOKEN")"
+REDACTED=$(HOME="/home/u-$PATH_TOKEN" bash -c '
+    source "$1/scripts/lib/llm-probe.sh"
+    LP_SECRET="$2" LP_SECRET_NAME=TEST_LLM_KEY LP_WD=/tmp/cct-llm-probe.X
+    _lp_redact "key $2 at /tmp/cct-llm-probe.X/f in $HOME/x"' _ "$REPO_DIR" "$SECRET")
+assert_eq "test: the recorded excerpt takes out the credential, the probe directory and the home directory" \
+    "key [REDACTED:TEST_LLM_KEY] at <probe-dir>/f in ~/x" "$REDACTED"
+assert_eq "test: every run removed its private directory and its handoff record" "0" \
+    "$(ls -A "$PROBE_TMP" | grep -c -E '^cct-llm-(probe|test-group)\.')"
+
+# Interrupted, the probe reaps the harness's process group and removes its
+# directory (FR-15).
+gateway "$TMP/gw-signal.jsonl" --switch time-out
+S_HOME=$(probe_home probe-signal "$GW_PORT")
+SIG_TMP="$TMP/signal-tmp"; mkdir -p "$SIG_TMP"
+( cd "$TMP" && exec env -u CCT_HOME CCT_HOME="$S_HOME" TEST_LLM_KEY="$SECRET" PATH="$TMP/bin:$PATH" TMPDIR="$SIG_TMP" \
+    CCT_LLM_PROBE_CMD="python3 $MOCK_HARNESS" CCT_LLM_PROBE_TIMEOUT_SEC=60 bash "$CCT" llm test pm > "$TMP/signal.out" 2>&1 ) &
+SIG_PID=$!
+for _ in $(seq 1 100); do grep -q '"reply": "hang"' "$TMP/gw-signal.jsonl" 2>/dev/null && break; sleep 0.1; done
+SIG_START=$(date +%s)
+kill -TERM "$SIG_PID" 2>/dev/null; SIG_RC=0; wait "$SIG_PID" || SIG_RC=$?
+SIG_TOOK=$(( $(date +%s) - SIG_START ))
+sleep 0.5
+gateway_stop
+assert_eq "test: TERM during a run exits 143 at once, not when the 60-second bound ends the run" "143 yes" \
+    "$SIG_RC $([[ "$SIG_TOOK" -le 10 ]] && echo yes || echo "no (${SIG_TOOK}s)")"
+assert_eq "test: ...with the harness's process group reaped" "0" "$(pgrep -f "$MOCK_HARNESS" | wc -l | tr -d ' ')"
+assert_eq "test: ...and nothing left in TMPDIR: the probe's directory, its handoff record, the watchdog's directory" "0" "$(ls -A "$SIG_TMP" | wc -l | tr -d ' ')"
+# TERM to the whole process group (a job killed by %1, a CI cancellation)
+# reaches the run's subshell too, which must still let the bounded runner
+# reap the harness and end its watchdog: a watchdog left alive keeps its
+# directory in TMPDIR.
+gateway "$TMP/gw-group.jsonl" --switch time-out
+GRP_HOME=$(probe_home probe-group "$GW_PORT")
+GRP_TMP="$TMP/group-tmp"; mkdir -p "$GRP_TMP"
+( cd "$TMP" && exec perl -e 'setpgrp(0, 0); exec @ARGV' env -u CCT_HOME CCT_HOME="$GRP_HOME" TEST_LLM_KEY="$SECRET" \
+    PATH="$TMP/bin:$PATH" TMPDIR="$GRP_TMP" CCT_LLM_PROBE_CMD="python3 $MOCK_HARNESS" CCT_LLM_PROBE_TIMEOUT_SEC=60 \
+    bash "$CCT" llm test pm > "$TMP/group.out" 2>&1 ) &
+GRP_PID=$!
+for _ in $(seq 1 100); do grep -q '"reply": "hang"' "$TMP/gw-group.jsonl" 2>/dev/null && break; sleep 0.1; done
+GRP_START=$(date +%s)
+kill -TERM -- "-$GRP_PID" 2>/dev/null; GRP_RC=0; wait "$GRP_PID" || GRP_RC=$?
+GRP_TOOK=$(( $(date +%s) - GRP_START ))
+sleep 0.5
+gateway_stop
+assert_eq "test: TERM to the whole process group exits 143 at once, the harness reaped and TMPDIR empty" "143 yes 0 0" \
+    "$GRP_RC $([[ "$GRP_TOOK" -le 10 ]] && echo yes || echo "no (${GRP_TOOK}s)") $(pgrep -f "$MOCK_HARNESS" | wc -l | tr -d ' ') $(ls -A "$GRP_TMP" | wc -l | tr -d ' ')"
+
+# The watchdog: TERM at the bound, then KILL after a grace that the LLM
+# probe sets to ten seconds and routing leaves at two.
+WATCH=$( ( source "$REPO_DIR/scripts/lib/conformance-app.sh"; s=$(date +%s)
+    ca_run_bounded 1 "trap '' TERM; sleep 30" /dev/null 1; rc=$?; echo "$rc $(( $(date +%s) - s ))" ) )
+assert_eq "test: the watchdog kills a harness that ignores TERM once its grace ends" "124 yes" \
+    "$(field 1 "$WATCH") $([[ "$(field 2 "$WATCH")" -le 6 ]] && echo yes || echo no)"
+WATCH=$( ( source "$REPO_DIR/scripts/lib/conformance-app.sh"; s=$(date +%s)
+    ca_run_bounded 1 "trap '' TERM; sleep 30" /dev/null; rc=$?; echo "$rc $(( $(date +%s) - s ))" ) )
+assert_eq "test: ...routing's runs keep their two-second grace" "124 yes" \
+    "$(field 1 "$WATCH") $([[ "$(field 2 "$WATCH")" -ge 2 && "$(field 2 "$WATCH")" -le 8 ]] && echo yes || echo no)"
+assert_eq "test: ...a grace that is not a whole number of seconds refuses to run" "125" \
+    "$( ( source "$REPO_DIR/scripts/lib/conformance-app.sh"; ca_run_bounded 1 true /dev/null x 2>/dev/null; echo $? ) )"
+gateway "$TMP/gw-grace.jsonl" --switch time-out
+GR_HOME=$(probe_home probe-grace "$GW_PORT")
+GR_START=$(date +%s)
+ptest "$GR_HOME" CCT_LLM_PROBE_TIMEOUT_SEC=1 CCT_PROBE_MOCK_IGNORE_TERM=1 -- llm test pm --json
+GR_TOOK=$(( $(date +%s) - GR_START ))
+gateway_stop
+assert_eq "test: ...and the LLM probe kills a harness that ignores TERM ten seconds after it, the run unverifiable" "1|unverifiable|fail|yes" \
+    "$RC|$(jq -r .outcome <<< "$OUT")|$(jq -r .matrix.clean_exit <<< "$OUT")|$([[ "$GR_TOOK" -ge 10 && "$GR_TOOK" -le 30 ]] && echo yes || echo "no (${GR_TOOK}s)")"
+ROUTING_PROMPT=$( ( source "$REPO_DIR/scripts/lib/routing-probe.sh"; RB_TOOL_FILE=/tmp/t; rb_prompt 1 CCT_PROBE_OK:abc ) )
+assert_eq "test: routing's canary prompt is byte for byte what it was before the shared primitives (D6)" \
+    "$(printf 'Health canary. Do BOTH, nothing else:\n1. Run this exact shell command with your Bash tool: printf %%s CCT_TOOL_OK > /tmp/t\n2. Then reply with exactly this single line: CCT_PROBE_OK:abc')" \
+    "$ROUTING_PROMPT"
+
 # ── every --json document against the schema ──
 cctx "$BASE_HOME" -- llm show m --json; SHOW="$OUT"
 cctx "$BASE_HOME" -- harness explain pi --llm m --json; REFUSED="$OUT"
@@ -505,7 +787,7 @@ jsonschema.Draft202012Validator.check_schema(schema)
 jsonschema.Draft202012Validator(schema).validate(json.load(sys.stdin))' "$SCHEMA" >/dev/null 2>&1
 }
 SCHEMA_DOCS="LIST SHOW VALID BROKEN PLAN REFUSED ERR_MISSING ERR_INVALID ERR_EXPLAIN ERR_UNKNOWN ERR_USAGE ERR_NO_COMMAND"
-SCHEMA_DOCS="$SCHEMA_DOCS SESSIONS SESSIONS_MOVED SESSIONS_PI ERR_SESSIONS"
+SCHEMA_DOCS="$SCHEMA_DOCS SESSIONS SESSIONS_MOVED SESSIONS_PI ERR_SESSIONS TEST_PASS ERR_TEST_REFUSED ERR_TEST_USAGE"
 if [[ -n "$PY_SCHEMA" ]]; then
     for doc in $SCHEMA_DOCS; do
         if schema_ok "${!doc}"; then PASS=$((PASS+1)); echo "  PASS: schema: the $doc document";
@@ -566,6 +848,7 @@ HELP=$(bash "$CCT" help 2>&1)
 assert_contains "cct help documents show" "$HELP" "cct llm show <llm>"
 assert_contains "cct help documents harness explain" "$HELP" "cct harness explain <harness> --llm <target>"
 assert_contains "cct help documents sessions" "$HELP" "cct llm sessions"
+assert_contains "cct help documents test" "$HELP" "cct llm test <target>"
 
 echo ""
 echo "========================================="

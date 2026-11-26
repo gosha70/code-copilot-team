@@ -150,7 +150,12 @@ target, and the rest are put to the owner with the PR.
    record. With the probe deferred, that would refuse every launch. A
    selected launch prints one line naming the provider, model and
    origin and saying nothing has probed it. `--allow-unverified` is not
-   introduced. D7 applies again when the probe lands.
+   introduced. D7 applies again when the probe lands. *Retired
+   2026-11-26 by S3:* `cct llm test` writes the records, and the gate
+   refuses what FR-12 and D7, as the owner amended them that day,
+   refuse; `--allow-unverified` is parsed. The "not probed" line is
+   gone: a launch names its target, with the gate's notice when it has
+   one.
 2. **Resume is not enforced (FR-17 to FR-19, D9).** No stamp exists,
    so the launcher can neither restore a session's target nor refuse a
    different one. `--llm` is accepted with `--continue` and `--resume`;
@@ -616,7 +621,56 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   launch test plants a sentinel credential and a sentinel provider
   switch in the ambient environment and asserts that the stub gateway
   and the stub harness never receive them (FR-30). Probe temporary
-  directories are removed on exit and on signal.
+  directories are removed on exit and on signal. *S3 notes
+  (2026-11-26), for Claude Code (`scripts/lib/llm-probe.sh`), from runs
+  of the real `claude` 2.1.332 behind the stub gateway:*
+  - *The canary.* `claude -p --output-format stream-json --verbose
+    --include-partial-messages --no-session-persistence`, with
+    `--append-system-prompt` giving a token, `--allowedTools Bash` and
+    `--permission-mode acceptEdits`, in a private directory. One shell
+    command through the Bash tool, with paths relative to that
+    directory, writes the marker file and prints a nonce from a file only
+    the tool can read; the one reply line holds the canary's marker, the
+    system prompt's token and what the command printed. A settings
+    file's `env` block that sets a variable the plan controls refuses the
+    test as it refuses a launch, since the run would measure another
+    endpoint, credential or model; a tuning key is said. When the llm declares image input, a second run puts a
+    32x32 red image in the prompt (`--input-format stream-json`) and
+    asks its colour. Claude Code sends adaptive thinking itself, so
+    `reasoning_control` is read from that run's thinking blocks, and
+    `limit_controls` from each response's streamed `message_delta`,
+    against the binding's `max_output_tokens`. `model_identity` compares
+    with the model as Claude Code sends it: without a context suffix
+    such as `[1m]`, which it strips.
+  - *The verdict.* A refused credential, which Claude Code reports in
+    its `api_retry` records, is an attempt of its own, `unavailable`;
+    the probe sets `CLAUDE_CODE_MAX_RETRIES=1`, so that it is reported
+    at once rather than after minutes of retries. "API Error: 400" or
+    422 is a rejected request shape: `output_parsing` fails and the
+    outcome is a behavioral `fail`. A run the watchdog ends, and a crash
+    (an exit other than 0, or 1 with an error result), fail `clean_exit`
+    and are `unverifiable`, whatever was printed before. Any other error,
+    an unparseable result, or a required capability that could not be
+    checked is `unverifiable`. The record's excerpt has the credential,
+    the endpoint's path, the probe directory and the home directory
+    taken out.
+  - *The switches.* drop tool calls (`tool_call`), ignore tool results
+    (`tool_result`), disable streaming (`streaming`; Claude Code then
+    retries without it, with no streamed events), another model id
+    (`model_identity`), ignore the system prompt (`system_prompt`),
+    reject the request shape (`output_parsing`), reject authentication
+    (`auth`), exceed declared limits (`limit_controls`), time out
+    (`clean_exit`), and, for the two conditional capabilities, drop the
+    thinking (`reasoning_control`) and ignore images (`image_input`). Two
+    more answer with errors that decide nothing: a 500, and a 404 naming
+    the request path, which shows the path kept out of the record. The
+    mock harness can crash after its answer, print output that does not
+    parse, and ignore `TERM`, so that the watchdog's `KILL` ends it.
+  - *Departures.* The stub gateway speaks Anthropic Messages only: Claude
+    Code speaks only that, and the OpenAI protocols come with S6 and S7,
+    which can test them. The watchdog's `KILL` follows `TERM` by ten
+    seconds through an argument the shared runner gained; routing keeps
+    its two.
 - **FR-16 Probe records.** Records live under the user home
   (FR-1) at `llm-compat/<harness>/<llm>@<binding>.json` with two
   parts: `latest_attempt` (every run: timestamp, outcome, matrix,
@@ -669,7 +723,11 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   resume opened in a new pane thus checks its launch identity twice: in
   the launcher, which can refuse before the pane opens, and in the pane.
   The owner ruled on 2026-11-26 to keep both checks
-  (`origin/2026-11-25-s4-rulings.md`).
+  (`origin/2026-11-25-s4-rulings.md`). *S3 note (2026-11-26):* the
+  stamp's gate holds the state the launcher's gate admitted, `supported`,
+  or `unverified` under `--allow-unverified`, which `bypassed` records;
+  a resume's refresh writes the gate of that launch. The gate runs where
+  the launch-identity check runs, so both processes compute the state.
 - **FR-18 Resume rules.** New session, no `--llm`: native. New
   session with `--llm`: bind and stamp. Resume by exact id, no
   `--llm`: restore the stamped binding when a stamp exists, else
@@ -777,7 +835,8 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   LLM gateway"). It is the rule table's `min_version`, from rule version
   2. No launch is refused on it before S3's gate: it sets the
   compatibility state that `cct llm compatibility`, `cct doctor` and a
-  session's stamp show.
+  session's stamp show. *S3 note (2026-11-26):* the gate refuses a
+  `claude` older than the minimum, or missing, as `unavailable` (FR-12).
 - **FR-21 Codex.** With `--llm`: `--model <remote>` and `-c`
   overrides that define `model_provider = cct-<binding>` and the
   `model_providers.cct-<binding>` table (`name`, `base_url`,
