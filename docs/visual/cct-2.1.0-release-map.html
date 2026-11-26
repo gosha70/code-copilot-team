@@ -811,7 +811,7 @@ td.new code { color: var(--ink); }
       panelFor[f.id] = { chip: '<span class="chip">' + esc(f.maturity) + ' · since ' + esc(f.since) + '</span>', title: f.title, body: (function (feat) {
         return function () {
           return '<p>' + esc(feat.problem) + '</p>' + sec("Per tool", ul(ADAPTERS.map(function (a) { return '<code>' + a + '</code>: ' + feat.adapters[a]; }))) +
-            (feat.guide ? '<p class="foot">Guide: <a href="' + REPO + '/blob/master/' + feat.guide + '" target="_blank" rel="noopener">' + esc(feat.guide) + '</a></p>' : '');
+            (feat.guide ? '<p class="foot">Guide: <a href="' + REPO + '/blob/v2.1.0/' + feat.guide + '" target="_blank" rel="noopener">' + esc(feat.guide) + '</a></p>' : '');
         };
       })(f) };
     });

@@ -381,7 +381,7 @@ td.num.hi { color: var(--ok); font-weight: 500; }
   var REPO = "https://github.com/gosha70/code-copilot-team";
   function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
   function c(s) { return '<code>' + esc(s) + '</code>'; }
-  function doc(path, label) { return '<a href="' + REPO + '/blob/master/' + path + '" target="_blank" rel="noopener">' + esc(label || path) + '</a>'; }
+  function doc(path, label) { return '<a href="' + REPO + '/blob/v2.1.0/' + path + '" target="_blank" rel="noopener">' + esc(label || path) + '</a>'; }
   function iss(n) { return '<a href="' + REPO + '/issues/' + n + '" target="_blank" rel="noopener">#' + n + '</a>'; }
   function cmd(text) { return '<div class="cmd"><pre><code>' + esc(text) + '</code></pre><button class="copy" type="button">Copy</button></div>'; }
   function sec(k, html) { return '<div class="sec"><div class="k">' + k + '</div>' + html + '</div>'; }
