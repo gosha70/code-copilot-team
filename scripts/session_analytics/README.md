@@ -146,7 +146,7 @@ project from ingestion, add a `projects` block to `config_data/defaults.json`
   **git repo root** when that `cwd` is a local git worktree
   (`git -C <cwd> rev-parse --show-toplevel`), as an absolute path; a path
   key matches however it is spelled (`C:/repo` or backslashes, a trailing
-  separator, letter case on Windows). A
+  separator, a symlink, an 8.3 short name, letter case on Windows). A
   `projects` entry under either key applies (#477), so an entry keyed by an
   id holds for a checked-out repo, and an entry keyed by a repo's path holds
   inside a rule broad enough to cover it. With no entry under either key

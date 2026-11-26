@@ -4,15 +4,18 @@
 
 from __future__ import annotations
 
+import ntpath
 import os
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from session_analytics import constants as C
 from session_analytics.adapters import claude_code
 from session_analytics.config import ProjectIdRule, ProjectOverride
+from session_analytics.ingest import project_key
 from session_analytics.ingest.pipeline import ingest
 from session_analytics.ingest.project_key import ProjectKeyResolver, combined_override, match_project_id
 from session_analytics.relational.db import Database, apply_ddl
@@ -195,33 +198,43 @@ class TestCombinedOverride(unittest.TestCase):
 # ── one repository, however its path is spelled (#538) ──────────────────
 
 
+WINDOWS_RULES = mock.patch.object(project_key.os, "path", ntpath)
+
+
 class TestKeySpelling(unittest.TestCase):
     OFF = ProjectOverride(ingest=C.INGEST_OFF)
 
-    @unittest.skipUnless(os.name == "nt", "Windows path spellings")
+    @WINDOWS_RULES
     def test_a_windows_path_matches_the_form_git_prints(self) -> None:
         projects = {"C:\\Users\\me\\repo": self.OFF}
         resolver = ProjectKeyResolver((), git_toplevel_fn=lambda p: "C:/Users/me/repo")
         self.assertIs(resolver.override(projects, "C:\\Users\\me\\repo\\src"), self.OFF)
         self.assertEqual(resolver.entry_keys(projects, "C:\\Users\\me\\repo\\src"), ["C:\\Users\\me\\repo"])
 
-    @unittest.skipUnless(os.name == "nt", "Windows path spellings")
+    @WINDOWS_RULES
     def test_the_forward_slash_form_still_matches(self) -> None:
-        resolver = ProjectKeyResolver((), git_toplevel_fn=lambda p: "C:/Users/me/repo")
+        resolver = ProjectKeyResolver((), git_toplevel_fn=lambda p: "C:\\Users\\me\\repo")
         self.assertIs(resolver.override({"C:/Users/me/repo": self.OFF}, "C:\\Users\\me\\repo"), self.OFF)
 
-    @unittest.skipUnless(os.name == "nt", "Windows path spellings")
+    @WINDOWS_RULES
     def test_the_drive_letter_and_folder_case_do_not_matter(self) -> None:
         resolver = ProjectKeyResolver((), git_toplevel_fn=lambda p: "C:/Users/Me/Repo")
         self.assertIs(resolver.override({"c:\\users\\me\\repo": self.OFF}, "C:\\Users\\Me\\Repo"), self.OFF)
 
-    @unittest.skipUnless(os.name == "nt", "Windows path spellings")
+    @WINDOWS_RULES
     def test_two_spellings_of_one_repository_hold_the_stricter_setting(self) -> None:
         projects = {
             "C:\\Users\\me\\repo": ProjectOverride(redaction_mode=C.REDACT_NONE),
             "C:/Users/me/repo": ProjectOverride(redaction_mode=C.REDACT_METADATA_ONLY),
         }
         self.assertEqual(combined_override(projects, ("C:\\Users\\me\\repo",)).redaction_mode, C.REDACT_METADATA_ONLY)
+
+    @WINDOWS_RULES
+    def test_a_neighbouring_or_parent_windows_path_does_not_match(self) -> None:
+        projects = {"C:\\work\\repo": self.OFF}
+        self.assertIsNone(combined_override(projects, ("C:/work/repo-other",)))
+        self.assertIsNone(combined_override(projects, ("C:/work",)))
+        self.assertIsNone(combined_override(projects, ("D:/work/repo",)))
 
     def test_a_trailing_or_doubled_separator_still_matches(self) -> None:
         root = os.path.abspath(os.path.join(os.sep, "work", "repo"))
@@ -237,6 +250,45 @@ class TestKeySpelling(unittest.TestCase):
         root = os.path.abspath(os.path.join(os.sep, "work", "repo"))
         self.assertIsNone(combined_override({root: self.OFF}, (root + "-other",)))
         self.assertIsNone(combined_override({root: self.OFF}, (os.path.dirname(root),)))
+
+    def test_a_symlinked_path_matches_the_repository_it_points_to(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cct-sa-test-link-") as tmp:
+            repo = os.path.realpath(os.path.join(tmp, "repo"))
+            link = os.path.join(tmp, "link")
+            os.mkdir(repo)
+            try:
+                os.symlink(repo, link, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("symlinks are not available")
+            self.assertIs(combined_override({link: self.OFF}, (repo,)), self.OFF)
+            self.assertIs(combined_override({repo: self.OFF}, (link,)), self.OFF)
+
+    @unittest.skipUnless(os.name == "nt", "8.3 short names are Windows only")
+    def test_a_short_name_matches_the_long_name(self) -> None:
+        import ctypes
+
+        with tempfile.TemporaryDirectory(prefix="cct-sa-test-short-") as tmp:
+            long_path = os.path.join(os.path.realpath(tmp), "a long repository name")
+            os.mkdir(long_path)
+            buf = ctypes.create_unicode_buffer(520)
+            if not ctypes.windll.kernel32.GetShortPathNameW(long_path, buf, 520) or buf.value == long_path:
+                self.skipTest("8.3 short names are not enabled on this volume")
+            self.assertIs(combined_override({buf.value: self.OFF}, (long_path.replace("\\\\", "/"),)), self.OFF)
+
+    def test_the_resolver_reads_the_projects_table_once_per_run(self) -> None:
+        root = os.path.abspath(os.path.join(os.sep, "work", "repo"))
+        projects = {root: self.OFF}
+        resolver = ProjectKeyResolver((), git_toplevel_fn=lambda p: root)
+        with mock.patch.object(project_key, "written_keys", wraps=project_key.written_keys) as built, mock.patch.object(
+            project_key, "key_spelling", wraps=project_key.key_spelling
+        ) as spelt:
+            for _ in range(3):
+                self.assertIs(resolver.override(projects, root), self.OFF)
+                self.assertEqual(resolver.entry_keys(projects, root), [root])
+            self.assertEqual(built.call_count, 1)
+            self.assertEqual(spelt.call_count, 1)
+            self.assertIs(resolver.override({root: self.OFF}, root), self.OFF)
+            self.assertEqual(built.call_count, 2)
 
 
 # ── ingest() integration (per-project privacy) ──────────────────────────
