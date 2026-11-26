@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/gosha70/code-copilot-team/shared/schemas/llm-catalog-cli.schema.json",
   "title": "cct llm and cct harness explain --json output",
-  "description": "What `cct llm list|show|validate|compatibility --json` and `cct harness explain <harness> --llm <target> --json` print (#400 FR-6, S1, S2). No value of any variable appears: a credential is its variable's NAME and whether it is set, and an endpoint is its origin (scheme://host[:port]).",
+  "description": "What `cct llm list|show|validate|compatibility|sessions --json` and `cct harness explain <harness> --llm <target> --json` print (#400 FR-6, S1, S2, S4). No value of any variable appears: a credential is its variable's NAME and whether it is set, and an endpoint is its origin (scheme://host[:port]).",
   "type": "object",
   "required": ["schema_version", "command"],
   "oneOf": [
@@ -11,7 +11,8 @@
     {"$ref": "#/$defs/validate"},
     {"$ref": "#/$defs/explain"},
     {"$ref": "#/$defs/error"},
-    {"$ref": "#/$defs/compatibility"}
+    {"$ref": "#/$defs/compatibility"},
+    {"$ref": "#/$defs/sessions"}
   ],
   "$defs": {
     "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"},
@@ -214,7 +215,7 @@
       "additionalProperties": false,
       "properties": {
         "schema_version": {"const": 1},
-        "command": {"enum": ["list", "show", "validate", "explain", "compatibility", null]},
+        "command": {"enum": ["list", "show", "validate", "explain", "compatibility", "sessions", null]},
         "catalog": {"type": "string"},
         "error": {"type": "string", "minLength": 1}
       }
@@ -279,6 +280,53 @@
               },
               "latest_attempt": {"$ref": "#/$defs/attempt"},
               "latest_conclusive": {"$ref": "#/$defs/attempt"}
+            }
+          }
+        }
+      }
+    },
+    "sessions": {
+      "description": "The stamps of one harness's --llm sessions (FR-6, FR-17, S4), newest first, only one project's under --project. A stamp is attempted until the harness's own transcript for that session records a reply, then established with the model the reply names. resume.eligible is the check a resume by the session's id makes now (FR-18, FR-19); when it is false, reason says why. A stamp that cannot be read is said on stderr, and the exit code is 2.",
+      "type": "object",
+      "required": ["schema_version", "command", "harness", "sessions_dir", "sessions"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {"const": 1},
+        "command": {"const": "sessions"},
+        "harness": {"enum": ["claude-code", "codex", "pi", "kiro"]},
+        "sessions_dir": {"type": "string"},
+        "sessions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["session_id", "harness", "target", "llm", "binding", "requested_model", "effective_model", "status", "project", "forked_from", "created_at", "refreshed_at", "established_at", "resume"],
+            "additionalProperties": false,
+            "properties": {
+              "session_id": {"type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"},
+              "harness": {"enum": ["claude-code", "codex", "pi", "kiro"]},
+              "target": {"type": "string"},
+              "llm": {"$ref": "#/$defs/id"},
+              "binding": {"$ref": "#/$defs/id"},
+              "requested_model": {"type": ["string", "null"]},
+              "effective_model": {"type": ["string", "null"]},
+              "status": {"enum": ["attempted", "established"]},
+              "project": {"type": ["string", "null"]},
+              "forked_from": {"type": ["string", "null"]},
+              "created_at": {"type": ["string", "null"]},
+              "refreshed_at": {"type": ["string", "null"]},
+              "established_at": {"type": ["string", "null"]},
+              "resume": {
+                "type": "object",
+                "required": ["eligible", "reason"],
+                "additionalProperties": false,
+                "properties": {
+                  "eligible": {"type": "boolean"},
+                  "reason": {"type": ["string", "null"]}
+                },
+                "if": {"properties": {"eligible": {"const": false}}},
+                "then": {"properties": {"reason": {"type": "string", "minLength": 1}}},
+                "else": {"properties": {"reason": {"type": "null"}}}
+              }
             }
           }
         }

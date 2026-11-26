@@ -313,7 +313,7 @@ assert_contains "cct help documents llm" "$(bash "$REPO_DIR/scripts/cct" help 2>
 assert_contains "cct help documents --llm on start" "$(bash "$REPO_DIR/scripts/cct" help 2>&1)" "cct start --llm"
 USAGE_RC=0; USAGE_OUT=$(bash "$CLI" bogus 2>&1) || USAGE_RC=$?
 assert_exit "an unknown cct llm command exits 2" 2 "$USAGE_RC"
-assert_contains "...and names the four that exist" "$USAGE_OUT" "list | show | validate | compatibility"
+assert_contains "...and names the five that exist" "$USAGE_OUT" "list | show | validate | compatibility | sessions"
 
 # ── a project's [llm] restriction (#400 FR-24, D13; S5) ──
 PROJ="$TMP/policy-proj"; mkdir -p "$PROJ"

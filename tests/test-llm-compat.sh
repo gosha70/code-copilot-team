@@ -16,8 +16,8 @@ CCT="$REPO_DIR/scripts/cct"
 RULES="$REPO_DIR/shared/llm/compat-rules.json"
 SCHEMA="$REPO_DIR/shared/schemas/llm-catalog-cli.schema.json"
 # Bump both when the table changes: a changed table must change rule_version.
-RULES_VERSION_PIN=1
-RULES_SHA_PIN="02b77be831acddb077bc9f12353065ff5c83721ba4388cabaffac4d06c1aa0c3"
+RULES_VERSION_PIN=2
+RULES_SHA_PIN="d01a1280a47104be638820fcfa150ad4e2d57f12306ed3c1fd4d90ab133e7b3c"
 
 PASS=0; FAIL=0; SKIPPED=0
 assert_eq() {
@@ -174,6 +174,10 @@ assert_eq "rules: Claude Code honours every quirk the catalog accepts" "$LC_QUIR
     "$(jq -r '.harnesses["claude-code"].quirks | join(" ")' "$RULES")"
 assert_eq "rules: Claude Code may use a managed provider's own login (departure 3)" "true" \
     "$(jq -r '.harnesses["claude-code"].managed' "$RULES")"
+# FR-20: the version the #399 work pinned, from which Claude Code retries a
+# request without tool search after a 400 or 422 (its MCP documentation).
+assert_eq "rules: Claude Code's minimum is the #399 retry's version (FR-20)" "2.1.305" \
+    "$(jq -r '.harnesses["claude-code"].min_version' "$RULES")"
 assert_eq "rules: Codex speaks openai-responses only (S0's capture)" "openai-responses" \
     "$(jq -r '.harnesses.codex.protocols | join(" ")' "$RULES")"
 assert_eq "rules: Pi speaks all three protocols (S0's capture)" "anthropic-messages openai-chat openai-responses" \
@@ -191,7 +195,7 @@ assert_eq "rules: every min_version is unset or a dotted version" "[]" \
 OUT=$(compat --json); RC=$?
 assert_eq "compatibility exits 0" "0" "$RC"
 assert_eq "never tested: unverified" "unverified|never tested" "$(field m '"\(.state)|\(.reason)"' <<< "$OUT")"
-assert_eq "...with the current evidence: harness version and rule version" "2.1.331|1" \
+assert_eq "...with the current evidence: harness version and rule version" "2.1.331|$RULES_VERSION_PIN" \
     "$(field m '"\(.evidence.harness_version)|\(.evidence.rule_version)"' <<< "$OUT")"
 assert_eq "an endpoint speaking another protocol: unsupported, with the launch's reason" \
     "unsupported|endpoint 'chat' speaks openai-chat, claude-code speaks anthropic-messages" \
@@ -267,10 +271,10 @@ OUT=$(compat m --json)
 assert_eq "a newer claude degrades supported to unverified" "unverified|[\"harness_version\"]" "$(field m '"\(.state)|\(.degraded | tojson)"' <<< "$OUT")"
 assert_contains "...saying what changed" "$(field m .reason <<< "$OUT")" "no longer applies: claude 2.1.331 is now 2.1.400"
 echo "2.1.331 (Claude Code)" > "$TMP/claude-version"
-jq '.rule_version = 2' "$RULES" > "$TMP/rules-v2.json"
-OUT=$(RULES_OVERRIDE="$TMP/rules-v2.json" compat m --json)
+jq '.rule_version += 1' "$RULES" > "$TMP/rules-next.json"
+OUT=$(RULES_OVERRIDE="$TMP/rules-next.json" compat m --json)
 assert_eq "a new rule version degrades it" "unverified|[\"rule_version\"]" "$(field m '"\(.state)|\(.degraded | tojson)"' <<< "$OUT")"
-assert_contains "...saying so" "$(field m .reason <<< "$OUT")" "rule version 1 is now 2"
+assert_contains "...saying so" "$(field m .reason <<< "$OUT")" "rule version $RULES_VERSION_PIN is now $((RULES_VERSION_PIN + 1))"
 catalog 'max_output_tokens = 4096' > "$HOME_DIR/.cct/llms.toml"
 OUT=$(compat m --json)
 assert_eq "a changed tuning option degrades it" "unverified|[\"options\"]" "$(field m '"\(.state)|\(.degraded | tojson)"' <<< "$OUT")"
@@ -305,7 +309,7 @@ rm -f "$REC_DIR/m@b.json"; cp "$TMP/m-good.json" "$REC_DIR/m@b.json"; chmod 600 
 TEXT=$(compat); RC=$?
 assert_eq "text: exits 0" "0" "$RC"
 assert_contains "text: a row per binding, with the state and why" "$TEXT" "m       claude-code  supported     passed its test of 2026-11-23T20:00:00Z"
-assert_contains "text: names the rule version and the harness version" "$TEXT" "Rule version 1; claude 2.1.331."
+assert_contains "text: names the rule version and the harness version" "$TEXT" "Rule version $RULES_VERSION_PIN; claude 2.1.331."
 JSON=$(compat --json)
 assert_eq "json: one target per binding" "6" "$(jq '.targets | length' <<< "$JSON")"
 for doc in "$TEXT" "$JSON"; do

@@ -46,6 +46,19 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   never read from `.cct.local.toml` or the legacy
   `.code-copilot-team/config.toml`, and a launch without `--llm` reads none
   of it. Pi's config lint accepts the table. Part of #400.
+- **A `--llm` session keeps its target when resumed.** A Claude Code launch
+  with `--llm` gives its session an id, prints it, and records the target
+  under it before Claude Code starts: a private stamp under
+  `${CCT_HOME:-~/.cct}/llm-sessions/claude-code/`, with names and digests
+  only. `--resume <id>` then runs the session on that target, with or
+  without `--llm`, after resolving it again. A resume with another target
+  (the refusal names both), or after the target's endpoint, model or
+  credential changed, is refused with exit 3. To move a session to another target,
+  fork it: `--resume <id> --fork-session --llm <target>`. `cct llm
+  sessions` lists the stamped sessions with each one's target, model,
+  state, project, and whether it can be resumed now; a session reads
+  `established`, with the model Claude Code's transcript names, once that
+  transcript records a reply. Part of #400.
 
 ### Security
 
@@ -93,6 +106,30 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   One stderr line per changed table gives the counts, never a name, and
   `--raw` writes the store as it is. This supersedes the 2.1.0 upgrade note
   "`export` still writes what the store holds" (#487).
+- **`--llm` with `--continue`, the resume picker, `--from-pr`,
+  `--teleport` or `--session-id` is refused.** For each of the first four
+  Claude Code chooses the session (it acts on `--continue` even beside
+  `--resume <id>`), so the selection could switch that session's model;
+  the refusal names `--resume <id>` instead. The arguments are read as
+  Claude Code's option parser reads them: `c` in `-cd` or `-pc` is
+  `--continue`; `-pr <id>` is `-p --resume <id>`, a resume of that
+  session; and an option that requires a value takes the next argument,
+  so `--append-system-prompt --resume <id>` starts a new session. The
+  launcher chooses a `--llm` session's id itself, and the refusal says to
+  drop `--session-id`. Without `--llm`, a stamped session resumed by id
+  beside any of these is refused too, since Claude Code would resume
+  another session on its target; otherwise nothing changes, and where
+  stamps exist, a `--continue` or the picker prints a note that it checks
+  no target. Part of #400.
+- **`claude-code --resume <session-id>` resumes that session.** The
+  launcher read the id as a project directory and stopped ("Directory …
+  does not exist"); it now passes it to Claude Code. Part of #400.
+- **Claude Code older than 2.1.305 reads unavailable** in `cct llm
+  compatibility`: from that version Claude Code retries a request without
+  tool search when a gateway refuses it (the version #399 relied on). The
+  rule table is now version 2. No launch is refused on it yet: a `--llm`
+  launch goes ahead, and its session's stamp records the state. Part of
+  #400.
 
 ### Fixed
 

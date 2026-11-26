@@ -571,6 +571,8 @@ USAGE:
     claude-code [path]                              Start Claude session (cmux on macOS, tmux elsewhere)
     claude-code --continue [path]                   Continue last session
     claude-code --resume [path]                     Resume a named session (interactive picker)
+    claude-code --resume <session-id> [path]        Resume that session (one started with --llm,
+                                                    on its target)
     claude-code --llm <target> [path]               Start a session on an LLM from your catalog
                                                     (this session only; `cct llm list` shows them)
     claude-code init <type> [path] [--playwright] [--license <type>]   Initialize project from template
@@ -595,15 +597,19 @@ OPTIONS:
     --review-commits <mode>  Commit strategy: single|per-round|squash (default: squash)
     --review-max-rounds <n>  Max review rounds before breaker (default: 5)
     --continue, -c       Continue the most recent Claude session
-    --resume, -r         Resume a named session (interactive picker)
+    --resume, -r [id]    Resume the session with that id; without one, the picker
     --shell <auto|cmux|tmux>  Session backend (default: auto)
     --llm <target>       Run this session on a target from the LLM catalog
                          (${CCT_HOME:-~/.cct}/llms.toml): <llm>, or <llm>@<binding>.
                          Sets the provider, credential and model for this session
                          only and removes competing variables from it; nothing is
                          exported in your shell. Works with -p too. Without --llm
-                         the launch is unchanged. Resume a session with the target
-                         it was started with: the launcher does not record it yet.
+                         the launch is unchanged. The session's id is printed at
+                         start and its target recorded (`cct llm sessions` lists
+                         them): --resume <id> resumes it on that target, with or
+                         without --llm. Another target, --continue and the picker
+                         are refused; to move a session to another target, fork
+                         it: --resume <id> --fork-session --llm <target>.
 
 Any other --flag is forwarded verbatim to the underlying `claude` CLI
 (e.g. --dangerously-skip-permissions). Use --flag=value for value-bearing
@@ -1707,7 +1713,9 @@ run_headless() {
 #            touched. Reads no credential value.
 #   apply    in the process about to exec claude: this one, or the
 #            launcher re-run inside the pane it created (CCT_LLM_CHILD=1,
-#            which prepares again there). Sets and removes the variables.
+#            which prepares again there). Sets and removes the variables,
+#            and stamps the session (#400 S4), in the environment the
+#            session runs in.
 # The catalog code lives in the checkout, like `build`'s driver.
 LLM_TARGET=""
 LLM_REST_ARGS=()
@@ -1796,6 +1804,243 @@ llm_load_libs() {
     source "$repo/scripts/lib/llm-adapters/claude-code.sh"
     # shellcheck source=/dev/null
     source "$repo/scripts/lib/llm-resolve.sh"
+    # shellcheck source=/dev/null
+    source "$repo/scripts/lib/cct-statefile.sh"
+    # shellcheck source=/dev/null
+    source "$repo/scripts/lib/llm-compat.sh"
+    # shellcheck source=/dev/null
+    source "$repo/scripts/lib/llm-sessions.sh"
+}
+
+# ── Sessions and resume (#400 FR-17, FR-18, FR-19, D9; slice S4) ──
+# A --llm session is stamped before claude runs, under the id the launcher
+# generates and passes with --session-id. Resumed by that id it keeps its
+# target; a different target, a bare --continue or the picker is refused.
+LLM_HEADLESS=0
+LLM_UUID_RE='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+llm_stamps_dir() { printf '%s/llm-sessions/claude-code\n' "$(cct_home)"; }
+
+# These read the arguments as Claude Code's option parser (commander) does,
+# without the checkout's libraries, so a native launch reads nothing new.
+# Claude Code 2.1.332's options that take a value, from the capture
+# (specs/llm-catalog/verification/claude-code-session-capture.md, section
+# 12): every other option takes none, and one Claude Code does not know is
+# its own error, so it starts no session.
+LLM_CC_OPTS_REQUIRED=" --add-dir --advisor --agent --agent-color --agent-id --agent-name --agent-type --agents --allowed-tools --allowedTools --append-subagent-system-prompt --append-subagent-system-prompt-file --append-system-prompt --append-system-prompt-file --attach-serve --autocompact --betas --channels --client-data-url --correlation-id --dangerously-load-development-channels --debug-file --deep-link-cwd-b64 --deep-link-last-fetch --deep-link-repo --disallowed-tools --disallowedTools --effort --environment --fallback-model --fast-mode --file --forward-home-settings --inherit-permission-mode --initialize-fields --input-format --json-schema --lead-verify-key --managed-settings --max-budget-usd --max-thinking-tokens --max-turns --mcp-config --messaging-socket-path --metadata --model --name --on-branch --output-format --parent-session-id --permission-mode --permission-prompt-tool --permission-prompts --plan-mode-instructions --plugin-dir --plugin-dir-no-mcp --plugin-url --pool --prefill --prefill-b64 --proactivity --project-config-root --ref --remote-control-session-name-prefix --resume-drops-turn --resume-session-at --rewind-files --runner-declares --sdk-url --session-began-as-copy --session-id --setting-sources --settings --system-prompt --system-prompt-file --system-prompt-snapshot --task-budget --team-name --teammate-mode --thinking --thinking-display --tools --watch-artifact --watch-artifact-no-autoreact --workload -n "
+LLM_CC_OPTS_OPTIONAL=" --cloud --debug --from-pr --prompt-suggestions --rc --remote --remote-control --resume --teleport --worktree -d -r -w "
+
+_llm_arity() {  # <option>: LLM_ARITY = required | optional | none
+    if [[ "$LLM_CC_OPTS_REQUIRED" == *" $1 "* ]]; then LLM_ARITY=required
+    elif [[ "$LLM_CC_OPTS_OPTIONAL" == *" $1 "* ]]; then LLM_ARITY=optional
+    else LLM_ARITY=none; fi
+}
+
+_llm_scan_option() {  # <option> <value> <has value: 0|1> <as written>
+    case "$1" in
+        --continue|-c)
+            if [[ -z "$LLM_SCAN_CONT" ]]; then
+                if [[ "$4" == "$1" ]]; then LLM_SCAN_CONT="$1"; else LLM_SCAN_CONT="$1 (in $4)"; fi
+            fi ;;
+        --resume|-r)
+            LLM_SCAN_RESUME=1 LLM_SCAN_RESUME_ID=""
+            if [[ "$3" == 1 && "$2" =~ $LLM_UUID_RE ]]; then LLM_SCAN_RESUME_ID="$2"; fi ;;
+        --teleport|--from-pr) [[ -n "$LLM_SCAN_LINKED" ]] || LLM_SCAN_LINKED="$1" ;;
+        --fork-session) LLM_SCAN_FORK=1 ;;
+        --session-id) LLM_SCAN_ID_GIVEN=1 ;;
+    esac
+}
+
+# llm_scan_claude_args <claude args...>: what Claude Code makes of them.
+#   LLM_SCAN_CONT       --continue as written: --continue, -c, "-c (in -pc)"
+#   LLM_SCAN_LINKED     --teleport or --from-pr
+#   LLM_SCAN_RESUME     1 with a --resume; the last one wins
+#   LLM_SCAN_RESUME_ID  the session id it names, or "" (the picker, a name
+#                       or a search term)
+#   LLM_SCAN_FORK       1 with --fork-session
+#   LLM_SCAN_ID_GIVEN   1 with a --session-id
+# Read as commander reads them: an option that requires a value takes the
+# next argument, whatever it is (--append-system-prompt --resume makes
+# "--resume" the prompt); an optional value is the next argument unless it
+# looks like an option; --name=value gives one; everything after -- is
+# text. A single-dash cluster is read letter by letter, and a letter that
+# takes a value takes the rest of the cluster, or else the next argument
+# (-pr <id> is -p -r <id>; -prX is -p -r X; -rp is -r p).
+llm_scan_claude_args() {  # <claude args...>
+    local arg rest letter value has
+    LLM_SCAN_CONT="" LLM_SCAN_LINKED="" LLM_SCAN_RESUME=0 LLM_SCAN_RESUME_ID="" LLM_SCAN_FORK=0 LLM_SCAN_ID_GIVEN=0
+    while [[ $# -gt 0 ]]; do
+        arg="$1"; shift
+        case "$arg" in
+            --) break ;;
+            --?*=*)
+                _llm_arity "${arg%%=*}"
+                [[ "$LLM_ARITY" == none ]] || _llm_scan_option "${arg%%=*}" "${arg#*=}" 1 "$arg" ;;
+            --?*)
+                _llm_arity "$arg"; value="" has=0
+                if [[ $# -gt 0 ]]; then
+                    if [[ "$LLM_ARITY" == required ]] \
+                        || [[ "$LLM_ARITY" == optional && ! ( ${#1} -gt 1 && "${1:0:1}" == "-" ) ]]; then
+                        value="$1" has=1; shift
+                    fi
+                fi
+                _llm_scan_option "$arg" "$value" "$has" "$arg" ;;
+            -?*)
+                rest="${arg#-}"
+                while [[ -n "$rest" ]]; do
+                    letter="-${rest:0:1}" rest="${rest:1}"
+                    _llm_arity "$letter"
+                    if [[ "$LLM_ARITY" == none ]]; then _llm_scan_option "$letter" "" 0 "$arg"; continue; fi
+                    value="" has=0
+                    if [[ -n "$rest" ]]; then
+                        value="$rest" has=1
+                    elif [[ $# -gt 0 ]]; then
+                        if [[ "$LLM_ARITY" == required ]] || [[ ! ( ${#1} -gt 1 && "${1:0:1}" == "-" ) ]]; then
+                            value="$1" has=1; shift
+                        fi
+                    fi
+                    _llm_scan_option "$letter" "$value" "$has" "$arg"
+                    break
+                done ;;
+        esac
+    done
+    if [[ -n "$LLM_SCAN_RESUME_ID" ]]; then LLM_SCAN_RESUME_ID=$(printf '%s' "$LLM_SCAN_RESUME_ID" | tr 'A-F' 'a-f'); fi
+    return 0
+}
+
+# The flag Claude Code acts on before --resume, as written: --continue, -c,
+# "-c (in -pc)", --teleport or --from-pr.
+llm_resume_override() {  # <claude args...>
+    llm_scan_claude_args "$@"
+    if [[ -n "$LLM_SCAN_CONT" ]]; then printf '%s\n' "$LLM_SCAN_CONT"; return 0; fi
+    if [[ -n "$LLM_SCAN_LINKED" ]]; then printf '%s\n' "$LLM_SCAN_LINKED"; return 0; fi
+    return 1
+}
+
+# The session id the last --resume names, whatever Claude Code would act on
+# first.
+llm_named_resume_id() {  # <claude args...>
+    llm_scan_claude_args "$@"
+    [[ -n "$LLM_SCAN_RESUME_ID" ]] || return 1
+    printf '%s\n' "$LLM_SCAN_RESUME_ID"
+}
+
+# The session id Claude Code resumes: one named, with nothing it acts on
+# before --resume.
+llm_resume_id() {  # <claude args...>
+    llm_scan_claude_args "$@"
+    [[ -z "$LLM_SCAN_CONT" && -z "$LLM_SCAN_LINKED" && -n "$LLM_SCAN_RESUME_ID" ]] || return 1
+    printf '%s\n' "$LLM_SCAN_RESUME_ID"
+}
+
+# 0 when Claude Code picks the session: --continue in any form, --resume
+# without an id or with a name (the picker), or --from-pr (a session linked
+# to a PR, or a picker of them).
+llm_resume_unpinned() {  # <claude args...>
+    llm_resume_id "$@" >/dev/null && return 1
+    [[ -n "$LLM_SCAN_CONT" || "$LLM_SCAN_LINKED" == "--from-pr" || "$LLM_SCAN_RESUME" == 1 ]]
+}
+
+# The launch as lss_rules reads it (LSS_MODE and the rest; see
+# llm-sessions.sh), in Claude Code's own order (2.1.332): --continue first,
+# then --teleport and --from-pr, then --resume.
+llm_classify_launch() {  # <claude args...>
+    llm_scan_claude_args "$@"
+    LSS_MODE="new" LSS_RESUME_ID="" LSS_CONT_FLAG="$LLM_SCAN_CONT"
+    LSS_LINKED_FLAG="$LLM_SCAN_LINKED" LSS_ID_GIVEN="$LLM_SCAN_ID_GIVEN"
+    if [[ -n "$LLM_SCAN_CONT" ]]; then LSS_MODE="continue"
+    elif [[ -n "$LLM_SCAN_LINKED" ]]; then LSS_MODE="linked"
+    elif [[ -n "$LLM_SCAN_RESUME_ID" ]]; then
+        LSS_RESUME_ID="$LLM_SCAN_RESUME_ID"
+        if [[ "$LLM_SCAN_FORK" == 1 ]]; then LSS_MODE="fork"; else LSS_MODE="exact"; fi
+    elif [[ "$LLM_SCAN_RESUME" == 1 ]]; then LSS_MODE="picker"
+    fi
+    return 0
+}
+
+# FR-18: resumed by its id without --llm, a session started with --llm runs
+# on the target its stamp names, re-resolved like a fresh --llm (FR-19). A
+# session without a stamp resumes natively, as before, and so does a fork:
+# it is a new session. A stamped session named beside a flag Claude Code
+# acts on first is refused: Claude Code would resume another session, on
+# the target restored for this one.
+llm_restore_target() {  # <claude args...>
+    local id rc=0 flag
+    llm_scan_claude_args "$@"
+    [[ "$LLM_SCAN_FORK" == 1 ]] && return 0
+    id=$(llm_named_resume_id "$@") || return 0
+    [[ -e "$(llm_stamps_dir)/$id.json" || -L "$(llm_stamps_dir)/$id.json" ]] || return 0
+    LLM_TARGET="(the target of session $id)"   # names the launch in a refusal until it is read
+    if flag=$(llm_resume_override "$@"); then
+        llm_refuse "session $id has a stamp, but Claude Code acts on $flag first and resumes another session, which would run on this one's target" \
+            "Resume it alone: --resume $id (its target is restored), or drop --resume $id."
+    fi
+    llm_load_libs
+    lss_read "$LLM_CC_HARNESS" "$id" || rc=$?
+    case "$rc" in
+        0) LLM_TARGET="$LSS_STAMP_TARGET"
+           printf '[claude-code] session %s was started with --llm %s: resuming it on that target.\n' "$id" "$LLM_TARGET" >&2 ;;
+        1) LLM_TARGET="" ;;
+        *) llm_refuse "$LSS_ERR" ;;
+    esac
+}
+
+# FR-18 for a native launch: a bare --continue or the picker resumes
+# whichever session Claude Code picks. Said once, and only where stamped
+# sessions exist, so a launcher that never used --llm is unchanged.
+llm_unpinned_notice() {  # <claude args...>
+    llm_resume_unpinned "$@" || return 0
+    [[ -d "$(llm_stamps_dir)" ]] || return 0
+    printf '[claude-code] note: this resumes whichever session Claude Code picks, with no check of the LLM it was started with; resume by id (--resume <session-id>) for that check.\n' >&2
+}
+
+# FR-18 and FR-19 for a --llm launch, in the launcher the user ran and again
+# in a pane's child: refused (exit 3) before anything starts.
+llm_session_rules() {
+    local line rc=0 remedies=()
+    if [[ "$LLM_HEADLESS" == 1 ]]; then
+        llm_classify_launch ${LLM_REST_ARGS[@]+"${LLM_REST_ARGS[@]}"}
+    else
+        llm_classify_launch ${CLAUDE_ARGS[@]+"${CLAUDE_ARGS[@]}"}
+    fi
+    # D9: the launcher chooses the id. One given could name a session that
+    # exists, whose stamp would be replaced before claude refused the id.
+    if [[ "$LSS_ID_GIVEN" == 1 ]]; then
+        llm_refuse "--session-id is not accepted with --llm: the launcher generates the session id and stamps it before claude starts" \
+            "Drop --session-id: the id is printed at start, and --resume <id> resumes the session on its target."
+    fi
+    lss_rules "$LLM_CC_HARNESS" || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+        while IFS= read -r line; do [[ -n "$line" ]] && remedies+=("$line"); done <<< "$LSS_REMEDY"
+        llm_refuse "$LSS_REFUSAL" ${remedies[@]+"${remedies[@]}"}
+    fi
+    if [[ -n "$LSS_NOTICE" ]]; then printf '[claude-code] note: %s\n' "$LSS_NOTICE" >&2; fi
+}
+
+# FR-17 and D9, in the process about to exec claude, where its environment
+# is the session's: a new session or a fork gets the id the launcher
+# generates and its stamp; a session resumed by its id is promoted when its
+# transcript shows a reply, and its stamp refreshed. The id goes right after
+# claude, ahead of the forwarded flags, so that none of them can take it as
+# its value (an option that requires one takes the next argument).
+llm_session_stamp() {
+    local id
+    case "$LSS_MODE" in
+        new|fork)
+            id=$(lss_new_id) || llm_refuse "cannot generate a session id (uuidgen, /proc/sys/kernel/random/uuid or python3 is needed)"
+            CLAUDE_CMD=("${CLAUDE_CMD[0]}" --session-id "$id" "${CLAUDE_CMD[@]:1}")
+            if [[ "$LSS_MODE" == fork ]]; then
+                lss_stamp_new "$LLM_CC_HARNESS" "$id" "$LSS_RESUME_ID" || llm_refuse "cannot write the stamp of session $id: $LSS_ERR"
+            else
+                lss_stamp_new "$LLM_CC_HARNESS" "$id" || llm_refuse "cannot write the stamp of session $id: $LSS_ERR"
+            fi
+            ;;
+        exact)
+            id="$LSS_RESUME_ID"
+            lss_promote "$LLM_CC_HARNESS" "$id" || true
+            lss_stamp_refresh "$LLM_CC_HARNESS" "$id" || llm_refuse "cannot refresh the stamp of session $id: $LSS_ERR"
+            ;;
+    esac
+    printf '[claude-code] session %s (resume it with --resume %s)\n' "$id" "$id" >&2
 }
 
 llm_prepare() {  # <project-dir>
@@ -1841,6 +2086,7 @@ llm_prepare() {  # <project-dir>
         printf '[claude-code] note: %s sets %s in its env block; Claude Code applies it over this launch, so that value is the one the session uses.\n' \
             "${note%: *}" "${note##*: }" >&2
     done <<< "$LLM_CC_SETTINGS_NOTED"
+    llm_session_rules
     return 0
 }
 
@@ -1850,6 +2096,7 @@ llm_apply() {
     unset CCT_LLM_CHILD
     printf '[claude-code] --llm %s: %s (not probed: nothing has checked this model against Claude Code yet)\n' \
         "$LLM_TARGET" "$LLM_CC_LABEL" >&2
+    llm_session_stamp
     llm_cc_apply
 }
 
@@ -1857,11 +2104,14 @@ for _arg in "$@"; do
     case "$_arg" in
         -p|--print)
             llm_split_args "$@"
+            if [[ -z "$LLM_TARGET" ]]; then llm_restore_target ${LLM_REST_ARGS[@]+"${LLM_REST_ARGS[@]}"}; fi
             if [[ -n "$LLM_TARGET" ]]; then
+                LLM_HEADLESS=1
                 llm_prepare "$PWD"
                 llm_apply
                 run_headless "${LLM_REST_ARGS[@]}"
             fi
+            llm_unpinned_notice "$@"
             gateway_compat_notice
             run_headless "$@"
             ;;
@@ -1897,8 +2147,16 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --resume|-r)
-            CLAUDE_ARGS+=("--resume")
-            shift
+            # A session id after it resumes that session (and keeps its
+            # --llm target, #400 FR-18); anything else is the picker's
+            # business, and a path is still the project directory.
+            if [[ "${2:-}" =~ $LLM_UUID_RE ]]; then
+                CLAUDE_ARGS+=("--resume" "$2")
+                shift 2
+            else
+                CLAUDE_ARGS+=("--resume")
+                shift
+            fi
             ;;
         --peer-review)
             PEER_REVIEW_ENABLED="true"
@@ -2181,10 +2439,13 @@ case "${1:-}" in
         show_help
         ;;
     *)
+        if [[ -z "$LLM_TARGET" ]]; then llm_restore_target ${CLAUDE_ARGS[@]+"${CLAUDE_ARGS[@]}"}; fi
         if [[ -n "$LLM_TARGET" ]]; then
             if [[ "${CCT_LLM_CHILD:-}" == "1" ]]; then
                 # Inside the pane this launcher created: no session
-                # vehicle and no banner, only resolve, apply and exec.
+                # vehicle and no banner, only resolve, apply and exec. The
+                # pane's environment can differ from the launcher's, so the
+                # pane resolves, checks and stamps in its own.
                 llm_prepare "$PWD"
                 llm_apply
                 exec "${CLAUDE_CMD[@]}"
@@ -2198,6 +2459,7 @@ case "${1:-}" in
                 llm_prepare "$llm_project"
             fi
         else
+            llm_unpinned_notice ${CLAUDE_ARGS[@]+"${CLAUDE_ARGS[@]}"}
             # The notice belongs where a session is about to start, not on
             # help or list (review of PR #425). It describes the shell's
             # own gateway variables, which a selected launch replaces.
