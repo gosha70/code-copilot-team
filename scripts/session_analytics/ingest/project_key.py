@@ -25,6 +25,8 @@
 
 from __future__ import annotations
 
+import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Callable, Mapping, Optional, Sequence
@@ -59,6 +61,33 @@ def git_toplevel(path: str) -> Optional[str]:
     return out or None
 
 
+_DRIVE_PATH = re.compile(r"^[A-Za-z]:[\\/]")
+
+
+def _same_key(key: str) -> str:
+    """``key`` in the one spelling used to compare keys. A path is compared
+    by ``normcase(normpath(...))``, because git prints a Windows repository
+    as ``C:/Users/me/repo`` and a person writes it with backslashes; both
+    must name the same project. An id is compared as written."""
+    if os.path.isabs(key) or _DRIVE_PATH.match(key):
+        return os.path.normcase(os.path.normpath(key))
+    return key
+
+
+def entry_keys(projects: Mapping[str, ProjectOverride], keys: Sequence[str]) -> list[str]:
+    """The keys, as written in ``projects``, that name the same project as
+    any of ``keys``, in the order of ``keys``."""
+    written: dict[str, list[str]] = {}
+    for key in projects:
+        written.setdefault(_same_key(key), []).append(key)
+    found: list[str] = []
+    for key in keys:
+        for match in written.get(_same_key(key), ()):
+            if match not in found:
+                found.append(match)
+    return found
+
+
 def match_project_id(path: str, rules: Sequence[ProjectIdRule]) -> Optional[str]:
     """The ``id`` of the first rule whose ``match`` is a substring of
     ``path`` (a prefix match is a substring match, so this covers both), or
@@ -79,7 +108,7 @@ def combined_override(
     stricter setting of each kind holds: opted out if either opts out, the
     stricter of the redaction modes they state (``None`` — the global mode
     — when neither states one), and archived only if both opt in."""
-    entries = [projects[key] for key in keys if key in projects]
+    entries = [projects[key] for key in entry_keys(projects, keys)]
     if len(entries) < 2:
         return entries[0] if entries else None
     mode: Optional[str] = None
@@ -124,6 +153,11 @@ class ProjectKeyResolver:
         rule's id, else the git root."""
         keys = self.keys(project_path)
         return keys[0] if keys else None
+
+    def entry_keys(self, projects: Mapping[str, ProjectOverride], project_path: Optional[str]) -> list[str]:
+        """The keys, as written in ``projects``, the project's settings are
+        filed under."""
+        return entry_keys(projects, self.keys(project_path))
 
     def override(
         self, projects: Mapping[str, ProjectOverride], project_path: Optional[str]

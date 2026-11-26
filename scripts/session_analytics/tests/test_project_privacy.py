@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import tempfile
 import unittest
@@ -189,6 +190,53 @@ class TestCombinedOverride(unittest.TestCase):
         self.assertTrue(self.combined(yes, yes).trace_archive)
         self.assertFalse(self.combined(yes, no).trace_archive)
         self.assertFalse(self.combined(no, yes).trace_archive)
+
+
+# ── one repository, however its path is spelled (#538) ──────────────────
+
+
+class TestKeySpelling(unittest.TestCase):
+    OFF = ProjectOverride(ingest=C.INGEST_OFF)
+
+    @unittest.skipUnless(os.name == "nt", "Windows path spellings")
+    def test_a_windows_path_matches_the_form_git_prints(self) -> None:
+        projects = {"C:\\Users\\me\\repo": self.OFF}
+        resolver = ProjectKeyResolver((), git_toplevel_fn=lambda p: "C:/Users/me/repo")
+        self.assertIs(resolver.override(projects, "C:\\Users\\me\\repo\\src"), self.OFF)
+        self.assertEqual(resolver.entry_keys(projects, "C:\\Users\\me\\repo\\src"), ["C:\\Users\\me\\repo"])
+
+    @unittest.skipUnless(os.name == "nt", "Windows path spellings")
+    def test_the_forward_slash_form_still_matches(self) -> None:
+        resolver = ProjectKeyResolver((), git_toplevel_fn=lambda p: "C:/Users/me/repo")
+        self.assertIs(resolver.override({"C:/Users/me/repo": self.OFF}, "C:\\Users\\me\\repo"), self.OFF)
+
+    @unittest.skipUnless(os.name == "nt", "Windows path spellings")
+    def test_the_drive_letter_and_folder_case_do_not_matter(self) -> None:
+        resolver = ProjectKeyResolver((), git_toplevel_fn=lambda p: "C:/Users/Me/Repo")
+        self.assertIs(resolver.override({"c:\\users\\me\\repo": self.OFF}, "C:\\Users\\Me\\Repo"), self.OFF)
+
+    @unittest.skipUnless(os.name == "nt", "Windows path spellings")
+    def test_two_spellings_of_one_repository_hold_the_stricter_setting(self) -> None:
+        projects = {
+            "C:\\Users\\me\\repo": ProjectOverride(redaction_mode=C.REDACT_NONE),
+            "C:/Users/me/repo": ProjectOverride(redaction_mode=C.REDACT_METADATA_ONLY),
+        }
+        self.assertEqual(combined_override(projects, ("C:\\Users\\me\\repo",)).redaction_mode, C.REDACT_METADATA_ONLY)
+
+    def test_a_trailing_or_doubled_separator_still_matches(self) -> None:
+        root = os.path.abspath(os.path.join(os.sep, "work", "repo"))
+        projects = {root + os.sep: self.OFF}
+        self.assertIs(combined_override(projects, (root,)), self.OFF)
+        self.assertIs(combined_override({root: self.OFF}, (root + os.sep + os.sep,)), self.OFF)
+
+    def test_an_id_is_compared_as_written(self) -> None:
+        self.assertIsNone(combined_override({"Client-A": self.OFF}, ("client-a",)))
+        self.assertIs(combined_override({"client-a": self.OFF}, ("client-a",)), self.OFF)
+
+    def test_a_different_repository_does_not_match(self) -> None:
+        root = os.path.abspath(os.path.join(os.sep, "work", "repo"))
+        self.assertIsNone(combined_override({root: self.OFF}, (root + "-other",)))
+        self.assertIsNone(combined_override({root: self.OFF}, (os.path.dirname(root),)))
 
 
 # ── ingest() integration (per-project privacy) ──────────────────────────
