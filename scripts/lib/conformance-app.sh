@@ -31,7 +31,9 @@
 # duration. All timeouts are positive INTEGER seconds (enforced by the
 # config validator and the frozen-contract predicate). An optional third
 # argument captures stdout+stderr to a file (the landing gate keeps every
-# verifier and evaluator transcript in the ledger).
+# verifier and evaluator transcript in the ledger). An optional fourth
+# sets that grace in whole seconds, 2 when it is not given: the LLM
+# catalog's probe gives 10 (#400 FR-15).
 # CA_ACTIVE_GROUP — the process group of the bounded command currently
 # running, so a signal handler in the DRIVER can reap it (round-12
 # finding 2: exiting from a trap skips ca_run_bounded's own cleanup and
@@ -91,7 +93,11 @@ ca_active_cleanup() {
 }
 
 ca_run_bounded() {
-    local secs="$1" cmd="$2" out="${3:-/dev/null}" rc=0 pid
+    local secs="$1" cmd="$2" out="${3:-/dev/null}" grace="${4:-2}" rc=0 pid
+    if [[ ! "$grace" =~ ^[0-9]+$ ]]; then
+        echo "conformance-app: the KILL grace '$grace' is not a whole number of seconds — refusing to run the probe" >&2
+        return 125
+    fi
     # ONE mechanism: our own process group + watchdog, with the escalation
     # allowed to COMPLETE before returning (the cp_run_bounded lesson —
     # a cancelled watchdog leaves a TERM-resistant descendant alive).
@@ -103,7 +109,8 @@ ca_run_bounded() {
     # this suite (bound enforced, group killed, cleanup verified), so it
     # is the only path.
     local firedir fired
-    if ! firedir=$(mktemp -d 2>/dev/null) || [[ -z "$firedir" || ! -d "$firedir" ]]; then
+    # Under TMPDIR, which a bare `mktemp -d` ignores on macOS.
+    if ! firedir=$(mktemp -d "${TMPDIR:-/tmp}/cct-bounded.XXXXXX" 2>/dev/null) || [[ -z "$firedir" || ! -d "$firedir" ]]; then
         echo "conformance-app: cannot create the probe watchdog directory — refusing to run the probe unbounded" >&2
         return 125
     fi
@@ -125,7 +132,7 @@ ca_run_bounded() {
     ( sleep "$secs"
       : > "$fired"
       kill -TERM -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
-      sleep 2
+      sleep "$grace"
       kill -KILL -"$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null ) >/dev/null 2>&1 &
     local watchdog=$!
     wait "$pid" 2>/dev/null || rc=$?
