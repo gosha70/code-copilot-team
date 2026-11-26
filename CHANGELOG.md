@@ -110,10 +110,14 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   `--teleport` or `--session-id` is refused.** For each of the first four
   Claude Code chooses the session (it acts on `--continue` even beside
   `--resume <id>`), so the selection could switch that session's model;
-  the refusal names `--resume <id>` instead. The launcher chooses a `--llm`
-  session's id itself, and the refusal says to drop `--session-id`.
-  Without `--llm` nothing changes; where stamps exist, a `--continue` or
-  the picker prints a note that it checks no target. Part of #400.
+  the refusal names `--resume <id>` instead. A single-dash cluster is read
+  as Claude Code reads it: `c` in `-cd` or `-pc` is `--continue`. The
+  launcher chooses a `--llm` session's id itself, and the refusal says to
+  drop `--session-id`. Without `--llm`, a stamped session resumed by id
+  beside any of these is refused too, since Claude Code would resume
+  another session on its target; otherwise nothing changes, and where
+  stamps exist, a `--continue` or the picker prints a note that it checks
+  no target. Part of #400.
 - **`claude-code --resume <session-id>` resumes that session.** The
   launcher read the id as a project directory and stopped ("Directory …
   does not exist"); it now passes it to Claude Code. Part of #400.

@@ -52,13 +52,23 @@ headless: `-p "Reply with the single word OK." --output-format json --max-turns 
 - stub: POST /v1/messages?beta=true | protocol anthropic-messages | model 'capture-main' | auth {'authorization': 'Bearer capture-planted-credential'}
 - stderr: [claude-code:unrecognized_model] {"model":"capture-main","query_source":"sdk"}
 
-## 7. The transcripts the runs left
+## 7. `--resume <S1> --session-id <S4>`, without `--fork-session`
 
-- `~/.claude/projects/<project>/<S2>.jsonl`: 22 lines; sessionId `<S2>`; assistant model capture-main
-- `~/.claude/projects/<project>/<S1>.jsonl`: 37 lines; sessionId `<S1>`; assistant model capture-main
+- exit 1
+- stderr: Error: --session-id with --continue or --resume also needs --fork-session.
+
+## 8. `--continue --session-id <S5>`, without `--fork-session`
+
+- exit 1
+- stderr: Error: --session-id with --continue or --resume also needs --fork-session.
+
+## 9. The transcripts the runs left
+
 - `~/.claude/projects/<project>/<S3>.jsonl`: 30 lines; sessionId `<S3>`; assistant model capture-main
+- `~/.claude/projects/<project>/<S1>.jsonl`: 37 lines; sessionId `<S1>`; assistant model capture-main
+- `~/.claude/projects/<project>/<S2>.jsonl`: 22 lines; sessionId `<S2>`; assistant model capture-main
 
-## 8. Variable names
+## 10. Variable names
 
 `strings` over this binary and over the 2.1.329 binary, filtered to `ANTHROPIC_*` and
 `CLAUDE_CODE_*`: 1052 names now, 1022 in 2.1.329.
@@ -67,7 +77,7 @@ Added since 2.1.329: `CLAUDE_CODE_BRIDGE_CHILD_HELD_TO_AUTO`, `CLAUDE_CODE_CHROM
 
 Gone since 2.1.329: `CLAUDE_CODE_MCP_SERVE_MEMORY_WALKS_DEADLINE_MS`
 
-## 9. The minimum version (FR-20)
+## 11. The minimum version (FR-20)
 
 Not run, and not measured by this script: Claude Code's documentation, "Tool search through
 an LLM gateway" (https://code.claude.com/docs/en/mcp#tool-search-through-a-gateway), read

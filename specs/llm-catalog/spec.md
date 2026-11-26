@@ -637,7 +637,7 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   refuses the launch, naming it (FR-29). The session evidence is Claude Code's
   transcript, `~/.claude/projects/<project path, every other character
   a dash>/<id>.jsonl` (`verification/claude-code-session-capture.md`,
-  section 7), or, where Claude Code shortened a long path, the file of
+  section 9), or, where Claude Code shortened a long path, the file of
   that id under `~/.claude/projects/`. The model of its last reply is
   the effective model. Not a reply of the session: an API error Claude
   Code records as its own assistant entry (model `<synthetic>`), and in
@@ -661,12 +661,15 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   (`origin/2026-11-25-s4-rulings.md`), whose choices the owner accepted
   the same day:* an exact id is a UUID, after `--resume` or attached
   (`-r<id>`); `--resume` with a session's name or a search term is the
-  picker, and arguments after `--` are text. The flags are read in
-  Claude Code's own order (2.1.332):
-  `--continue` wins over `--resume`, so beside an exact id it is still
-  refused with `--llm` and restores nothing without; `--teleport` and
-  `--from-pr` resume a session Claude Code finds for itself and are
-  refused with `--llm` like the picker. A resume by exact id with
+  picker, and arguments after `--` are text. A single-dash cluster of
+  letters is read by its letters, as Claude Code reads `-cd` as `-c
+  -d`: `c` is `--continue`, `r` a resume without an id. The flags are
+  read in Claude Code's own order (2.1.332): `--continue` wins over
+  `--resume`; `--teleport` and `--from-pr` resume a session Claude Code
+  finds for itself and are refused with `--llm` like the picker. A
+  stamped session named by id beside any of them is refused, with
+  `--llm` or without, before anything runs or its stamp is refreshed:
+  Claude Code would resume another session, on this one's target. A resume by exact id with
   `--llm` and no stamp is refused: the target the session was started
   with is unknown, and the refusal names the ways out, a resume without
   `--llm` or `--fork-session`. A fork (`--resume <id> --fork-session`)
@@ -987,7 +990,11 @@ before slice D builds; the approved spec's history stays in git.
   wrapper's own injection is not relied on. So a `--session-id` given
   with `--llm` is refused, and the refusal says to drop it: it could
   name an existing session, whose stamp would be replaced before Claude
-  Code refused the id. Accepted by the owner 2026-11-25.
+  Code refused the id. Accepted by the owner 2026-11-25. The safety of a
+  new session's stamp rests on Claude Code refusing an id of its own
+  beside `--resume` or `--continue` unless `--fork-session` is given
+  (the capture's sections 7 and 8): the id a launch generates can never
+  name a session that is resumed.
 - **D10 Codex overlay form.** `-c` overrides (names and URLs, no
   secret, nothing to clean up), adopted only after the capture proves
   nested keys on the installed CLI; a disproving capture stops the

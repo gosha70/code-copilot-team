@@ -742,11 +742,23 @@ run_launcher "${DIRTY[@]}" -- -p "restore" --resume "$S1"
 assert_exit "sessions: resumed by its id without --llm" 0 "$RC"
 assert_contains "sessions: ...its stamped target is restored, and said" "$OUTPUT" "session $S1 was started with --llm deepseek@deepseek-claude: resuming it on that target"
 assert_eq "sessions: ...and applied over the shell's own" "https://api.deepseek.example/anthropic" "$(claude_env ANTHROPIC_BASE_URL)"
-new_logs
-run_launcher "${DIRTY[@]}" -- -p y --resume "$S1" -c
-assert_eq "sessions: without --llm, --continue beside --resume <id> restores nothing, and says what it does not check" \
-    "no 1 https://ambient-gateway.example" \
-    "$(grep -q 'resuming it on' <<< "$OUTPUT" && echo yes || echo no) $(grep -c 'this resumes whichever session Claude Code picks' <<< "$OUTPUT") $(claude_env ANTHROPIC_BASE_URL)"
+# A stamped session named beside a flag Claude Code acts on first: Claude
+# Code would resume another session, on the target restored for this one.
+cp "$STAMPS/$S1.json" "$TMP/s1.before"
+refused "sessions: without --llm, --continue beside --resume <id> of a stamped session is refused" \
+    "session $S1 has a stamp, but Claude Code acts on -c first" "${DIRTY[@]}" -- -p y --resume "$S1" -c
+# Single-dash clusters: Claude Code 2.1.332 reads -cd as -c -d and continues
+# the most recent session, so c in a cluster is --continue. They reach
+# claude on the headless path, which forwards its arguments verbatim (the
+# interactive path takes a cluster for the project directory and stops).
+for cl in -cp -pc -cd; do
+    refused "sessions: --resume <id> beside $cl is refused with --llm, as --continue" \
+        "-c (in $cl) resumes whichever session Claude Code picks" -- --llm deepseek -p x --resume "$S1" "$cl"
+    refused "sessions: ...and without --llm, where the restore would reach another session" \
+        "session $S1 has a stamp, but Claude Code acts on -c (in $cl) first" -- -p x --resume "$S1" "$cl"
+done
+assert_eq "sessions: ...nothing typed, and the named session's stamp never refreshed" "same|" \
+    "$(cmp -s "$STAMPS/$S1.json" "$TMP/s1.before" && echo same || echo changed)|$(cat "$MUX_LOG")"
 new_logs
 run_launcher "${DIRTY[@]}" -- -p fork-native --resume "$S1" --fork-session
 assert_eq "sessions: a fork without --llm is a new native session: nothing restored, no id added" \

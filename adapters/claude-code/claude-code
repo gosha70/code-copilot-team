@@ -1818,56 +1818,88 @@ LLM_HEADLESS=0
 LLM_UUID_RE='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
 llm_stamps_dir() { printf '%s/llm-sessions/claude-code\n' "$(cct_home)"; }
 
-# The session id after --resume (or -r<id>), when it is an id and not a
-# name, a search term or nothing. Claude Code acts on --continue, --teleport
-# and --from-pr before --resume, so beside any of them there is none, and
-# reads everything after -- as text. Read without the checkout's libraries,
-# so a native launch reads nothing new.
-llm_resume_id() {  # <claude args...>
+# These read the arguments as Claude Code does, without the checkout's
+# libraries, so a native launch reads nothing new: everything after -- is
+# text, and a single-dash cluster of letters is read by its letters (Claude
+# Code reads -cd as -c -d): c is --continue, r a resume without an id.
+
+# The flag Claude Code acts on before --resume, as written: --continue, -c,
+# "-c (in -cd)", "-r (in -pr)", --teleport or --from-pr.
+llm_resume_override() {  # <claude args...>
     local a
     for a in "$@"; do
         case "$a" in
-            --) break ;;
-            --continue|-c|--teleport|--teleport=*|--from-pr|--from-pr=*) return 1 ;;
-        esac
-    done
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
             --) return 1 ;;
-            --resume|-r) if [[ "${2:-}" =~ $LLM_UUID_RE ]]; then printf '%s\n' "$2" | tr 'A-F' 'a-f'; return 0; fi ;;
-            --resume=*) if [[ "${1#*=}" =~ $LLM_UUID_RE ]]; then printf '%s\n' "${1#*=}" | tr 'A-F' 'a-f'; return 0; fi ;;
-            -r?*) if [[ "${1#-r}" =~ $LLM_UUID_RE ]]; then printf '%s\n' "${1#-r}" | tr 'A-F' 'a-f'; return 0; fi ;;
+            --continue|-c|--teleport|--teleport=*|--from-pr|--from-pr=*) printf '%s\n' "${a%%=*}"; return 0 ;;
+            -[!-]?*)
+                if [[ "$a" =~ ^-[A-Za-z]+$ ]]; then
+                    if [[ "$a" == *c* ]]; then printf -- '-c (in %s)\n' "$a"; return 0; fi
+                    if [[ "$a" == *r* ]]; then printf -- '-r (in %s)\n' "$a"; return 0; fi
+                fi ;;
         esac
-        shift
     done
     return 1
 }
 
-# 0 when Claude Code picks the session: --continue, --resume without an id
-# (the picker), or --from-pr (a session linked to a PR, or a picker of them).
+# The session id named by --resume <id>, --resume=<id> or -r<id>, whatever
+# Claude Code would act on first. The last --resume wins, as in Claude Code.
+llm_named_resume_id() {  # <claude args...>
+    local id=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --) break ;;
+            --resume|-r) id=""; if [[ "${2:-}" =~ $LLM_UUID_RE ]]; then id="$2"; shift; fi ;;
+            --resume=*) id=""; if [[ "${1#*=}" =~ $LLM_UUID_RE ]]; then id="${1#*=}"; fi ;;
+            -r?*) if [[ "${1#-r}" =~ $LLM_UUID_RE ]]; then id="${1#-r}"; fi ;;
+        esac
+        shift
+    done
+    [[ -n "$id" ]] || return 1
+    printf '%s\n' "$id" | tr 'A-F' 'a-f'
+}
+
+# The session id Claude Code resumes: one named, with nothing it acts on
+# before --resume.
+llm_resume_id() {  # <claude args...>
+    llm_resume_override "$@" >/dev/null && return 1
+    llm_named_resume_id "$@"
+}
+
+# 0 when Claude Code picks the session: --continue in any form, --resume
+# without an id or with a name (the picker), or --from-pr (a session linked
+# to a PR, or a picker of them).
 llm_resume_unpinned() {  # <claude args...>
-    local a cont=0 resume=0
+    local a
     llm_resume_id "$@" >/dev/null && return 1
     for a in "$@"; do
         case "$a" in
             --) break ;;
-            --continue|-c|--from-pr|--from-pr=*) cont=1 ;;
-            --resume|-r|--resume=*) resume=1 ;;
+            --continue|-c|--from-pr|--from-pr=*|--resume|-r|--resume=*) return 0 ;;
+            -[!-]?*) if [[ "$a" =~ ^-[A-Za-z]+$ && ( "$a" == *c* || "$a" == *r* ) ]]; then return 0; fi ;;
         esac
     done
-    [[ "$cont" -eq 1 || "$resume" -eq 1 ]]
+    return 1
 }
 
 # FR-18: resumed by its id without --llm, a session started with --llm runs
 # on the target its stamp names, re-resolved like a fresh --llm (FR-19). A
 # session without a stamp resumes natively, as before, and so does a fork:
-# it is a new session.
+# it is a new session. A stamped session named beside a flag Claude Code
+# acts on first is refused: Claude Code would resume another session, on
+# the target restored for this one.
 llm_restore_target() {  # <claude args...>
-    local id rc=0 a
-    for a in "$@"; do [[ "$a" == "--fork-session" ]] && return 0; done
-    id=$(llm_resume_id "$@") || return 0
+    local id rc=0 a flag
+    for a in "$@"; do
+        [[ "$a" == "--" ]] && break
+        [[ "$a" == "--fork-session" ]] && return 0
+    done
+    id=$(llm_named_resume_id "$@") || return 0
     [[ -e "$(llm_stamps_dir)/$id.json" || -L "$(llm_stamps_dir)/$id.json" ]] || return 0
     LLM_TARGET="(the target of session $id)"   # names the launch in a refusal until it is read
+    if flag=$(llm_resume_override "$@"); then
+        llm_refuse "session $id has a stamp, but Claude Code acts on $flag first and resumes another session, which would run on this one's target" \
+            "Resume it alone: --resume $id (its target is restored), or drop --resume $id."
+    fi
     llm_load_libs
     lss_read "$LLM_CC_HARNESS" "$id" || rc=$?
     case "$rc" in

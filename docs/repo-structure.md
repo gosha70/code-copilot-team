@@ -85,7 +85,7 @@ code-copilot-team/
 │   ├── test-github-hardening.sh       14 hardening audit tests (classic + ruleset sources)
 │   ├── test-cct-home.sh               146 home resolver + `cct home` tests (#411)
 │   ├── test-llm-catalog.sh            151 LLM catalog, project policy + `cct llm` tests (#479, #400)
-│   ├── test-llm-launch.sh             245 `claude-code --llm` launch, stamp and resume tests (#479, #400)
+│   ├── test-llm-launch.sh             252 `claude-code --llm` launch, stamp and resume tests (#479, #400)
 │   ├── test-llm-cli.sh                138 `cct llm show`, `cct llm sessions`, `cct harness explain` and `--json` tests (#400)
 │   ├── test-cct-statefile.sh          59 state-file tests: modes, locks, killed and concurrent writers (#400)
 │   ├── test-llm-compat.sh             78 compatibility state, record, `cct llm compatibility` and doctor tests (#400)

@@ -54,23 +54,33 @@ lss_new_id() {
 #             <uuid>, or -r<uuid>) | fork (exact plus --fork-session: a new
 #             session from an existing one)
 #   LSS_RESUME_ID    the session resumed or forked from (exact, fork)
+#   LSS_CONT_FLAG    the continue flag as written: --continue, -c, or
+#                    "-c (in -cd)"
 #   LSS_LINKED_FLAG  the flag that made it linked
 #   LSS_ID_GIVEN     1 when the arguments pass a --session-id of their own
-# Arguments after -- are text, as Claude Code reads them, and an argument
-# that only starts with -r is a resume only when an id follows it: a prompt
-# or an option's value may begin that way.
+# Arguments after -- are text, as Claude Code reads them. A single-dash
+# cluster of letters is read by its letters, as Claude Code reads -cd as
+# -c -d: c is --continue, r a resume without an id. Otherwise an argument
+# that only starts with -r is a resume only when an id follows it, since a
+# prompt or an option's value may begin that way. The last --resume wins.
 lss_classify() {
-    local resume="" has_resume=0 cont=0 fork=0
-    LSS_MODE="new" LSS_RESUME_ID="" LSS_LINKED_FLAG="" LSS_ID_GIVEN=0
+    local resume="" has_resume=0 cont=0 fork=0 picker=0
+    LSS_MODE="new" LSS_RESUME_ID="" LSS_CONT_FLAG="" LSS_LINKED_FLAG="" LSS_ID_GIVEN=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --) break ;;
-            --continue|-c) cont=1 ;;
+            --continue|-c) cont=1; [[ -n "$LSS_CONT_FLAG" ]] || LSS_CONT_FLAG="$1" ;;
             --resume|-r)
-                has_resume=1
+                has_resume=1; resume=""
                 if [[ $# -gt 1 && -n "$2" && "${2:0:1}" != "-" ]]; then resume="$2"; shift; fi ;;
             --resume=*) has_resume=1; resume="${1#*=}" ;;
-            -r?*) if [[ "${1#-r}" =~ $LSS_UUID_RE ]]; then has_resume=1; resume="${1#-r}"; fi ;;
+            -[!-]?*)
+                if [[ "$1" =~ ^-[A-Za-z]+$ ]]; then
+                    if [[ "$1" == *c* ]]; then cont=1; [[ -n "$LSS_CONT_FLAG" ]] || LSS_CONT_FLAG="-c (in $1)"; fi
+                    if [[ "$1" == *r* ]]; then has_resume=1; picker=1; fi
+                elif [[ "$1" == -r* && "${1#-r}" =~ $LSS_UUID_RE ]]; then
+                    has_resume=1; resume="${1#-r}"
+                fi ;;
             --teleport|--teleport=*|--from-pr|--from-pr=*)
                 [[ -n "$LSS_LINKED_FLAG" ]] || LSS_LINKED_FLAG="${1%%=*}" ;;
             --fork-session) fork=1 ;;
@@ -84,7 +94,7 @@ lss_classify() {
     elif [[ -n "$LSS_LINKED_FLAG" ]]; then
         LSS_MODE="linked"
     elif [[ "$has_resume" -eq 1 ]]; then
-        if [[ "$resume" =~ $LSS_UUID_RE ]]; then
+        if [[ "$picker" -eq 0 && "$resume" =~ $LSS_UUID_RE ]]; then
             LSS_RESUME_ID=$(printf '%s' "$resume" | tr 'A-F' 'a-f')
             if [[ "$fork" -eq 1 ]]; then LSS_MODE="fork"; else LSS_MODE="exact"; fi
         else
@@ -120,7 +130,7 @@ lss_rules() {
         new) return 0 ;;
         continue|linked|picker)
             case "$LSS_MODE" in
-                continue) LSS_REFUSAL="--continue resumes whichever session Claude Code picks (it wins over --resume), so the selection would be ignored or switch a session's model" ;;
+                continue) LSS_REFUSAL="$LSS_CONT_FLAG resumes whichever session Claude Code picks (it wins over --resume), so the selection would be ignored or switch a session's model" ;;
                 linked)   LSS_REFUSAL="$LSS_LINKED_FLAG resumes a session Claude Code finds for itself, so the selection would be ignored or switch a session's model" ;;
                 *)        LSS_REFUSAL="the resume picker lets Claude Code choose the session, so the selection would be ignored or switch a session's model" ;;
             esac

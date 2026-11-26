@@ -10,7 +10,8 @@
 #     that proves it;
 #   - the model the --output-format json result and the transcript report;
 #   - whether --resume <id> keeps the id, what a --session-id already in use
-#     does, and which session a bare --continue takes;
+#     does, which session a bare --continue takes, and that a --session-id
+#     beside --resume or --continue is refused without --fork-session;
 #   - the ANTHROPIC_* and CLAUDE_CODE_* names in the binary that an earlier
 #     binary did not carry.
 # No real provider, no real credential: the only credential is a planted
@@ -168,6 +169,12 @@ run resume "$BEARER" -- "${ASK[@]}" --resume "$S1"
 run reused-id "$BEARER" -- "${ASK[@]}" --session-id "$S1"
 run continue "$BEARER" -- "${ASK[@]}" --continue
 run fork "$BEARER" -- "${ASK[@]}" --resume "$S1" --fork-session --session-id "$S3"
+# S4's safety for a new session rests on these two: an id given beside
+# --resume or --continue, without --fork-session, is refused, so the id a
+# --llm launch generates can never name a session that is resumed.
+S4="$(uuid)"; S5="$(uuid)"
+run resume-with-id "$BEARER" -- "${ASK[@]}" --resume "$S1" --session-id "$S4"
+run continue-with-id "$BEARER" -- "${ASK[@]}" --continue --session-id "$S5"
 
 # ── the variable names ───────────────────────────────────────────────
 BASELINE="${CAPTURE_BASELINE_BIN:-$HOME/.local/share/claude/versions/2.1.329}"
@@ -203,9 +210,13 @@ fi
   echo; summary continue | sed "s/$S1/<S1>/g; s/$S2/<S2>/g"; echo
   echo "## 6. \`--resume <S1> --fork-session --session-id <S3>\`"
   echo; summary fork | sed "s/$S1/<S1>/g; s/$S2/<S2>/g; s/$S3/<S3>/g"; echo
-  echo "## 7. The transcripts the runs left"
-  echo; transcripts | sed "s/$S1/<S1>/g; s/$S2/<S2>/g; s/$S3/<S3>/g"; echo
-  echo "## 8. Variable names"
+  echo "## 7. \`--resume <S1> --session-id <S4>\`, without \`--fork-session\`"
+  echo; summary resume-with-id | sed "s/$S1/<S1>/g; s/$S4/<S4>/g"; echo
+  echo "## 8. \`--continue --session-id <S5>\`, without \`--fork-session\`"
+  echo; summary continue-with-id | sed "s/$S1/<S1>/g; s/$S5/<S5>/g"; echo
+  echo "## 9. The transcripts the runs left"
+  echo; transcripts | sed "s/$S1/<S1>/g; s/$S2/<S2>/g; s/$S3/<S3>/g; s/$S4/<S4>/g; s/$S5/<S5>/g"; echo
+  echo "## 10. Variable names"
   echo
   if [[ -n "${BASE_VERSION:-}" ]]; then
     echo "\`strings\` over this binary and over the $BASE_VERSION binary, filtered to \`ANTHROPIC_*\` and"
@@ -220,7 +231,7 @@ fi
     echo "No earlier binary to compare with (\`CAPTURE_BASELINE_BIN\`); $(wc -l < "$W/names.now" | tr -d ' ') names now."
   fi
   echo
-  echo "## 9. The minimum version (FR-20)"
+  echo "## 11. The minimum version (FR-20)"
   echo
   echo "Not run, and not measured by this script: Claude Code's documentation, \"Tool search through"
   echo "an LLM gateway\" (https://code.claude.com/docs/en/mcp#tool-search-through-a-gateway), read"

@@ -231,6 +231,8 @@ A resumed target is resolved again, as for a new launch. These are refused, befo
 | `--resume <id> --llm <target>` for a session with no stamp | the target it was started with is unknown. Resume it without `--llm`, or fork it |
 | `--llm` with `--continue` (also beside `--resume <id>`: Claude Code acts on `--continue` first), with `--resume` and no id, or with a session's name instead of its id | Claude Code picks the session, so the selection would be ignored or would switch that session's model |
 | `--llm` with `--from-pr` or `--teleport` | Claude Code finds that session for itself, the same way |
+| a single-dash cluster such as `-cd` or `-pc` | Claude Code reads it letter by letter, so `c` in it is `--continue` and `r` a resume without an id, refused as above |
+| `--resume <id>` of a stamped session, without `--llm`, beside any of these | Claude Code would resume another session, on the target restored for this one |
 | `--llm` with `--session-id` | the launcher chooses the session's id; drop `--session-id` |
 
 Without `--llm`, `--continue` and the picker work as before; where stamps exist, they print a note that they check no target. A session started without `--llm` resumes as it always has, and a fork without `--llm` is a new session that runs as any other launch without it.
