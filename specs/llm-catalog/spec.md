@@ -626,12 +626,16 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   of the real `claude` 2.1.332 behind the stub gateway:*
   - *The canary.* `claude -p --output-format stream-json --verbose
     --include-partial-messages --no-session-persistence`, with
-    `--append-system-prompt` giving a token, `--allowedTools Bash` and
-    `--permission-mode acceptEdits`, in a private directory. One shell
-    command through the Bash tool, with paths relative to that
-    directory, writes the marker file and prints a nonce from a file only
-    the tool can read; the one reply line holds the canary's marker, the
-    system prompt's token and what the command printed. A settings
+    `--append-system-prompt` giving a token, in a private directory. The
+    canary's one command is a script there, `sh canary.sh`, which writes
+    the marker file and prints a nonce from a file only the tool can
+    read; the one reply line holds the canary's marker, the system
+    prompt's token and what the command printed. `--allowedTools` allows
+    that command alone (`Bash(sh canary.sh)`), and no permission mode
+    accepts edits: the endpoint is the model, and a command of its own in
+    the same tool call is refused, the whole call with it, which the
+    real binary does whether the extra command acts inside the directory
+    or outside it (#547's review). A settings
     file's `env` block that sets a variable the plan controls refuses the
     test as it refuses a launch, since the run would measure another
     endpoint, credential or model; a tuning key is said. When the llm declares image input, a second run puts a
@@ -641,13 +645,20 @@ catalog.sh` and `tests/test-llm-launch.sh`.
     `limit_controls` from each response's streamed `message_delta`,
     against the binding's `max_output_tokens`. `model_identity` compares
     with the model as Claude Code sends it: without a context suffix
-    such as `[1m]`, which it strips.
+    such as `[1m]`, which it strips. A reported name that contains the
+    requested one, or is contained in it (an alias Claude Code resolved,
+    a dated id), cannot be confirmed either way: `unverifiable`, never
+    `fail`.
   - *The verdict.* A refused credential, which Claude Code reports in
     its `api_retry` records, is an attempt of its own, `unavailable`;
     the probe sets `CLAUDE_CODE_MAX_RETRIES=1`, so that it is reported
-    at once rather than after minutes of retries. "API Error: 400" or
-    422 is a rejected request shape: `output_parsing` fails and the
-    outcome is a behavioral `fail`. A run the watchdog ends, and a crash
+    at once rather than after minutes of retries. A 400 or 422 is a
+    rejected request shape only when its message says so (an unsupported
+    parameter, field, header or tool; a validation error): then
+    `output_parsing` fails and the outcome is a behavioral `fail`. An
+    exhausted balance or an unknown model is a 400 too, and decides
+    nothing. A run through `CCT_LLM_PROBE_CMD` is said, and recorded as
+    `unverifiable`: the seam never decides the gate. A run the watchdog ends, and a crash
     (an exit other than 0, or 1 with an error result), fail `clean_exit`
     and are `unverifiable`, whatever was printed before. Any other error,
     an unparseable result, or a required capability that could not be
@@ -661,9 +672,12 @@ catalog.sh` and `tests/test-llm-launch.sh`.
     reject the request shape (`output_parsing`), reject authentication
     (`auth`), exceed declared limits (`limit_controls`), time out
     (`clean_exit`), and, for the two conditional capabilities, drop the
-    thinking (`reasoning_control`) and ignore images (`image_input`). Two
-    more answer with errors that decide nothing: a 500, and a 404 naming
-    the request path, which shows the path kept out of the record. The
+    thinking (`reasoning_control`) and ignore images (`image_input`).
+    More answer in ways that decide nothing: a 500; a 404 naming the
+    request path, which shows the path kept out of the record; a 400 for
+    an unknown model, and one for an exhausted balance; a dated model id
+    that contains the requested name. One appends a command of its own
+    to the canary's tool call, which must not run. The
     mock harness can crash after its answer, print output that does not
     parse, and ignore `TERM`, so that the watchdog's `KILL` ends it.
   - *Departures.* The stub gateway speaks Anthropic Messages only: Claude

@@ -22,7 +22,7 @@ GATEWAY="$REPO/tests/fixtures/llm-stub-gateway.py"
 CCT="$REPO/scripts/cct"
 LIMIT="${CAPTURE_TIMEOUT_SEC:-90}"
 HANG_LIMIT=15   # the time-out switch: the watchdog ends the run
-SWITCHES="drop-tool-calls ignore-tool-results no-stream other-model ignore-system-prompt reject-shape reject-auth exceed-limits time-out drop-reasoning ignore-images server-error not-found"
+SWITCHES="drop-tool-calls ignore-tool-results no-stream other-model resolve-model ignore-system-prompt reject-shape reject-model reject-billing reject-auth exceed-limits time-out drop-reasoning ignore-images server-error not-found extra-command"
 
 real_claude() {  # the first claude on PATH that is not a script
   local dir f
@@ -58,7 +58,7 @@ run_case() {  # <name> [<switch>] [<model>]: one run; prints the case's record l
   mkdir -p "$h/home/.cct" "$h/tmp"
   [[ -n "$sw" ]] && args=(--switch "$sw")
   [[ "$sw" == time-out ]] && limit="$HANG_LIMIT"
-  python3 "$GATEWAY" "$h/gateway.jsonl" "$h/port" ${args[@]+"${args[@]}"} &
+  python3 "$GATEWAY" "$h/gateway.jsonl" "$h/port" ${args[@]+"${args[@]}"} --extra-file "$h/extra-ran.txt" &
   GW_PID=$!
   for _ in $(seq 1 50); do [[ -s "$h/port" ]] && break; sleep 0.1; done
   cat > "$h/home/.cct/llms.toml" <<EOF
@@ -93,8 +93,12 @@ EOF
       CCT_LLM_PROBE_TIMEOUT_SEC="$limit" bash "$CCT" llm test pm --json > "$h/out.json" 2> "$h/err.txt")
   echo "$?" > "$h/rc"
   kill "$GW_PID" 2>/dev/null; wait "$GW_PID" 2>/dev/null; GW_PID=""
-  jq -r --arg n "$name" --arg sw "${sw:-none}" --arg rc "$(cat "$h/rc")" '
-    "| \($n) | \($sw) | \($rc) | \(.outcome // "-") | \(.state // "-") | \([.matrix // {} | to_entries[] | select(.value != "pass") | "\(.key): \(.value)"] | join(", ") | if . == "" then "every capability passed" else . end) |"' "$h/out.json" 2>/dev/null \
+  local extra=""
+  if [[ "$sw" == extra-command ]]; then
+    if [[ -e "$h/extra-ran.txt" ]]; then extra="; the endpoint's appended command RAN"; else extra="; the endpoint's appended command did not run"; fi
+  fi
+  jq -r --arg n "$name" --arg sw "${sw:-none}" --arg rc "$(cat "$h/rc")" --arg extra "$extra" '
+    "| \($n) | \($sw) | \($rc) | \(.outcome // "-") | \(.state // "-") | \([.matrix // {} | to_entries[] | select(.value != "pass") | "\(.key): \(.value)"] | join(", ") | if . == "" then "every capability passed" else . end)\($extra) |"' "$h/out.json" 2>/dev/null \
     || echo "| $name | ${sw:-none} | $(cat "$h/rc") | - | - | no JSON: $(head -c 200 "$h/err.txt" | tr '\n' ' ') |"
 }
 

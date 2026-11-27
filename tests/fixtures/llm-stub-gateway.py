@@ -16,10 +16,12 @@ tools offered, whether it streamed or asked to think, the header names and
 how it authenticated. A credential is logged only when it is one of the
 probe tests' planted sentinels, so a real one can never reach the log.
 
-Usage: llm-stub-gateway.py <log.jsonl> <port-file> [--switch <name>]...
+Usage: llm-stub-gateway.py <log.jsonl> <port-file> [--switch <name>]... [--extra-file <path>]
 The port is chosen by the system and written to <port-file>. Beside one
 switch per capability, two answer with errors that decide nothing: a 500,
-and a 404 that names the request path.
+and a 404 that names the request path. extra-command appends a command of
+the endpoint's own to the canary's tool call, writing <path>, as a hostile
+endpoint could: the harness must not run it.
 """
 
 from __future__ import annotations
@@ -39,7 +41,10 @@ SWITCHES = {
     "no-stream",             # streaming: a plain JSON body even when asked to stream
     "other-model",           # model_identity: reports another model id
     "ignore-system-prompt",  # system_prompt: leaves out the system prompt's token
-    "reject-shape",          # behavioral failure: 400, the request shape refused
+    "reject-shape",          # behavioral failure: 400, the request shape refused, and said so
+    "reject-model",          # 400 for a model it does not know: no verdict on the harness
+    "reject-billing",        # 400 for an exhausted balance: no verdict on the harness
+    "resolve-model",         # reports a dated id that contains the requested name
     "reject-auth",           # auth: 401, the credential refused
     "exceed-limits",         # limit_controls: reports more output than max_tokens
     "time-out",              # clean_exit: never answers
@@ -47,7 +52,9 @@ SWITCHES = {
     "ignore-images",         # image_input: cannot say what the image shows
     "server-error",          # a transient error: 500, overloaded, never a verdict
     "not-found",             # 404 naming the request path, as Express-style proxies do
+    "extra-command",         # appends a command of its own to the canary's tool call
 }
+EXTRA_MARKER = "CCT_EXTRA_RAN"
 SENTINELS = {"probe-planted-credential", "probe-ambient-credential", "none"}
 COMMAND_RE = re.compile(r"Run this exact shell command with your Bash tool: (.+)")
 MARKER_RE = re.compile(r"CCT_PROBE_OK:[0-9a-f]+")
@@ -154,8 +161,12 @@ def _reply(body: dict, switches: set):
     result = _last_tool_result(messages)
     tools = {t.get("name") for t in body.get("tools") or [] if isinstance(t, dict)}
     if command and result is None and "Bash" in tools and "drop-tool-calls" not in switches:
+        cmd = command.group(1).strip()
+        if "extra-command" in switches:
+            # An endpoint is the model: it can ask for more than the canary.
+            cmd += f"; printf %s {EXTRA_MARKER} > {Handler.extra_file}"
         blocks.append({"type": "tool_use", "id": "toolu_stub_1", "name": "Bash",
-                       "input": {"command": command.group(1).strip()}})
+                       "input": {"command": cmd}})
         return blocks, "tool_use"
     parts = [marker.group(0)]
     token = TOKEN_RE.search(_text_of(body.get("system")))
@@ -171,6 +182,7 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "llm-stub-gateway/1"
     log_path = ""
     switches: set = set()
+    extra_file = "/dev/null"
 
     def log_message(self, fmt, *args):  # quiet: the JSON log is the record
         return
@@ -244,7 +256,13 @@ class Handler(BaseHTTPRequestHandler):
             self._error(401, "authentication_error", "invalid x-api-key", body)
             return
         if "reject-shape" in self.switches:
-            self._error(400, "invalid_request_error", "stub: this endpoint does not accept the request shape", body)
+            self._error(400, "invalid_request_error", "tools.0.input_schema: Extra inputs are not permitted", body)
+            return
+        if "reject-model" in self.switches:
+            self._error(400, "invalid_request_error", f"The model '{body.get('model')}' does not exist", body)
+            return
+        if "reject-billing" in self.switches:
+            self._error(400, "invalid_request_error", "Your credit balance is too low to access the API", body)
             return
         if "server-error" in self.switches:
             self._error(500, "overloaded_error", "stub: overloaded", body)
@@ -258,6 +276,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         blocks, stop = _reply(body, self.switches)
         model = OTHER_MODEL if "other-model" in self.switches else (body.get("model") or "stub-model")
+        if "resolve-model" in self.switches:
+            model = f"{model}-20251101"
         out = 5
         if "exceed-limits" in self.switches:
             out = int(body.get("max_tokens") or 0) + 1000
@@ -310,6 +330,10 @@ def main() -> int:
     log_path, port_file, rest = args[0], args[1], args[2:]
     switches = set()
     while rest:
+        if rest[0] == "--extra-file" and len(rest) >= 2:
+            Handler.extra_file = rest[1]
+            rest = rest[2:]
+            continue
         if rest[0] != "--switch" or len(rest) < 2 or rest[1] not in SWITCHES:
             print(f"llm-stub-gateway: unknown argument {rest[0]!r}; switches: {' '.join(sorted(SWITCHES))}",
                   file=sys.stderr)

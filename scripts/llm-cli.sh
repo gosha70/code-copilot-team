@@ -599,6 +599,9 @@ cmd_test() {  # <target> <harness> <json>
     trap 'lp_cleanup; rm -f "$CA_ACTIVE_GROUP_FILE"; exit 129' HUP
     trap 'lp_cleanup; rm -f "$CA_ACTIVE_GROUP_FILE"' EXIT
     [[ "$json" == 1 ]] || echo "Testing $target on $h (up to ${CCT_LLM_PROBE_TIMEOUT_SEC:-$LP_TIMEOUT_DEFAULT_SEC}s)..." >&2
+    if [[ -n "${CCT_LLM_PROBE_CMD:-}" ]]; then
+        echo "cct llm test: note: CCT_LLM_PROBE_CMD is set, so it runs in place of $LLM_CC_EXECUTABLE, and the run is recorded as unverifiable: it decides nothing." >&2
+    fi
     lp_probe "$h" "$target" || rc=$?
     if [[ "$rc" -ne 0 ]]; then
         if [[ "$LP_REFUSED" == 1 ]]; then

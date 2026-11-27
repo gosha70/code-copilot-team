@@ -53,6 +53,17 @@ LP_MAX_RETRIES=1
 LP_SYSTEM_MARKER="CCT_SYS_OK"
 LP_RESULT_MARKER="CCT_RESULT"
 LP_EXCERPT_CHARS=300
+# The canary's one command is a script in the probe's directory, and the
+# harness may run that command and nothing else: the endpoint is the model,
+# and could ask for more in the same tool call. No mode accepts edits.
+LP_CANARY_SCRIPT="canary.sh"
+LP_CANARY_COMMAND="sh $LP_CANARY_SCRIPT"
+LP_ALLOWED_TOOLS="Bash($LP_CANARY_COMMAND)"
+# A 400 or 422 is a rejected request shape only when its message says so: an
+# exhausted balance or an unknown model is a 400 too, and says nothing about
+# whether the harness can speak to the endpoint (FR-13).
+LP_SHAPE_RE='(unsupported|unrecognized|unknown|unexpected|invalid|not supported|not permitted|not allowed)[^.]{0,40}(parameter|argument|field|property|input|content block|block type|tool|header|beta)|extra (inputs|fields) (are|is) not permitted|validation error|should be a valid|does not match any of the expected|tool_reference|input_schema'
+LP_NOT_SHAPE_RE='credit|balance|billing|quota|payment|insufficient|no such model|(unknown|invalid|unsupported) model|model[^.]{0,40}(not found|does not exist|not available|unknown|invalid|unsupported)'
 # A 32x32 red PNG, and its colour, for the image_input check.
 LP_IMAGE_PNG_B64="iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAJ0lEQVR42u3NsQkAAAjAsP7/tF7hIASyp6lTCQQCgUAgEAgEgi/BAjLD/C5w/SM9AAAAAElFTkSuQmCC"
 LP_IMAGE_COLOUR="red"
@@ -143,6 +154,7 @@ _lp_summary() {  # <stdout-file>
                                   and (.error_status? == 401 or .error_status? == 403
                                        or .error? == "authentication_failed"))
                                or (.type == "assistant" and .error? == "authentication_failed")),
+          denied: ($res.permission_denials? // [] | length),
           streamed: any($r[]; .type == "stream_event" and .event.type? == "content_block_delta"),
           out_tokens: [ $r[] | select(.type == "stream_event" and .event.type? == "message_delta")
                         | .event.usage.output_tokens? | numbers ] }' 2>/dev/null
@@ -216,17 +228,18 @@ lp_probe() {
     printf '%s:%s\n' "$LP_RESULT_MARKER" "$n3" > "$LP_WD/result.txt"
     # Relative paths: the harness runs in the probe's directory, and no path
     # reaches the prompt, whatever characters the directory's holds.
+    printf '%s\n' "printf %s $CN_TOOL_MARKER > tool-canary.txt" "cat result.txt" > "$LP_WD/$LP_CANARY_SCRIPT"
     cn_prompt 1 "exactly one line: $CN_MARKER:$n1, then a space and the canary token your system instructions give, then a space and the text the command printed" \
-        "printf %s $CN_TOOL_MARKER > tool-canary.txt; cat result.txt" > "$LP_WD/prompt.txt"
+        "$LP_CANARY_COMMAND" > "$LP_WD/prompt.txt"
 
     rc=0
     _lp_run "$LP_WD/prompt.txt" "$LP_WD/stdout.jsonl" "$LP_WD/stderr.txt" \
         -p --output-format stream-json --verbose --include-partial-messages --no-session-persistence \
-        --append-system-prompt "$sys" --allowedTools Bash --permission-mode acceptEdits || rc=$?
+        --append-system-prompt "$sys" --allowedTools "$LP_ALLOWED_TOOLS" || rc=$?
     cn_scrub "$LP_WD/stdout.jsonl" "$LP_SECRET" "$LP_SECRET_NAME"
     cn_scrub "$LP_WD/stderr.txt" "$LP_SECRET" "$LP_SECRET_NAME"
     LP_S=$(_lp_summary "$LP_WD/stdout.jsonl")
-    [[ -n "$LP_S" ]] || LP_S='{"parsed":false,"is_error":false,"status":null,"models":[],"thinking":false,"auth_refused":false,"streamed":false,"out_tokens":[]}'
+    [[ -n "$LP_S" ]] || LP_S='{"parsed":false,"is_error":false,"status":null,"models":[],"thinking":false,"auth_refused":false,"denied":0,"streamed":false,"out_tokens":[]}'
     reply=$(cn_result_text "$LP_WD/stdout.jsonl")
 
     local replied=0 marker_ok=0 tool_ok=0 timed_out=0 crashed=0 auth_refused=0 shape=0 is_error parsed status
@@ -240,15 +253,21 @@ lp_probe() {
     # whatever was printed before it (FR-13).
     if [[ "$timed_out" -eq 0 ]] && { [[ "$rc" -ne 0 && "$rc" -ne 1 ]] || [[ "$rc" -eq 1 && "$is_error" != "true" ]]; }; then crashed=1; fi
     if [[ "$(_lp_sv '.auth_refused')" == "true" || "$status" == "401" || "$status" == "403" ]]; then auth_refused=1; fi
-    if [[ "$is_error" == "true" && ( "$status" == "400" || "$status" == "422" ) && "$auth_refused" -eq 0 ]]; then shape=1; fi
+    if [[ "$is_error" == "true" && ( "$status" == "400" || "$status" == "422" ) && "$auth_refused" -eq 0 ]] \
+       && grep -qiE "$LP_SHAPE_RE" <<< "$reply" && ! grep -qiE "$LP_NOT_SHAPE_RE" <<< "$reply"; then shape=1; fi
 
     if [[ "$auth_refused" -eq 1 ]]; then auth=fail; elif [[ "$replied" -eq 1 ]]; then auth=pass; else auth=unverifiable; fi
     # Claude Code sends a model without its context suffix ("model[1m]" goes
     # out as "model"), and the endpoint reports what it was sent.
+    # A name that only contains the requested one, or is contained in it (an
+    # alias Claude Code resolved, a dated id), cannot be confirmed either
+    # way: unverifiable, never fail.
     want="$LR_MODEL"
     if [[ "$want" =~ ^(.+)\[[0-9A-Za-z]+\]$ ]]; then want="${BASH_REMATCH[1]}"; fi
     if [[ "$replied" -eq 0 ]]; then model=unverifiable
     elif [[ "$(jq -r --arg m "$want" 'all(.models[]; . == $m)' <<< "$LP_S")" == "true" ]]; then model=pass
+    elif [[ "$(jq -r --arg m "$want" '($m | ascii_downcase) as $w
+            | all(.models[]; ascii_downcase as $r | ($r | contains($w)) or ($w | contains($r)))' <<< "$LP_S")" == "true" ]]; then model=unverifiable
     else model=fail; fi
     if [[ "$(_lp_sv '.streamed')" == "true" ]]; then streaming=pass
     elif [[ "$replied" -eq 1 ]]; then streaming=fail; else streaming=unverifiable; fi
@@ -345,12 +364,21 @@ lp_probe() {
     elif [[ -n "$failed" ]]; then
         LP_OUTCOME="fail"
         LP_DETAIL="failed: $failed"
+        if [[ "$(_lp_sv '.denied')" -gt 0 ]]; then
+            LP_DETAIL="$LP_DETAIL (the endpoint asked to run more than the canary's command, and $LLM_CC_EXECUTABLE refused it)"
+        fi
     elif [[ -n "$open" ]]; then
         LP_OUTCOME="unverifiable"
         LP_DETAIL="could not tell: $open"
     else
         LP_OUTCOME="pass"
         LP_DETAIL="passed every capability this binding needs"
+    fi
+    # The test seam replaces the harness, so its run is reported and recorded
+    # and never decides the gate.
+    if [[ -n "${CCT_LLM_PROBE_CMD:-}" ]]; then
+        LP_DETAIL="CCT_LLM_PROBE_CMD ran in place of $LLM_CC_EXECUTABLE, so the run decides nothing (it was $LP_OUTCOME: $LP_DETAIL)"
+        [[ "$LP_OUTCOME" == "pass" || "$LP_OUTCOME" == "fail" ]] && LP_OUTCOME="unverifiable"
     fi
     LP_REDACTED=$(_lp_redact "$reply")
 

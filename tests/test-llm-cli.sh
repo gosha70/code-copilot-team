@@ -508,7 +508,7 @@ assert_eq "sessions: no credential value or endpoint path in any output" "0" \
     "$(printf '%s\n' "$SESSIONS" "$SESSIONS_TEXT" "$SESSIONS_MOVED" | grep -cF -e "$SECRET" -e "$PATH_TOKEN")"
 
 # ── cct llm test (#400 S3: FR-15, FR-16, D6) ──
-# The probe runs the mock harness (CCT_LLM_PROBE_CMD) against the stub
+# The probe runs the mock harness (the `claude` first on PATH) against the stub
 # gateway, one gateway per switch; the S3 capture runs the real Claude Code
 # behind the same gateway. A private TMPDIR shows what each run leaves.
 GATEWAY="$REPO_DIR/tests/fixtures/llm-stub-gateway.py"
@@ -570,9 +570,13 @@ gateway() {  # <log> [--switch <name>]...: a stub gateway; GW_PID and GW_PORT
     GW_PORT=$(cat "$log.port" 2>/dev/null)
 }
 gateway_stop() { kill "$GW_PID" 2>/dev/null; wait "$GW_PID" 2>/dev/null; }
-ptest() {  # <home> [VAR=value ...] -- <cct args>: cctx with the stand-in claude, the mock harness and the private TMPDIR
+# The mock harness is the `claude` on PATH, as the real one is: a run
+# through CCT_LLM_PROBE_CMD decides nothing (its own test is below).
+mkdir -p "$TMP/probe-bin"
+printf '#!/bin/sh\nexec python3 "%s" "$@"\n' "$MOCK_HARNESS" > "$TMP/probe-bin/claude"; chmod +x "$TMP/probe-bin/claude"
+ptest() {  # <home> [VAR=value ...] -- <cct args>: cctx with the mock harness as claude, and the private TMPDIR
     local h="$1"; shift
-    cctx "$h" PATH="$TMP/bin:$PATH" TMPDIR="$PROBE_TMP" CCT_LLM_PROBE_CMD="python3 $MOCK_HARNESS" CCT_LLM_PROBE_TIMEOUT_SEC=20 "$@"
+    cctx "$h" PATH="$TMP/probe-bin:$PATH" TMPDIR="$PROBE_TMP" CCT_LLM_PROBE_TIMEOUT_SEC=20 "$@"
 }
 
 gateway "$TMP/gw-base.jsonl"
@@ -607,6 +611,26 @@ probe_switch no-stream streaming fail incompatible
 probe_switch other-model model_identity fail incompatible
 probe_switch ignore-system-prompt system_prompt fail incompatible
 probe_switch reject-shape output_parsing fail incompatible
+probe_switch reject-model output_parsing unverifiable unverified
+probe_switch reject-billing output_parsing unverifiable unverified
+probe_switch resolve-model model_identity unverifiable unverified
+# The endpoint is the model: a command of its own, appended to the canary's
+# tool call, is refused, and the run fails (#547's review).
+gateway "$TMP/gw-extra.jsonl" --switch extra-command --extra-file "$TMP/extra-ran.txt"
+X_HOME=$(probe_home probe-extra "$GW_PORT")
+ptest "$X_HOME" -- llm test pm --json
+gateway_stop
+assert_eq "test: a command the endpoint appends to the canary's tool call never runs, and the run fails" "1|fail|fail|incompatible|absent|1" \
+    "$RC|$(jq -r .outcome <<< "$OUT")|$(jq -r .matrix.tool_call <<< "$OUT")|$(jq -r .state <<< "$OUT")|$([[ -e "$TMP/extra-ran.txt" ]] && echo present || echo absent)|$(jq -r .detail <<< "$OUT" | grep -c 'asked to run more than the canary')"
+# CCT_LLM_PROBE_CMD replaces the harness: said, recorded, never conclusive.
+gateway "$TMP/gw-seam.jsonl"
+SE_HOME=$(probe_home probe-seam "$GW_PORT")
+ptest "$SE_HOME" CCT_LLM_PROBE_CMD="python3 $MOCK_HARNESS" -- llm test pm
+SEAM_RC="$RC"; SEAM_OUT="$OUT"
+ptest "$SE_HOME" -- llm compatibility pm --json
+gateway_stop
+assert_eq "test: a run through CCT_LLM_PROBE_CMD is said, and decides nothing for the gate" "1|1|unverified|null" \
+    "$SEAM_RC|$(grep -c 'CCT_LLM_PROBE_CMD is set, so it runs in place of claude' <<< "$SEAM_OUT")|$(jq -r '.targets[0].state' <<< "$OUT")|$(jq -c .latest_conclusive "$SE_HOME/llm-compat/claude-code/pm@pt.json")"
 probe_switch exceed-limits limit_controls fail incompatible
 probe_switch drop-reasoning reasoning_control fail incompatible
 probe_switch ignore-images image_input fail incompatible
@@ -714,8 +738,8 @@ assert_eq "test: every run removed its private directory and its handoff record"
 gateway "$TMP/gw-signal.jsonl" --switch time-out
 S_HOME=$(probe_home probe-signal "$GW_PORT")
 SIG_TMP="$TMP/signal-tmp"; mkdir -p "$SIG_TMP"
-( cd "$TMP" && exec env -u CCT_HOME CCT_HOME="$S_HOME" TEST_LLM_KEY="$SECRET" PATH="$TMP/bin:$PATH" TMPDIR="$SIG_TMP" \
-    CCT_LLM_PROBE_CMD="python3 $MOCK_HARNESS" CCT_LLM_PROBE_TIMEOUT_SEC=60 bash "$CCT" llm test pm > "$TMP/signal.out" 2>&1 ) &
+( cd "$TMP" && exec env -u CCT_HOME CCT_HOME="$S_HOME" TEST_LLM_KEY="$SECRET" PATH="$TMP/probe-bin:$PATH" TMPDIR="$SIG_TMP" \
+    CCT_LLM_PROBE_TIMEOUT_SEC=60 bash "$CCT" llm test pm > "$TMP/signal.out" 2>&1 ) &
 SIG_PID=$!
 for _ in $(seq 1 100); do grep -q '"reply": "hang"' "$TMP/gw-signal.jsonl" 2>/dev/null && break; sleep 0.1; done
 SIG_START=$(date +%s)
@@ -735,7 +759,7 @@ gateway "$TMP/gw-group.jsonl" --switch time-out
 GRP_HOME=$(probe_home probe-group "$GW_PORT")
 GRP_TMP="$TMP/group-tmp"; mkdir -p "$GRP_TMP"
 ( cd "$TMP" && exec perl -e 'setpgrp(0, 0); exec @ARGV' env -u CCT_HOME CCT_HOME="$GRP_HOME" TEST_LLM_KEY="$SECRET" \
-    PATH="$TMP/bin:$PATH" TMPDIR="$GRP_TMP" CCT_LLM_PROBE_CMD="python3 $MOCK_HARNESS" CCT_LLM_PROBE_TIMEOUT_SEC=60 \
+    PATH="$TMP/probe-bin:$PATH" TMPDIR="$GRP_TMP" CCT_LLM_PROBE_TIMEOUT_SEC=60 \
     bash "$CCT" llm test pm > "$TMP/group.out" 2>&1 ) &
 GRP_PID=$!
 for _ in $(seq 1 100); do grep -q '"reply": "hang"' "$TMP/gw-group.jsonl" 2>/dev/null && break; sleep 0.1; done

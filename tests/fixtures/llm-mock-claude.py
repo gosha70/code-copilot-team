@@ -10,8 +10,10 @@ It speaks to ANTHROPIC_BASE_URL as Claude Code 2.1.332 was seen to:
 - with --output-format stream-json it prints one assistant record per
   content block, the stream's events under --include-partial-messages, a
   user record for each tool result, and a result record;
-- it runs the Bash tool calls it is sent, in its working directory, and
-  sends their output back;
+- it runs the Bash tool calls --allowedTools allows (Bash: any command;
+  Bash(<command>): exactly that one), in its working directory, and sends
+  their output back; any other call is refused, as a headless run cannot
+  ask, and listed in the result's permission_denials;
 - a refused credential (401, 403) gets an api_retry record per retry, up
   to CLAUDE_CODE_MAX_RETRIES, then an error result; a rejected request
   (400, 422) gets "API Error: <status> <message>" at once, from the model
@@ -58,6 +60,8 @@ TOOLS = [
 ]
 FLAGS = {"-p", "--print", "--verbose", "--include-partial-messages", "--no-session-persistence"}
 CRASH_AFTER_ANSWER = False
+RULE_RE = re.compile(r"([A-Za-z]+)(?:\(([^)]*)\))?")
+DENIALS: list = []
 VALUED = {"--output-format", "--input-format", "--append-system-prompt", "--allowedTools",
           "--permission-mode"}
 
@@ -69,7 +73,7 @@ def emit(record: dict) -> None:
 
 def finish(text: str, is_error: bool, turns: int, output_tokens: int) -> int:
     emit({"type": "result", "subtype": "success", "is_error": is_error, "result": text,
-          "num_turns": turns, "usage": {"output_tokens": output_tokens}})
+          "num_turns": turns, "usage": {"output_tokens": output_tokens}, "permission_denials": DENIALS})
     if CRASH_AFTER_ANSWER:
         os.kill(os.getpid(), signal.SIGSEGV)
     return 1 if is_error else 0
@@ -147,12 +151,25 @@ def read_sse(resp, partial: bool) -> dict:
     return message
 
 
-def run_tool(block: dict, allowed: str) -> str:
-    if block.get("name") != "Bash" or "Bash" not in allowed:
-        return f"error: the tool {block.get('name')} is not allowed"
-    done = subprocess.run(["bash", "-c", block.get("input", {}).get("command", "")],
-                          capture_output=True, text=True, timeout=TOOL_TIMEOUT_SEC)
-    return (done.stdout + done.stderr).strip()
+def bash_allowed(command: str, allowed: str) -> bool:
+    """As Claude Code reads --allowedTools: Bash allows any command,
+    Bash(<command>) exactly that one; a command with anything more needs
+    approval, which a headless run cannot give."""
+    for tool, exact in RULE_RE.findall(allowed):
+        if tool == "Bash" and (exact == "" or exact.strip() == command.strip()):
+            return True
+    return False
+
+
+def run_tool(block: dict, allowed: str):
+    """The tool's output, and whether it was refused."""
+    command = block.get("input", {}).get("command", "")
+    if block.get("name") != "Bash" or not bash_allowed(command, allowed):
+        DENIALS.append({"tool_name": block.get("name"), "tool_use_id": block.get("id"),
+                        "tool_input": block.get("input", {})})
+        return f"{command} needs approval", True
+    done = subprocess.run(["bash", "-c", command], capture_output=True, text=True, timeout=TOOL_TIMEOUT_SEC)
+    return (done.stdout + done.stderr).strip(), False
 
 
 def main() -> int:
@@ -239,9 +256,11 @@ def main() -> int:
         if message.get("stop_reason") != "tool_use":
             text = "".join(b.get("text", "") for b in message.get("content", []) if b.get("type") == "text")
             return finish(text, False, turns, output_tokens)
-        results = [{"type": "tool_result", "tool_use_id": b["id"],
-                    "content": run_tool(b, opts.get("--allowedTools", ""))}
-                   for b in message.get("content", []) if b.get("type") == "tool_use"]
+        results = []
+        for b in message.get("content", []):
+            if b.get("type") == "tool_use":
+                text, refused = run_tool(b, opts.get("--allowedTools", ""))
+                results.append({"type": "tool_result", "tool_use_id": b["id"], "content": text, "is_error": refused})
         emit({"type": "user", "message": {"role": "user", "content": results}})
         messages = messages + [{"role": "assistant", "content": message.get("content", [])},
                                {"role": "user", "content": results}]
