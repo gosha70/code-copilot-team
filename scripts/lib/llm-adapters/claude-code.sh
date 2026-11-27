@@ -71,8 +71,9 @@ _llm_cc_set() {  # <NAME> lit|env <value, or the NAME of the variable to copy>
 
 # llm_cc_plan <binding-id>
 # Sets:
-#   LLM_CC_STATE   unverified (launchable; nothing has probed it) |
-#                  unsupported | unavailable
+#   LLM_CC_STATE   unverified (statically launchable; the launcher's gate
+#                  then reads the test records, #400 S3) | unsupported |
+#                  unavailable
 #   LLM_CC_REASON  why it is not launchable
 #   LLM_CC_SET     the NAMES the launch sets, space-separated
 #   LLM_CC_CLEAR   the NAMES the launch removes, space-separated

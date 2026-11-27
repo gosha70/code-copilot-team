@@ -197,6 +197,33 @@ EOF
 
 new_logs() { CLAUDE_LOG="$TMP/claude.$RANDOM.$RANDOM.log"; MUX_LOG="$TMP/mux.$RANDOM.$RANDOM.log"; : > "$MUX_LOG"; }
 
+# A passing test on record for each target given, under its evidence now,
+# in the environment a launch gets (S3's gate admits a supported target):
+# written by the probe's own writer, as `cct llm test` writes it.
+# seed_record [VAR=value ...] -- <outcome> <target>...
+PASS_MATRIX='{"auth":"pass","model_identity":"pass","streaming":"pass","system_prompt":"pass","tool_call":"pass","tool_result":"pass","output_parsing":"pass","clean_exit":"pass","limit_controls":"not_applicable","reasoning_control":"not_applicable","image_input":"not_applicable"}'
+seed_record() {
+    local envs=()
+    while [[ $# -gt 0 && "$1" != "--" ]]; do envs+=("$1"); shift; done
+    shift
+    (cd "$PROJ" && env -i HOME="$FAKE_HOME" PATH="$MOCK_BIN:$PATH" MOCK_CLAUDE_LOG="$TMP/seed.log" \
+        TEST_DEEPSEEK_KEY="$SECRET" ${envs[@]+"${envs[@]}"} \
+        bash -c '
+        r="$1"; o="$2"; m="$3"; shift 3
+        for l in llm-catalog.sh llm-adapters/claude-code.sh llm-resolve.sh cct-statefile.sh llm-compat.sh; do
+            source "$r/scripts/lib/$l"
+        done
+        lc_validate "$(lc_catalog_path)" >/dev/null || { echo "seed_record: the catalog is not valid"; exit 1; }
+        [[ "$o" == pass ]] || m=$(jq -c ".tool_call = \"fail\"" <<< "$m")
+        for t in "$@"; do
+            lcm_state claude-code "$t" || { echo "seed_record: $t: $LCM_ERR"; exit 1; }
+            a=$(jq -nc --arg o "$o" --argjson m "$m" --argjson e "$LCM_EVIDENCE" \
+                "{at: \"2026-11-26T12:00:00Z\", outcome: \$o, matrix: \$m, evidence: \$e, detail: \"seeded\"}")
+            lcm_record_attempt claude-code "$LR_LLM" "$LR_BINDING" "$a" || { echo "seed_record: $LCM_ERR"; exit 1; }
+        done' _ "$REPO_DIR" "$1" "$PASS_MATRIX" "${@:2}") || echo "  FAIL: seed_record could not write a record"
+}
+seed_record -- pass deepseek keyed qwen opus
+
 # run_launcher [VAR=value ...] -- <launcher args>
 # A clean base environment (no multiplexer, no provider variable), plus
 # the given assignments. CCT_REPO_DIR points the launcher at this checkout.
@@ -695,9 +722,9 @@ assert_exit "sessions: a new --llm session starts" 0 "$RC"
 assert_eq "sessions: claude gets a session id the launcher generated (D9)" "yes" "$([[ "$S1" =~ $UUID_RE ]] && echo yes || echo no)"
 assert_eq "sessions: its stamp is attempted, for the resolved target (FR-17)" "attempted deepseek@deepseek-claude deepseek-main[1m] anthropic-messages 2.1.332" \
     "$(stamp "$S1" | jq -r '"\(.status) \(.llm)@\(.binding) \(.requested_model) \(.protocol) \(.harness_version)"')"
-assert_eq "sessions: ...with the three digests, the evidence digest and the compatibility state" "4 unverified" \
+assert_eq "sessions: ...with the three digests, the evidence digest and the compatibility state" "4 supported" \
     "$(stamp "$S1" | jq -r '"\([.digests[] | select(. != null)] | length) \(.compatibility.state)"')"
-assert_eq "sessions: ...no gate yet, the project, and no effective model before the harness's evidence" "none yet false $REAL_PROJ null" \
+assert_eq "sessions: ...the gate's verdict (supported, not bypassed), the project, and no effective model before the harness's evidence" "supported false $REAL_PROJ null" \
     "$(stamp "$S1" | jq -r '"\(.gate.state) \(.gate.bypassed) \(.project) \(.effective_model)"')"
 assert_eq "sessions: ...and the names the launch cleared, as explain lists them (FR-30)" \
     "$(jq -c .env_clear <<< "$EXPLAIN_JSON")" "$(stamp "$S1" | jq -c .env_clear)"
@@ -859,6 +886,7 @@ harness = "claude-code"
 llm = "gw"
 endpoint = "gw"
 EOF
+seed_record TEST_GW_URL=https://gw-a.example -- pass gw
 new_logs
 run_launcher TEST_GW_URL=https://gw-a.example -- --llm gw -p first
 GW1=$(session_of)
@@ -872,17 +900,27 @@ assert_eq "sessions: a pane whose environment moves the endpoint refuses the res
 assert_contains "sessions: ...naming the change" "$OUTPUT" "the launch identity of gw@gw-claude changed since session $GW1 was stamped"
 assert_eq "sessions: ...and leaves the stamp as it was" "same" "$(cmp -s "$STAMPS/$GW1.json" "$TMP/gw1.before" && echo same || echo changed)"
 # A new session opened in such a pane is stamped with the pane's launch
-# identity, the one claude runs on.
+# identity, the one claude runs on. That identity was never tested, so the
+# pane's own gate needs --allow-unverified, which the launcher types into it.
 new_logs
-run_launcher TEST_GW_URL=https://gw-b.example -- --llm gw -p reference
+run_launcher TEST_GW_URL=https://gw-b.example -- --llm gw --allow-unverified -p reference
 GWB=$(stamp "$(session_of)" | jq -r .digests.launch_identity)
 new_logs
-run_launcher TEST_GW_URL=https://gw-a.example -- --shell cmux --llm gw "$PROJ"
+run_launcher TEST_GW_URL=https://gw-a.example -- --shell cmux --llm gw --allow-unverified "$PROJ"
 TYPED=$(cat "$MUX_LOG")
 new_logs
 pane TEST_GW_URL=https://gw-b.example
 assert_eq "sessions: ...and a new session in that pane is stamped with the pane's launch identity, not the launcher's" "0 yes yes" \
     "$RC $([[ "$(stamp "$(session_of)" | jq -r .digests.launch_identity)" == "$GWB" ]] && echo yes || echo no) $([[ "$GWB" != "$(stamp "$GW1" | jq -r .digests.launch_identity)" ]] && echo yes || echo no)"
+# Without --allow-unverified, the pane's own gate refuses what its own
+# environment leaves untested, though the launcher's passed.
+new_logs
+run_launcher TEST_GW_URL=https://gw-a.example -- --shell cmux --llm gw "$PROJ"
+TYPED=$(cat "$MUX_LOG")
+new_logs
+pane TEST_GW_URL=https://gw-b.example
+assert_eq "gate: the pane's own gate refuses a target its environment leaves untested, and runs nothing" "3:0:1" \
+    "$RC:$(claude_ran):$(grep -c 'gw@gw-claude has not passed a test on claude-code' <<< "$OUTPUT")"
 cat "$TMP/llms.envurl" > "$FAKE_HOME/.cct/llms.toml"
 new_logs
 run_launcher "${DIRTY[@]}" -- -p fork-native --resume "$S1" --fork-session
@@ -900,32 +938,36 @@ refused "sessions: a session without a stamp is refused with --llm" "session $NO
 assert_eq "sessions: ...naming the ways out: resume it without --llm, or fork it" "1 1" \
     "$(grep -c 'Resume it without --llm' <<< "$OUTPUT") $(grep -cF -- "--resume $NOSTAMP --fork-session --llm deepseek@deepseek-claude" <<< "$OUTPUT")"
 
-# The minimum version and the records are read for the stamp's compatibility
-# state only: before S3's gate no launch is refused on the state, and a
-# record that cannot be read refuses the launch by name, since the stamp
-# cannot be written (FR-17, FR-29).
-new_logs
-run_launcher MOCK_CLAUDE_VERSION=2.1.300 -- --llm deepseek -p old
-OLD=$(session_of)
-assert_eq "sessions: a claude older than the minimum still launches before S3's gate; its stamp says unavailable" \
-    "0:1 unavailable" "$RC:$(claude_ran) $(stamp "$OLD" | jq -r .compatibility.state)"
+# The gate (S3) refuses a claude older than the minimum, which retires the
+# launch-first slice's departure 1, and a record that cannot be read refuses
+# the launch by name (FR-12, FR-29).
+refused "sessions: a claude older than the minimum is refused by the gate, not launched (S3)" \
+    "is unavailable on claude-code: claude 2.1.300 is older than 2.1.305" MOCK_CLAUDE_VERSION=2.1.300 -- --llm deepseek -p old
 COMPAT_REC="$FAKE_HOME/.cct/llm-compat/claude-code/deepseek@deepseek-claude.json"
-mkdir -p "$(dirname "$COMPAT_REC")"; chmod 700 "$FAKE_HOME/.cct/llm-compat" "$(dirname "$COMPAT_REC")"
+cp "$COMPAT_REC" "$TMP/compat.saved"
 printf 'not a record' > "$COMPAT_REC"; chmod 600 "$COMPAT_REC"
 refused "sessions: a compatibility record that cannot be read refuses the launch, naming it" \
     "the record $COMPAT_REC is malformed" -- --llm deepseek -p x
-rm -f "$COMPAT_REC"
+cp "$TMP/compat.saved" "$COMPAT_REC"
 
 cp "$FAKE_HOME/.cct/llms.toml" "$TMP/llms.saved"
 sed -i.bak 's#https://api.deepseek.example/anthropic#https://moved.deepseek.example/anthropic#' "$FAKE_HOME/.cct/llms.toml"
 refused "sessions: a restored target whose launch identity changed is refused (FR-19)" \
     "the launch identity of deepseek@deepseek-claude changed since session $S1 was stamped" -- -p x --resume "$S1"
+refused "gate: --allow-unverified does not bypass a changed launch identity (FR-12, FR-19)" \
+    "the launch identity of deepseek@deepseek-claude changed since session $S1 was stamped" -- -p x --allow-unverified --resume "$S1"
 cp "$TMP/llms.saved" "$FAKE_HOME/.cct/llms.toml"
 sed -i.bak 's/^max_output_tokens = 32000$/max_output_tokens = 16000/' "$FAKE_HOME/.cct/llms.toml"
 new_logs
 run_launcher -- --llm deepseek -p x --resume "$S1"
-assert_eq "sessions: a tuning change is said, and the resume allowed (FR-19)" "0:1:1" \
-    "$RC:$(claude_ran):$(grep -c "the tuning options of deepseek@deepseek-claude changed since session $S1 was stamped" <<< "$OUTPUT")"
+# The identity check allows a tuning change and says so (FR-19); the gate
+# then reads the changed options as unverified, as the owner ruled.
+assert_eq "sessions: a tuning change is said, and the gate refuses it untested (FR-19, the owner's ruling)" "3:0:1:1" \
+    "$RC:$(claude_ran):$(grep -c "the tuning options of deepseek@deepseek-claude changed since session $S1 was stamped" <<< "$OUTPUT"):$(grep -c 'has not passed a test on claude-code: the test of 2026-11-26T12:00:00Z (pass) no longer applies: the options changed' <<< "$OUTPUT")"
+new_logs
+run_launcher -- --llm deepseek --allow-unverified -p x --resume "$S1"
+assert_eq "sessions: ...and resumes it with --allow-unverified, which the stamp records" "0:1:unverified true" \
+    "$RC:$(claude_ran):$(stamp "$S1" | jq -r '"\(.gate.state) \(.gate.bypassed)"')"
 cp "$TMP/llms.saved" "$FAKE_HOME/.cct/llms.toml"
 
 new_logs
@@ -934,7 +976,8 @@ F1=$(session_of)
 assert_exit "sessions: a fork onto another target starts a new session" 0 "$RC"
 assert_eq "sessions: ...under its own id, stamped with that target and its origin" "opus@opus-claude $S1" \
     "$(stamp "$F1" | jq -r '"\(.llm)@\(.binding) \(.forked_from)"')"
-LISTED=$(env -i HOME="$FAKE_HOME" PATH="$MOCK_BIN:$PATH" TEST_DEEPSEEK_KEY="$SECRET" bash "$REPO_DIR/scripts/cct" llm sessions --json 2>&1)
+LISTED=$(env -i HOME="$FAKE_HOME" PATH="$MOCK_BIN:$PATH" TEST_DEEPSEEK_KEY="$SECRET" MOCK_CLAUDE_LOG="$TMP/listed.log" \
+    bash "$REPO_DIR/scripts/cct" llm sessions --json 2>&1)
 assert_eq "sessions: cct llm sessions lists what the launcher stamped, each resumable now" \
     "deepseek@deepseek-claude true|opus@opus-claude true $S1" \
     "$(jq -r --arg a "$S1" --arg f "$F1" '[(.sessions[] | select(.session_id == $a) | "\(.target) \(.resume.eligible)"),
@@ -950,6 +993,65 @@ assert_not_contains "sessions: ...and nothing where none exist, so a launcher th
 refused "sessions: a typed launch with --llm and --continue is refused" "--continue resumes whichever session" \
     -- --shell cmux --continue --llm deepseek "$PROJ"
 assert_eq "sessions: ...before anything is typed" "" "$(cat "$MUX_LOG")"
+
+# ── The compatibility gate (#400 FR-12, FR-19, D7, as the owner amended them on 2026-11-26; S3) ──
+QREC="$FAKE_HOME/.cct/llm-compat/claude-code/qwen@qwen-claude.json"
+mv "$QREC" "$TMP/qwen.saved"
+GATE_STAMPS=$(stamp_count)
+refused "gate: a target never tested is refused before claude runs" \
+    "qwen@qwen-claude has not passed a test on claude-code: never tested" -- --llm qwen -p x
+assert_eq "gate: ...naming the test and --allow-unverified, and writing no stamp" "1 1 $GATE_STAMPS" \
+    "$(grep -c 'Test it: cct llm test qwen' <<< "$OUTPUT") $(grep -c 'add --allow-unverified' <<< "$OUTPUT") $(stamp_count)"
+new_logs
+run_launcher -- --llm qwen --allow-unverified -p x
+G1=$(session_of)
+assert_eq "gate: --allow-unverified launches it, with a notice, and the stamp records the bypass" "0:1:1:unverified true" \
+    "$RC:$(claude_ran):$(grep -c 'untested, launched with --allow-unverified: never tested' <<< "$OUTPUT"):$(stamp "$G1" | jq -r '"\(.gate.state) \(.gate.bypassed)"')"
+assert_eq "gate: ...and claude never receives --allow-unverified" "0" "$(grep '^ARGV:' "$CLAUDE_LOG" | grep -c -- '--allow-unverified')"
+refused "gate: a resumed session's restored target goes through the gate (FR-19)" \
+    "qwen@qwen-claude has not passed a test on claude-code" -- -p x --resume "$G1"
+new_logs
+run_launcher -- --allow-unverified -p x --resume "$G1"
+assert_eq "gate: ...and resumes with --allow-unverified" "0:1" "$RC:$(claude_ran)"
+seed_record -- fail qwen
+refused "gate: a target whose test failed is refused as incompatible" \
+    "qwen@qwen-claude is incompatible with claude-code: failed its test of 2026-11-26T12:00:00Z: tool_call" -- --llm qwen -p x
+refused "gate: ...even with --allow-unverified, which does not apply to it" \
+    "--allow-unverified does not apply to it" -- --llm qwen --allow-unverified -p x
+seed_record MOCK_CLAUDE_VERSION=2.1.331 -- pass qwen
+new_logs
+run_launcher -- --llm qwen -p x
+G2=$(session_of)
+assert_eq "gate: a target that passed on an older claude launches, with a notice naming both versions and the test" "0:1:1:supported false" \
+    "$RC:$(claude_ran):$(grep -c 'it passed its test on claude 2.1.331; claude is now 2.1.332, which has not been tested: cct llm test qwen tests it again' <<< "$OUTPUT"):$(stamp "$G2" | jq -r '"\(.gate.state) \(.gate.bypassed)"')"
+seed_record MOCK_CLAUDE_VERSION=2.1.333 -- pass qwen
+refused "gate: a target that passed on a newer claude than the installed one is refused" \
+    "no longer applies: claude 2.1.333 is now 2.1.332" -- --llm qwen -p x
+seed_record MOCK_CLAUDE_VERSION=2.1.331 -- fail qwen
+refused "gate: a target whose latest test failed, on an older claude, is refused" \
+    "the test of 2026-11-26T12:00:00Z (fail) no longer applies: claude 2.1.331 is now 2.1.332" -- --llm qwen -p x
+seed_record -- pass qwen
+jq '.rule_version = 3' "$REPO_DIR/shared/llm/compat-rules.json" > "$TMP/rules-v3.json"
+refused "gate: a test recorded under an older rule version is refused" \
+    "no longer applies: rule version 2 is now 3" CCT_LLM_RULES_FILE="$TMP/rules-v3.json" -- --llm qwen -p x
+seed_record MOCK_CLAUDE_VERSION=2.1.331 -- pass deepseek
+sed -i.bak 's/^max_output_tokens = 32000$/max_output_tokens = 16000/' "$FAKE_HOME/.cct/llms.toml"
+refused "gate: a newer claude does not let a changed tuning option through" \
+    "no longer applies: the options changed, claude 2.1.331 is now 2.1.332" -- --llm deepseek -p x
+cp "$TMP/llms.saved" "$FAKE_HOME/.cct/llms.toml"
+seed_record -- pass deepseek
+mv "$QREC" "$TMP/qwen.tested"
+refused "gate: a typed launch of an untested target is refused before anything is typed" \
+    "has not passed a test" -- --shell cmux --llm qwen "$PROJ"
+assert_eq "gate: ...nothing typed" "" "$(cat "$MUX_LOG")"
+new_logs
+run_launcher -- --shell cmux --llm qwen --allow-unverified "$PROJ"
+assert_contains "gate: ...with --allow-unverified, the typed command carries it to the pane's own gate" "$(cat "$MUX_LOG")" "--llm qwen --allow-unverified"
+new_logs
+run_launcher -- -p x --allow-unverified
+assert_eq "gate: --allow-unverified without --llm is an error, and nothing runs" "1:0" "$RC:$(claude_ran)"
+assert_contains "gate: ...saying what it applies to" "$OUTPUT" "--allow-unverified applies only to a launch with --llm <target>"
+mv "$TMP/qwen.tested" "$QREC"
 
 echo ""
 echo "========================================="
