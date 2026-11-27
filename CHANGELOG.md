@@ -32,10 +32,10 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   the rule table (`shared/llm/compat-rules.json`, versioned), the installed
   `claude` and the test records under `${CCT_HOME:-~/.cct}/llm-compat/`.
   When a target was tested and something changed since (its launch identity,
-  its options, the version of `claude`, the rules), it reads unverified and
-  says what changed. `cct doctor` gains an "LLM catalog" section. Records are
-  written privately (`0600` in `0700` directories), atomically and under a
-  lock. Launches do not change yet. Part of #400.
+  its options, the rules, or `claude` itself unless it is only newer), it
+  reads unverified and says what changed. `cct doctor` gains an "LLM
+  catalog" section. Records are written privately (`0600` in `0700`
+  directories), atomically and under a lock. Part of #400.
 - **A project can narrow which LLMs `--llm` may use on it.** An `[llm]`
   table with `allowed = ["<llm>", "<llm>@<binding>", ...]`, on one line, in
   the project's committed `.cct.toml` refuses any other target with exit 3,
@@ -59,6 +59,30 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   state, project, and whether it can be resumed now; a session reads
   `established`, with the model Claude Code's transcript names, once that
   transcript records a reply. Part of #400.
+- **Test an LLM target with `cct llm test`, and a `--llm` launch needs the
+  test to pass.** `cct llm test <target>` runs Claude Code once, headless,
+  on the target, with the environment a launch of it gets, and records
+  what each capability did: the credential, the model the endpoint
+  reports, streaming, the system prompt, a tool call and its result, the
+  output, a clean exit, the binding's `max_output_tokens`, and reasoning
+  and image input where the llm declares them. Each run is cut off after
+  120 seconds (`CCT_LLM_PROBE_TIMEOUT_SEC`), and nothing of the credential
+  is kept. The endpoint under test answers as the model, so Claude Code
+  may run only the test's own script: a hook blocks any other tool call,
+  whatever your permission rules allow, and the test fails if the endpoint
+  asks for one. The test refuses, naming the cause, when your settings
+  turn hooks off (`disableAllHooks`), or `CLAUDE_CODE_SIMPLE` or
+  `CLAUDE_CODE_SAFE_MODE` is set; `--without-guard` runs it anyway,
+  unguarded. A Claude Code launch with `--llm`, or a resume that restores
+  a session's target, now goes ahead only on a target whose test passed.
+  `--allow-unverified` launches an untested target, with a notice that the
+  session's stamp records, and never an incompatible one, whose latest
+  test failed with nothing changed since. A test that passed on an older
+  Claude Code still counts, with a notice; any other change since, a
+  tuning option or the rule table included, needs a new test. **Upgrade
+  note:** no target has a test yet, so the first `--llm` launch after
+  upgrading is refused, naming `cct llm test` and `--allow-unverified`.
+  Part of #400.
 
 ### Security
 
@@ -127,9 +151,8 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 - **Claude Code older than 2.1.305 reads unavailable** in `cct llm
   compatibility`: from that version Claude Code retries a request without
   tool search when a gateway refuses it (the version #399 relied on). The
-  rule table is now version 2. No launch is refused on it yet: a `--llm`
-  launch goes ahead, and its session's stamp records the state. Part of
-  #400.
+  rule table is now version 2, and a `--llm` launch on an older Claude
+  Code is refused. Part of #400.
 
 ### Fixed
 

@@ -282,9 +282,10 @@ build_run_cmd_string() {
     # credential there, so no value is ever typed into a multiplexer.
     local llm_env=""
     if [[ -n "$LLM_TARGET" ]]; then
-        local args_q=""
+        local args_q="" allow=""
         if [[ ${#CLAUDE_ARGS[@]} -gt 0 ]]; then printf -v args_q ' %q' "${CLAUDE_ARGS[@]}"; fi
-        printf -v quoted_cmd '%q --llm %q%s' "$LAUNCHER_SELF" "$LLM_TARGET" "$args_q"
+        [[ "$LLM_ALLOW_UNVERIFIED" == 1 ]] && allow=" --allow-unverified"
+        printf -v quoted_cmd '%q --llm %q%s%s' "$LAUNCHER_SELF" "$LLM_TARGET" "$allow" "$args_q"
         llm_env="CCT_LLM_CHILD=1 "
     fi
 
@@ -610,6 +611,13 @@ OPTIONS:
                          without --llm. Another target, --continue and the picker
                          are refused; to move a session to another target, fork
                          it: --resume <id> --fork-session --llm <target>.
+                         A target launches once `cct llm test <target>` passes;
+                         one that passed on an older Claude Code launches with a
+                         notice.
+    --allow-unverified   With --llm, launch a target no test has passed yet, with
+                         a notice; the session's record says so. Never an
+                         incompatible one: its latest test failed, and nothing
+                         has changed since.
 
 Any other --flag is forwarded verbatim to the underlying `claude` CLI
 (e.g. --dangerously-skip-permissions). Use --flag=value for value-bearing
@@ -1720,6 +1728,11 @@ run_headless() {
 LLM_TARGET=""
 LLM_REST_ARGS=()
 LLM_EXIT_REFUSED=3
+# --allow-unverified: launch a target no test has passed, with a notice the
+# stamp records (D7). Never an incompatible one, never a changed launch
+# identity (FR-12, FR-19).
+LLM_ALLOW_UNVERIFIED=0
+LLM_GATE_NOTICE=""
 LAUNCHER_SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
 llm_set_target() {  # <value given to --llm>
@@ -1730,17 +1743,28 @@ llm_set_target() {  # <value given to --llm>
     LLM_TARGET="$1"
 }
 
-# Takes --llm out of an argument list that is otherwise forwarded to
-# claude verbatim (the headless path): sets LLM_TARGET and LLM_REST_ARGS.
+# Takes --llm and --allow-unverified out of an argument list that is
+# otherwise forwarded to claude verbatim (the headless path): sets
+# LLM_TARGET, LLM_ALLOW_UNVERIFIED and LLM_REST_ARGS.
 llm_split_args() {
     LLM_REST_ARGS=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --llm)   llm_set_target "${2:-}"; shift 2 ;;
             --llm=*) llm_set_target "${1#*=}"; shift ;;
+            --allow-unverified) LLM_ALLOW_UNVERIFIED=1; shift ;;
             *)       LLM_REST_ARGS+=("$1"); shift ;;
         esac
     done
+}
+
+# --allow-unverified belongs to a launch on a catalog target: one with
+# --llm, or a resume that restores a stamped session's target.
+llm_allow_needs_target() {
+    if [[ "$LLM_ALLOW_UNVERIFIED" == 1 && -z "$LLM_TARGET" ]]; then
+        echo "Error: --allow-unverified applies only to a launch with --llm <target>, or to a resume of a session started with one" >&2
+        exit 1
+    fi
 }
 
 llm_refuse() {  # <reason> [<remedy line>...]
@@ -2087,15 +2111,52 @@ llm_prepare() {  # <project-dir>
             "${note%: *}" "${note##*: }" >&2
     done <<< "$LLM_CC_SETTINGS_NOTED"
     llm_session_rules
+    llm_gate
     return 0
+}
+
+# The compatibility gate (#400 FR-12, D7, as the owner amended them on
+# 2026-11-26; slice S3). The state is computed here, in the environment the
+# session runs in: by the launcher that opens a pane, so that it refuses
+# before the pane opens, and again in the pane. A supported target
+# launches, with a notice when it passed on an older Claude Code; an
+# unverified one only with --allow-unverified, which the stamp records;
+# any other state is refused, with the way out. Sets LLM_GATE_NOTICE and
+# the stamp's LSS_GATE_STATE and LSS_GATE_BYPASSED.
+llm_gate() {
+    local rc=0 target="$LR_LLM@$LR_BINDING"
+    LLM_GATE_NOTICE="" LSS_GATE_BYPASSED=false
+    lcm_state "$LLM_CC_HARNESS" "$target" || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+        llm_refuse "the compatibility state of $target cannot be computed: ${LCM_ERR:-unknown}"
+    fi
+    LSS_GATE_STATE="$LCM_STATE" LSS_GATE_TARGET="$LLM_CC_HARNESS:$target"   # the stamp uses this state, not computing it again
+    case "$LCM_STATE" in
+        supported)
+            if [[ -n "$LCM_TESTED_ON" ]]; then
+                LLM_GATE_NOTICE="it passed its test on $LCM_EXE $LCM_TESTED_ON; $LCM_EXE is now $LCM_HV, which has not been tested: cct llm test $LLM_TARGET tests it again"
+            fi ;;
+        unverified)
+            if [[ "$LLM_ALLOW_UNVERIFIED" != 1 ]]; then
+                llm_refuse "$target has not passed a test on $LLM_CC_HARNESS: $LCM_REASON" \
+                    "Test it: cct llm test $LLM_TARGET" \
+                    "Or launch it untested: add --allow-unverified."
+            fi
+            LSS_GATE_BYPASSED=true
+            LLM_GATE_NOTICE="untested, launched with --allow-unverified: $LCM_REASON" ;;
+        incompatible)
+            llm_refuse "$target is incompatible with $LLM_CC_HARNESS: $LCM_REASON" \
+                "--allow-unverified does not apply to it. Fix the endpoint or the binding, then test it again: cct llm test $LLM_TARGET" ;;
+        *)
+            llm_refuse "$target is $LCM_STATE on $LLM_CC_HARNESS: $LCM_REASON" ;;
+    esac
 }
 
 llm_apply() {
     # The pane marker must not reach claude: a launcher started from
     # inside the session would take itself for that pane's child.
     unset CCT_LLM_CHILD
-    printf '[claude-code] --llm %s: %s (not probed: nothing has checked this model against Claude Code yet)\n' \
-        "$LLM_TARGET" "$LLM_CC_LABEL" >&2
+    printf '[claude-code] --llm %s: %s%s\n' "$LLM_TARGET" "$LLM_CC_LABEL" "${LLM_GATE_NOTICE:+ ($LLM_GATE_NOTICE)}" >&2
     llm_session_stamp
     llm_cc_apply
 }
@@ -2105,6 +2166,7 @@ for _arg in "$@"; do
         -p|--print)
             llm_split_args "$@"
             if [[ -z "$LLM_TARGET" ]]; then llm_restore_target ${LLM_REST_ARGS[@]+"${LLM_REST_ARGS[@]}"}; fi
+            llm_allow_needs_target
             if [[ -n "$LLM_TARGET" ]]; then
                 LLM_HEADLESS=1
                 llm_prepare "$PWD"
@@ -2217,6 +2279,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --llm=*)
             llm_set_target "${1#*=}"
+            shift
+            ;;
+        --allow-unverified)
+            LLM_ALLOW_UNVERIFIED=1
             shift
             ;;
         *)
@@ -2440,6 +2506,7 @@ case "${1:-}" in
         ;;
     *)
         if [[ -z "$LLM_TARGET" ]]; then llm_restore_target ${CLAUDE_ARGS[@]+"${CLAUDE_ARGS[@]}"}; fi
+        llm_allow_needs_target
         if [[ -n "$LLM_TARGET" ]]; then
             if [[ "${CCT_LLM_CHILD:-}" == "1" ]]; then
                 # Inside the pane this launcher created: no session

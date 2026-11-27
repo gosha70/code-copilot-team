@@ -18,6 +18,12 @@
 #                                      written when they started: target,
 #                                      model, state, project, and whether
 #                                      each can be resumed now (#400 S4)
+#   cct llm test <target> [--harness <h>] [--without-guard] [--json]
+#                                      run the harness on the target once,
+#                                      on a canary, and record what each
+#                                      capability did (#400 FR-15, S3);
+#                                      refused when the harness's hooks
+#                                      are off, unless --without-guard
 #   cct harness explain <harness> --llm <target> [--project <dir>] [--json]
 #                                      the launch plan: what a launch from
 #                                      that project (default: here) would
@@ -25,9 +31,11 @@
 #                                      and why it would be refused, the
 #                                      project's [llm] allow-list included
 #
-# Nothing here starts a harness or reads a credential's value: a credential
-# is reported by its variable's NAME and whether it is set, and an endpoint
-# by its origin (scheme://host[:port]) alone. A target is planned by the
+# Only `test` starts a harness, through the plan a launch would use, and
+# its credential goes to the harness alone. Nothing else here starts a
+# harness or reads a credential's value: a credential is reported by its
+# variable's NAME and whether it is set, and an endpoint by its origin
+# (scheme://host[:port]) alone. A target is planned by the
 # resolver the launcher uses (lib/llm-resolve.sh), so an explanation and a
 # launch cannot disagree. `--json` output is described by
 # shared/schemas/llm-catalog-cli.schema.json. A command that cannot answer
@@ -36,9 +44,11 @@
 # resolve) prints under --json the envelope with an error field, alone, and
 # exits as its text form does.
 #
-# Exit codes: 0 ok; 1 the catalog has violations; 2 usage, no readable
-# catalog, or a compatibility record that cannot be read (named); 3
-# `explain` of a launch that would be refused.
+# Exit codes: 0 ok; 1 the catalog has violations, or `test` ran and the
+# target did not pass; 2 usage, no readable catalog, a compatibility record
+# that cannot be read (named), or a probe that could not run or be recorded;
+# 3 `explain` of a launch that would be refused, or `test` of a target a
+# launch would refuse.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -54,6 +64,8 @@ source "$SCRIPT_DIR/lib/cct-statefile.sh"
 source "$SCRIPT_DIR/lib/llm-compat.sh"
 # shellcheck source=lib/llm-sessions.sh
 source "$SCRIPT_DIR/lib/llm-sessions.sh"
+# shellcheck source=lib/llm-probe.sh
+source "$SCRIPT_DIR/lib/llm-probe.sh"
 
 LLM_EXAMPLE_REL="shared/templates/llm/llms.toml.example"
 LLM_NO_CATALOG="no LLM catalog"
@@ -80,6 +92,13 @@ USAGE
                                     the --llm sessions, stamped when they
                                     started: target, model, state, project,
                                     and whether each can be resumed now
+  cct llm test <target> [--harness <h>] [--without-guard] [--json]
+                                    run the harness on the target once, on a
+                                    canary, and record what each capability
+                                    did; a --llm launch needs a passing test.
+                                    Refused when the harness's hooks are off,
+                                    since the test's guard is one; then
+                                    --without-guard runs it unguarded
   cct harness explain <harness> --llm <target> [--project <dir>] [--json]
                                     what a launch from that project (default:
                                     here) would set and remove, by name, and
@@ -482,7 +501,8 @@ cmd_compatibility() {  # <target or empty> <harness or empty> <json>
 # stamped target resolving, for its project, to a launchable binding; no
 # settings file setting a variable the launch controls; the launch identity
 # it was stamped with; a compatibility state that can be computed, which the
-# stamp's refresh needs.
+# stamp's refresh needs, and that the gate admits without --allow-unverified
+# (supported; S3).
 cmd_sessions() {  # <json> <harness> <project, physical, or empty for all>
     local json="$1" h="$2" only="$3" dir f id rc worst=0 catalog_err="" eligible reason t project jrows='[]'
     dir=$(lss_dir "$h")
@@ -523,7 +543,11 @@ cmd_sessions() {  # <json> <harness> <project, physical, or empty for all>
             elif ! lcm_state "$h" "$t"; then
                 reason="the compatibility state of $t cannot be computed: ${LCM_ERR:-unknown}"
             else
-                eligible=true
+                case "$LCM_STATE" in   # the launcher's gate (S3)
+                    supported)  eligible=true ;;
+                    unverified) reason="$t has not passed a test on $h: $LCM_REASON (cct llm test $t; or resume with --allow-unverified)" ;;
+                    *)          reason="$t is $LCM_STATE on $h: $LCM_REASON" ;;
+                esac
             fi
         fi
         jrows=$(jq -c --argjson s "$LSS_STAMP" --arg id "$id" --arg h "$h" --arg t "$t" \
@@ -553,6 +577,98 @@ cmd_sessions() {  # <json> <harness> <project, physical, or empty for all>
     echo ""
     echo "Resume one by its id, on the target it was started with: claude-code --resume <session>"
     return "$worst"
+}
+
+# One behavioral test of a target on a harness (#400 FR-15, S3): the harness
+# runs headless on the canary, with the environment a launch of the target
+# gets, and its per-capability matrix is recorded (FR-16). A target a launch
+# would refuse (unsupported, unavailable) is refused the same way, and
+# nothing runs. Interrupted, the harness's process group is reaped and the
+# probe's private directory removed.
+cmd_test() {  # <target> <harness> <json> <without-guard>
+    local target="$1" h="$2" json="$3" without_guard="${4:-0}" rc=0 c
+    load_catalog test "$json" || return $?
+    if ! lcm_load_rules; then
+        if [[ "$json" == 1 ]]; then json_error test "$LCM_ERR"; else echo "cct llm: $LCM_ERR" >&2; fi
+        return 2
+    fi
+    # The guard is a Claude Code hook: with hooks off, the endpoint under test
+    # could run whatever the user's permission rules allow, as the real binary
+    # was seen to. That refuses the test, naming the cause, before anything
+    # runs, unless --without-guard asks for an unguarded run.
+    lp_hooks_off
+    if [[ -n "$LP_HOOKS_OFF" && "$without_guard" != 1 ]]; then
+        c="hooks are off for this test ($LP_HOOKS_OFF), and with them the guard that stops the endpoint under test from running anything but this test's command"
+        if [[ "$json" == 1 ]]; then
+            json_error test "refused: $c; turn hooks back on, or pass --without-guard to run it unguarded"
+        else
+            echo "cct llm test: refused: $c." >&2
+            echo "  Turn hooks back on, or pass --without-guard to run the test unguarded." >&2
+        fi
+        return "$EXIT_REFUSED"
+    fi
+    CA_OWNER_ID="$$"
+    if ! CA_ACTIVE_GROUP_FILE=$(mktemp "${TMPDIR:-/tmp}/cct-llm-test-group.XXXXXX"); then
+        c="cannot create the probe's handoff record, so a signal could not stop it; refusing to run"
+        if [[ "$json" == 1 ]]; then json_error test "$c"; else echo "cct llm test: $c" >&2; fi
+        return 2
+    fi
+    export CA_OWNER_ID CA_ACTIVE_GROUP_FILE
+    trap 'lp_cleanup; rm -f "$CA_ACTIVE_GROUP_FILE"; exit 130' INT
+    trap 'lp_cleanup; rm -f "$CA_ACTIVE_GROUP_FILE"; exit 143' TERM
+    trap 'lp_cleanup; rm -f "$CA_ACTIVE_GROUP_FILE"; exit 129' HUP
+    trap 'lp_cleanup; rm -f "$CA_ACTIVE_GROUP_FILE"' EXIT
+    [[ "$json" == 1 ]] || echo "Testing $target on $h (up to ${CCT_LLM_PROBE_TIMEOUT_SEC:-$LP_TIMEOUT_DEFAULT_SEC}s)..." >&2
+    if [[ -n "${CCT_LLM_PROBE_CMD:-}" ]]; then
+        echo "cct llm test: note: CCT_LLM_PROBE_CMD is set, so it runs in place of $LLM_CC_EXECUTABLE, and the run is recorded as unverifiable: it decides nothing." >&2
+    fi
+    if [[ -n "$LP_HOOKS_OFF" ]]; then
+        echo "cct llm test: warning: --without-guard: hooks are off for this test ($LP_HOOKS_OFF), and with them the guard that stops the endpoint under test from running anything but this test's command: your permission rules alone decide what it may run. The test still fails if it asks for more." >&2
+    fi
+    lp_probe "$h" "$target" || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+        if [[ "$LP_REFUSED" == 1 ]]; then
+            if [[ "$json" == 1 ]]; then
+                json_error test "refused: $LP_ERR"
+            else
+                echo "cct llm test: refused: $LP_ERR" >&2
+                echo "  A launch would be refused for the same reason; fix it, then test again." >&2
+            fi
+            return "$EXIT_REFUSED"
+        fi
+        if [[ "$json" == 1 ]]; then json_error test "$LP_ERR"; else echo "cct llm test: $LP_ERR" >&2; fi
+        return 2
+    fi
+    # Tuning in a settings file does not change the target: said, as for a
+    # launch; that value is the one the test ran with.
+    while IFS= read -r c; do
+        [[ -z "$c" ]] && continue
+        echo "cct llm test: note: ${c%: *} sets ${c##*: } in its env block; Claude Code applies it over this test, so that value is the one tested." >&2
+    done <<< "$LP_NOTES"
+    # The state the records now give, the one just written included.
+    rc=0; lcm_state "$h" "$target" || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+        if [[ "$json" == 1 ]]; then json_error test "$LCM_ERR"; else echo "cct llm test: $LCM_ERR" >&2; fi
+        return 2
+    fi
+    if [[ "$json" == 1 ]]; then
+        envelope test "$(jq -nc --arg f "$CATALOG" --arg t "$target" --arg l "$LR_LLM" --arg b "$LR_BINDING" \
+            --arg h "$h" --arg o "$LP_OUTCOME" --arg d "$LP_DETAIL" --argjson m "$LP_MATRIX" \
+            --arg s "$LCM_STATE" --arg r "$LCM_REASON" --argjson e "$LCM_EVIDENCE" \
+            '{catalog: $f, target: $t, llm: $l, binding: $b, harness: $h, outcome: $o, detail: $d,
+              matrix: $m, state: $s, reason: $r, evidence: $e}')"
+    else
+        echo "Tested $target on $h: $LLM_CC_LABEL"
+        echo ""
+        printf "%-18s  %s\n" "CAPABILITY" "RESULT"
+        jq -r 'to_entries[] | "\(.key)\t\(.value)"' <<< "$LP_MATRIX" | while IFS=$'\t' read -r cap res; do
+            printf "%-18s  %s\n" "$cap" "$res"
+        done
+        echo ""
+        echo "Outcome: $LP_OUTCOME: $LP_DETAIL"
+        echo "State: $LCM_STATE ($LCM_REASON)"
+    fi
+    [[ "$LP_OUTCOME" == "pass" ]]
 }
 
 # --json may come anywhere among a command's arguments.
@@ -613,6 +729,23 @@ case "$cmd" in
         fi
         cmd_sessions "$JSON" "$h" "$p"
         ;;
+    test)
+        t="" h="$LLM_CC_HARNESS" wg=0
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --harness)   h="${2:-}"; [[ -n "$h" ]] || usage_error test "cct llm test: --harness needs a harness"; shift 2 ;;
+                --harness=*) h="${1#*=}"; [[ -n "$h" ]] || usage_error test "cct llm test: --harness needs a harness"; shift ;;
+                --without-guard) wg=1; shift ;;
+                -*)          usage_error test "cct llm test: unknown option '$1'" ;;
+                *)           if [[ -z "$t" ]]; then t="$1"; shift; else usage_error test "cct llm test: one target"; fi ;;
+            esac
+        done
+        [[ -n "$t" ]] || usage_error test "usage: cct llm test <target> [--harness <h>] [--without-guard] [--json]"
+        if [[ " $LC_HARNESSES " != *" $h "* ]]; then
+            usage_error test "cct llm test: unknown harness '$h' (one of: ${LC_HARNESSES// /, })"
+        fi
+        cmd_test "$t" "$h" "$JSON" "$wg"
+        ;;
     harness)
         # `cct harness explain <harness> --llm <target>`, dispatched here by scripts/cct.
         sub="${1:-}"; [[ $# -gt 0 ]] && shift
@@ -640,7 +773,7 @@ case "$cmd" in
         ;;
     help|-h|--help) usage ;;
     *)
-        msg="cct llm: unknown command '$cmd' (list | show | validate | compatibility | sessions)"
+        msg="cct llm: unknown command '$cmd' (list | show | validate | compatibility | sessions | test)"
         if [[ "$JSON" == 1 ]]; then usage_error "" "$msg"; fi
         echo "$msg" >&2; usage >&2; exit 2
         ;;

@@ -264,12 +264,35 @@ assert_eq "only an unverifiable test: unverified, saying so" \
     "unverified|never tested conclusively: the last test, 2026-11-23T20:00:00Z, was unverifiable" \
     "$(compat u --json | field u '"\(.state)|\(.reason)"')"
 assert_eq "...and no conclusive part" "null" "$(jq -c .latest_conclusive "$REC_DIR/u@ub.json")"
+# A refused credential is unavailable evidence (FR-13): recorded as the
+# latest attempt, never conclusive, and the reason carries its detail.
+record u ub "$(jq -nc --argjson e "$(evidence_of u)" '{at: "2026-11-23T22:00:00Z", outcome: "unavailable",
+    matrix: {auth: "fail"}, evidence: $e, detail: "the endpoint refused the credential (HTTP 401)", redacted: "Not logged in"}')" >/dev/null
+assert_eq "a refused credential: recorded, never conclusive, and the reason says what the test saw" \
+    "unverified|never tested conclusively: the last test, 2026-11-23T22:00:00Z, was unavailable (the endpoint refused the credential (HTTP 401))|null" \
+    "$(compat u --json | field u '"\(.state)|\(.reason)"')|$(jq -c .latest_conclusive "$REC_DIR/u@ub.json")"
 
 # ── degradation by each part of the evidence digest ──
+# The owner's ruling of 2026-11-26 (FR-13's amendment, S3): a passing test
+# still stands on a newer claude, and says so; any other change degrades it.
 echo "2.1.400 (Claude Code)" > "$TMP/claude-version"
 OUT=$(compat m --json)
-assert_eq "a newer claude degrades supported to unverified" "unverified|[\"harness_version\"]" "$(field m '"\(.state)|\(.degraded | tojson)"' <<< "$OUT")"
-assert_contains "...saying what changed" "$(field m .reason <<< "$OUT")" "no longer applies: claude 2.1.331 is now 2.1.400"
+assert_eq "a newer claude keeps a passing test supported, the change still shown (the owner's ruling)" \
+    "supported|[\"harness_version\"]" "$(field m '"\(.state)|\(.degraded | tojson)"' <<< "$OUT")"
+assert_contains "...saying it passed on the older one, and the newer one is untested" "$(field m .reason <<< "$OUT")" \
+    "passed its test of 2026-11-23T20:00:00Z on claude 2.1.331; claude is now 2.1.400, which has not been tested"
+assert_eq "a failed test on an older claude is unverified, never supported" "unverified" "$(compat f --json | field f .state)"
+catalog 'max_output_tokens = 4096' > "$HOME_DIR/.cct/llms.toml"
+assert_eq "a newer claude does not let a changed tuning option through" "unverified|[\"options\",\"harness_version\"]" \
+    "$(compat m --json | field m '"\(.state)|\(.degraded | tojson)"')"
+catalog > "$HOME_DIR/.cct/llms.toml"
+echo "2.1.330 (Claude Code)" > "$TMP/claude-version"
+OUT=$(compat m --json)
+assert_eq "an older claude than the test's degrades it" "unverified|[\"harness_version\"]" "$(field m '"\(.state)|\(.degraded | tojson)"' <<< "$OUT")"
+assert_contains "...saying what changed" "$(field m .reason <<< "$OUT")" "no longer applies: claude 2.1.331 is now 2.1.330"
+echo "Claude Code (development build)" > "$TMP/claude-version"
+assert_eq "a claude whose version cannot be read degrades it: versions that cannot be compared never pass" \
+    "unverified" "$(compat m --json | field m .state)"
 echo "2.1.331 (Claude Code)" > "$TMP/claude-version"
 jq '.rule_version += 1' "$RULES" > "$TMP/rules-next.json"
 OUT=$(RULES_OVERRIDE="$TMP/rules-next.json" compat m --json)

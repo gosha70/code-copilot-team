@@ -36,9 +36,14 @@
 #
 # bash 3.2; jq only. Test seam: CCT_ROUTING_PROBE_CMD (a mock canary
 # receiving the same env and prompt as the real backend command).
+#
+# The canary primitives (prompt, nonce, marker file, reply parsing,
+# secret scrub, and rr_classify) are cct-canary.sh's, shared with the LLM
+# catalog's probe (#400 FR-15, D6); the accounting, caps and verdicts
+# below are routing's own.
 
 # shellcheck source=/dev/null
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/routing-result.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cct-canary.sh"
 
 RB_OUTCOMES="probe_pass probe_fail probe_unverifiable probe_deferred_caps"
 rb_outcome_valid() { [[ " $RB_OUTCOMES " == *" $1 "* ]]; }
@@ -63,8 +68,8 @@ RB_WINDOW_SEC="${RB_WINDOW_SEC:-86400}"
 RB_TOOL_PROFILES="full-cct local-builder-minimal"
 rb_tools_implied() { [[ " $RB_TOOL_PROFILES " == *" $1 "* ]]; }
 
-RB_MARKER="CCT_PROBE_OK"
-RB_TOOL_MARKER="CCT_TOOL_OK"
+RB_MARKER="$CN_MARKER"
+RB_TOOL_MARKER="$CN_TOOL_MARKER"
 
 # shellcheck source=cct-home.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cct-home.sh"   # the CCT home (#411)
@@ -219,56 +224,7 @@ rb_debit() {
 # ── the canary ───────────────────────────────────────────────────────
 # rb_prompt <tools-required:0|1> — the canary prompt (deterministic).
 rb_prompt() {
-    local tools="$1" expected="$2"
-    if [[ "$tools" == "1" ]]; then
-        printf 'Health canary. Do BOTH, nothing else:\n1. Run this exact shell command with your Bash tool: printf %%s %s > %s\n2. Then reply with exactly this single line: %s\n' \
-            "$RB_TOOL_MARKER" "$RB_TOOL_FILE" "$expected"
-    else
-        printf 'Health canary. Reply with exactly this single line: %s\n' "$expected"
-    fi
-}
-
-# Read the backend's JSON/JSONL records without letting one diagnostic
-# line invalidate every structured record around it. First accept a
-# wholly valid JSON stream (including pretty-printed JSON); otherwise
-# fall back to independently parsing complete JSON lines and ignore
-# non-JSON notices. Consumers still apply their own closed shapes.
-rb_json_records() {
-    local records
-    if records=$(jq -c . "$1" 2>/dev/null); then
-        printf '%s\n' "$records"
-    else
-        jq -Rc 'fromjson?' "$1" 2>/dev/null || true
-    fi
-}
-
-# Parse only a backend-authored response field. The prompt itself also
-# appears in several CLI transcript shapes; grepping the merged stream
-# lets a backend that merely echoes its input manufacture health. The
-# accepted shapes mirror the repo's headless-session contract: a result
-# object's `result`, or the last assistant text message. A raw line or a
-# user/prompt event is never positive evidence.
-rb_result_text() {
-    rb_json_records "$1" | jq -r -s '
-      map(if type == "array" then .[] else . end) as $docs
-      | ([ $docs[] | select(type == "object" and .type? == "result"
-                            and ((.result? | type) == "string"))
-           | .result ] | last)
-        // ([ $docs[] | select(type == "object" and .type? == "assistant")
-              | if ((.message?.content? | type) == "array") then
-                  [ .message.content[]
-                    | select(type == "object" and .type? == "text"
-                             and ((.text? | type) == "string"))
-                    | .text ] | join("")
-                elif ((.message? | type) == "string") then .message
-                elif ((.content? | type) == "string") then .content
-                else empty end ] | last)
-        // (if ($docs | length) == 1
-               and (($docs[0] | type) == "object")
-               and (($docs[0].result? | type) == "string")
-            then $docs[0].result else empty end)
-        // empty
-      | gsub("^\\s+|\\s+$"; "")' 2>/dev/null || true
+    cn_prompt "$1" "exactly this single line: $2" "printf %s $RB_TOOL_MARKER > $RB_TOOL_FILE"
 }
 
 # Measured cost uses the same closed stream normalization as reviewer
@@ -276,7 +232,7 @@ rb_result_text() {
 # is unmetered and keeps the conservative reservation; it must not turn
 # an otherwise valid canary into an infrastructure failure.
 rb_measured_cost() {
-    rb_json_records "$1" | jq -r -s '
+    cn_json_records "$1" | jq -r -s '
       map(if type == "array" then .[] else . end) as $docs
       | ([ $docs[] | select(type == "object" and .type? == "result") ] | last)
         // (if ($docs | length) == 1
@@ -393,9 +349,7 @@ rb_probe() {
     rb_journal "probe_launch_env" "profile '$id': wired${names:- nothing (backend login mode)}; tool canary=$tools"
 
     local nonce expected
-    nonce=$(printf '%s:%s:%s:%s' "$id" "$gen" "$$" "$(date -u +%s)" \
-        | { command -v shasum >/dev/null 2>&1 && shasum -a 256 || sha256sum; } \
-        | cut -c1-20)
+    nonce=$(cn_nonce "$id:$gen:$$:$(date -u +%s)")
     expected="${RB_MARKER}:${nonce}"
     rb_prompt "$tools" "$expected" > "$wd/prompt.txt"
     local cmd
@@ -464,12 +418,9 @@ rb_probe() {
     [[ "$had_errexit" -eq 1 ]] && set -e
 
     # ── step 4: scrub BEFORE anything persists or is classified
-    local content
     if [[ -n "$api_key" ]]; then
-        content="$(cat "$stdout_file" 2>/dev/null)"
-        printf '%s\n' "${content//"$api_key"/[REDACTED:ANTHROPIC_API_KEY]}" > "$stdout_file"
-        content="$(cat "$stderr_file" 2>/dev/null)"
-        printf '%s\n' "${content//"$api_key"/[REDACTED:ANTHROPIC_API_KEY]}" > "$stderr_file"
+        cn_scrub "$stdout_file" "$api_key" ANTHROPIC_API_KEY
+        cn_scrub "$stderr_file" "$api_key" ANTHROPIC_API_KEY
     fi
     { cat "$stdout_file" 2>/dev/null || true; cat "$stderr_file" 2>/dev/null || true; } > "$capture"
     RB_TRANSCRIPT="$capture"
@@ -495,9 +446,9 @@ rb_probe() {
 
     # ── step 5: classification — evidence only
     local have_marker=0 have_tool=0 response
-    response=$(rb_result_text "$stdout_file")
+    response=$(cn_result_text "$stdout_file")
     if [[ "$response" == "$expected" ]]; then have_marker=1; fi
-    if [[ -s "$RB_TOOL_FILE" ]] && grep -q "$RB_TOOL_MARKER" "$RB_TOOL_FILE" 2>/dev/null; then have_tool=1; fi
+    if cn_tool_ran "$RB_TOOL_FILE" "$RB_TOOL_MARKER"; then have_tool=1; fi
 
     # A's frozen classifier is run ONCE over the SAME scrubbed capture
     # that the cascade below reads, and BOTH the failure class and the
@@ -521,7 +472,7 @@ rb_probe() {
     # window reopens). Only fills a gap — never overrides what the
     # classifier already established from the response itself.
     local rl rl_all
-    rl_all=$(rb_json_records "$stdout_file" | jq -c -s 'map(if type == "array" then .[] else . end)
+    rl_all=$(cn_json_records "$stdout_file" | jq -c -s 'map(if type == "array" then .[] else . end)
                      | [.[] | .rate_limits? | objects | .[] | objects | .resets_at
                        | select(type == "string")] | sort' 2>/dev/null || echo '[]')
     [[ -n "$rl_all" ]] || rl_all='[]'

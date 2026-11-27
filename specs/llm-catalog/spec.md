@@ -17,6 +17,7 @@ origin:
     - specs/llm-catalog/origin/2026-11-10-issue-400-origin.md
     - specs/llm-catalog/origin/2026-11-19-launch-first-ruling.md
     - specs/llm-catalog/origin/2026-11-25-s4-rulings.md
+    - specs/llm-catalog/origin/2026-11-26-s3-rulings.md
 ---
 
 # Spec: harness-agnostic LLM catalog and per-launch `--llm` selection
@@ -149,7 +150,12 @@ target, and the rest are put to the owner with the PR.
    record. With the probe deferred, that would refuse every launch. A
    selected launch prints one line naming the provider, model and
    origin and saying nothing has probed it. `--allow-unverified` is not
-   introduced. D7 applies again when the probe lands.
+   introduced. D7 applies again when the probe lands. *Retired
+   2026-11-26 by S3:* `cct llm test` writes the records, and the gate
+   refuses what FR-12 and D7, as the owner amended them that day,
+   refuse; `--allow-unverified` is parsed. The "not probed" line is
+   gone: a launch names its target, with the gate's notice when it has
+   one.
 2. **Resume is not enforced (FR-17 to FR-19, D9).** No stamp exists,
    so the launcher can neither restore a session's target nor refuse a
    different one. `--llm` is accepted with `--continue` and `--resume`;
@@ -517,6 +523,11 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   never bypasses a launch-identity mismatch (FR-19) (D7). The
   controlled probe path `cct llm test` is exempt from the
   `unverified` and `incompatible` refusals and bound by FR-15.
+  *Amended 2026-11-26, S3, open decision 1, by the owner
+  (`origin/2026-11-26-s3-rulings.md`):* a plan that is `supported` on
+  a record measured on an older harness version (FR-13) launches with a
+  notice naming both versions and the `cct llm test` command that tests
+  the target again. Every other refusal stands.
 
 ### Compatibility
 
@@ -538,7 +549,15 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   do what was asked). An authentication failure is `unavailable`
   evidence, and a transport failure, timeout, crash or unparseable
   output is `unverifiable`; neither ever produces `incompatible` and
-  neither overwrites a conclusive record.
+  neither overwrites a conclusive record. *Amended 2026-11-26, S3,
+  open decision 1, by the owner (`origin/2026-11-26-s3-rulings.md`):*
+  `supported` also covers a newer harness. The latest conclusive record
+  whose evidence matches the current evidence in everything but the
+  harness version passed, and the installed harness is newer than the
+  version that record was measured on. The state then names that
+  version, and FR-12 launches it with a notice. A changed endpoint,
+  option or rule version, a latest conclusive record that failed, and
+  a harness older than the record's still give `unverified`.
 - **FR-14 Rule table.** The static rules are data with a
   `rule_version`: per harness the protocols it speaks (`claude-code`:
   anthropic-messages; `codex`: openai-responses, and openai-chat only
@@ -602,7 +621,92 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   launch test plants a sentinel credential and a sentinel provider
   switch in the ambient environment and asserts that the stub gateway
   and the stub harness never receive them (FR-30). Probe temporary
-  directories are removed on exit and on signal.
+  directories are removed on exit and on signal. *S3 notes
+  (2026-11-26), for Claude Code (`scripts/lib/llm-probe.sh`), from runs
+  of the real `claude` 2.1.332 behind the stub gateway:*
+  - *The canary.* `claude -p --output-format stream-json --verbose
+    --include-partial-messages --no-session-persistence`, with
+    `--append-system-prompt` giving a token, in a private directory. The
+    canary's one command is a script there, `sh canary.sh`, which writes
+    the marker file and prints a nonce from a file only the tool can
+    read; the one reply line holds the canary's marker, the system
+    prompt's token and what the command printed. `--allowedTools` allows
+    that command alone (`Bash(sh canary.sh)`), and no permission mode
+    accepts edits: the endpoint is the model, and a command of its own in
+    the same tool call is refused, the whole call with it, which the
+    real binary does whether the extra command acts inside the directory
+    or outside it (#547's review). The user's own permission rules still
+    apply, as in a launch, and one that allows all of Bash let that
+    command run; so both runs also get a `PreToolUse` hook through
+    `--settings`, which Claude Code runs before every tool call whatever
+    those rules allow, and which lets only the canary's command through.
+    It held against `allow: ["Bash"]`, `defaultMode: bypassPermissions`
+    and an approving user hook. `disableAllHooks` in the user's settings
+    file, and `CLAUDE_CODE_SIMPLE` or `CLAUDE_CODE_SAFE_MODE` in its env
+    block or the environment, turn it off, and `cct llm test` then
+    refuses before anything runs, naming the cause; `--without-guard`
+    runs it unguarded, with a warning (the owner's ruling of 2026-11-27).
+    Managed settings are not read. The hook is an
+    inline command, since one that cannot run lets the call through. Every built-in tool is still offered, so the request
+    is a launch's: the owner chose that over `--tools Bash` on 2026-11-27
+    (`origin/2026-11-26-s3-rulings.md`). A settings
+    file's `env` block that sets a variable the plan controls refuses the
+    test as it refuses a launch, since the run would measure another
+    endpoint, credential or model; a tuning key is said. When the llm declares image input, a second run puts a
+    32x32 red image in the prompt (`--input-format stream-json`) and
+    asks its colour. Claude Code sends adaptive thinking itself, so
+    `reasoning_control` is read from that run's thinking blocks, and
+    `limit_controls` from each response's streamed `message_delta`,
+    against the binding's `max_output_tokens`. `model_identity` compares
+    with the model as Claude Code sends it: without a context suffix
+    such as `[1m]`, which it strips. A reported name that contains the
+    requested one, or is contained in it (an alias Claude Code resolved,
+    a dated id), cannot be confirmed either way: `unverifiable`, never
+    `fail`.
+  - *The verdict.* A refused credential, which Claude Code reports in
+    its `api_retry` records, is an attempt of its own, `unavailable`;
+    the probe sets `CLAUDE_CODE_MAX_RETRIES=1`, so that it is reported
+    at once rather than after minutes of retries. A 400 or 422 is a
+    rejected request shape only when its message says so (an unsupported
+    parameter, field, header or tool; a validation error): then
+    `output_parsing` fails and the outcome is a behavioral `fail`. An
+    exhausted balance or an unknown model is a 400 too, and decides
+    nothing. Any tool call the endpoint asks for other than the canary's
+    command, in either run, fails `tool_call`, refused or not, and the
+    detail says whether Claude Code refused it or ran it, where its
+    output shows which. A run through `CCT_LLM_PROBE_CMD` is said, and recorded as
+    `unverifiable`: the seam never decides the gate. A run the watchdog ends, and a crash
+    (an exit other than 0, or 1 with an error result), fail `clean_exit`
+    and are `unverifiable`, whatever was printed before. Any other error,
+    an unparseable result, or a required capability that could not be
+    checked is `unverifiable`. The record's excerpt has the credential,
+    the endpoint's path, the probe directory and the home directory
+    taken out.
+  - *The switches.* drop tool calls (`tool_call`), ignore tool results
+    (`tool_result`), disable streaming (`streaming`; Claude Code then
+    retries without it, with no streamed events), another model id
+    (`model_identity`), ignore the system prompt (`system_prompt`),
+    reject the request shape (`output_parsing`), reject authentication
+    (`auth`), exceed declared limits (`limit_controls`), time out
+    (`clean_exit`), and, for the two conditional capabilities, drop the
+    thinking (`reasoning_control`) and ignore images (`image_input`).
+    More answer in ways that decide nothing: a 500; a 404 naming the
+    request path, which shows the path kept out of the record; a 400 for
+    an unknown model, and one for an exhausted balance; a dated model id
+    that contains the requested name. One appends a command of its own
+    to the canary's tool call, which must not run, and another asks for
+    one in the image run. The capture runs them again under a user rule
+    that allows all of Bash, which the hook blocks, and the first with
+    hooks turned off as well, when the command runs and the test still
+    fails. The mock harness runs `--settings` hooks, and reads the user's
+    allow rules and what turns hooks off, as the real binary was seen to. The
+    mock harness can crash after its answer, print output that does not
+    parse, and ignore `TERM`, so that the watchdog's `KILL` ends it.
+  - *Departures.* The stub gateway speaks Anthropic Messages only: Claude
+    Code speaks only that, and the OpenAI protocols come with S6 and S7,
+    which can test them. The watchdog's `KILL` follows `TERM` by ten
+    seconds through an argument the shared runner gained; routing keeps
+    its two.
 - **FR-16 Probe records.** Records live under the user home
   (FR-1) at `llm-compat/<harness>/<llm>@<binding>.json` with two
   parts: `latest_attempt` (every run: timestamp, outcome, matrix,
@@ -651,7 +755,15 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   (FR-19). The digests are computed once per process
   (`lr_digests_once`), and the compatibility state without resolving the
   target again. The session id goes right after `claude`, ahead of the
-  forwarded flags, so that none of them can take it as its value.
+  forwarded flags, so that none of them can take it as its value. A
+  resume opened in a new pane thus checks its launch identity twice: in
+  the launcher, which can refuse before the pane opens, and in the pane.
+  The owner ruled on 2026-11-26 to keep both checks
+  (`origin/2026-11-25-s4-rulings.md`). *S3 note (2026-11-26):* the
+  stamp's gate holds the state the launcher's gate admitted, `supported`,
+  or `unverified` under `--allow-unverified`, which `bypassed` records;
+  a resume's refresh writes the gate of that launch. The gate runs where
+  the launch-identity check runs, so both processes compute the state.
 - **FR-18 Resume rules.** New session, no `--llm`: native. New
   session with `--llm`: bind and stamp. Resume by exact id, no
   `--llm`: restore the stamped binding when a stamp exists, else
@@ -709,7 +821,12 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   builds the gate, the checks are a fresh launch's static refusals
   (FR-12): `--allow-unverified` does not exist yet, and an
   evidence-digest change refuses nothing. `cct llm sessions` says, for
-  each stamp, whether a resume by its id would pass them now.
+  each stamp, whether a resume by its id would pass them now. *S3 note
+  (2026-11-26):* S3 builds the gate under the owner's ruling of that
+  day (FR-13's amendment). A restored target whose only change is a
+  newer harness launches with FR-12's notice. An options-digest change,
+  which the identity check allows, and a rule-version change read
+  `unverified`, which the gate refuses unless `--allow-unverified`.
 
 ### Adapter contracts
 
@@ -754,7 +871,8 @@ catalog.sh` and `tests/test-llm-launch.sh`.
   LLM gateway"). It is the rule table's `min_version`, from rule version
   2. No launch is refused on it before S3's gate: it sets the
   compatibility state that `cct llm compatibility`, `cct doctor` and a
-  session's stamp show.
+  session's stamp show. *S3 note (2026-11-26):* the gate refuses a
+  `claude` older than the minimum, or missing, as `unavailable` (FR-12).
 - **FR-21 Codex.** With `--llm`: `--model <remote>` and `-c`
   overrides that define `model_provider = cct-<binding>` and the
   `model_providers.cct-<binding>` table (`name`, `base_url`,
@@ -993,6 +1111,13 @@ before slice D builds; the approved spec's history stays in git.
   could ever exist. The earlier recommendation (launch with a notice)
   was withdrawn: a notice is not a gate. Recommended: refuse by
   default. **Ruled 2026-11-10 by the owner: accepted as recommended.**
+  **Amended 2026-11-26 by the owner (S3, open decision 1,
+  `origin/2026-11-26-s3-rulings.md`):** a target whose latest
+  conclusive record passed launches with a notice when only the
+  harness version is newer than that record's. A target never tested,
+  one whose latest conclusive record failed, one whose launch identity,
+  options or rule version changed, and a harness older than the
+  record's are refused, as ruled.
 - **D8 Endpoint quirks.** `quirks = ["rejects-dynamic-tools"]` on the
   endpoint drives the three #399 variables for selected launches and
   enters the launch-identity digest; the declaration is never evidence; the

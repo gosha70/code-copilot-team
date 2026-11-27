@@ -28,6 +28,7 @@ origin:
     - specs/llm-catalog/origin/2026-11-19-launch-first-ruling.md
     - specs/llm-catalog/origin/2026-11-23-replan-rulings.md
     - specs/llm-catalog/origin/2026-11-25-s4-rulings.md
+    - specs/llm-catalog/origin/2026-11-26-s3-rulings.md
   origin_claim: |
     Configure multiple named LLM targets once in a user-level catalog
     (providers, endpoints, llms, bindings; credentials as references),
@@ -258,7 +259,10 @@ with its date when its slice starts, never as a silent edit:
    launch, when only the harness version is newer than the one its
    passing record was measured on. Adopting it amends FR-12, FR-13 and
    D7. A changed tuning option or rule version is neither case, so the
-   ruling places those too.
+   ruling places those too. **Settled 2026-11-26 by the owner: the
+   milder rule, with a changed tuning option or rule version refusing
+   as `unverified`** (`origin/2026-11-26-s3-rulings.md`). FR-12, FR-13,
+   FR-19 and D7 carry the amendment.
 2. **The release that ships these slices.** Six source files (the
    `claude-code` launcher and its `harness-stamp.sh` hook, `pi-code`,
    `home.ts`, `cct-home.sh`, `home.py`), `docs/cct-home.md` and the

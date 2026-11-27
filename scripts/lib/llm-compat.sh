@@ -11,7 +11,11 @@
 #                 or the harness is not installed or older than the table's
 #                 minimum
 #   supported     the latest conclusive record passed every capability the
-#                 binding requires, under the current evidence digest
+#                 binding requires, under the current evidence digest, or
+#                 under evidence that differs only in an older harness
+#                 version (the owner's ruling of 2026-11-26, FR-13's
+#                 amendment): LCM_TESTED_ON then names that version, and a
+#                 launch says so
 #   incompatible  the latest conclusive record failed, under the current
 #                 evidence digest
 #   unverified    otherwise: never tested, or tested under other evidence
@@ -36,18 +40,23 @@ LCM_RECORDS_REL="llm-compat"
 LCM_RECORD_SCHEMA_VERSION=1
 LCM_RULES=""
 
-# The shape of one attempt, as jq: what latest_attempt and latest_conclusive hold.
+# The shape of one attempt, as jq: what latest_attempt and latest_conclusive
+# hold. An attempt whose credential was refused is `unavailable` evidence,
+# never conclusive (FR-13); `redacted` is the reply or error the probe saw,
+# with the credential, the probe directory and the home directory taken out
+# (FR-16).
 LCM_ATTEMPT_JQ='
   def hex64: type == "string" and test("^[0-9a-f]{64}$");
   type == "object"
   and (.at | type == "string")
-  and (.outcome | IN("pass", "fail", "unverifiable"))
+  and (.outcome | IN("pass", "fail", "unverifiable", "unavailable"))
   and (.matrix | type == "object"
        and all(to_entries[]; .value | IN("pass", "fail", "unverifiable", "not_applicable")))
   and (.evidence | type == "object"
        and (.digest | hex64) and (.launch_identity | hex64) and (.options | hex64)
        and (.harness_version | type == "string") and (.rule_version | type == "number"))
-  and ((.detail // "") | type == "string")'
+  and ((.detail // "") | type == "string")
+  and ((.redacted // "") | type == "string")'
 
 lcm_load_rules() {  # -> LCM_RULES; 2 with LCM_ERR when the table is unusable
     [[ -n "$LCM_RULES" ]] && return 0
@@ -261,16 +270,17 @@ lcm_evidence() {
 }
 
 # lcm_state <harness> <target>: LCM_STATE, LCM_REASON, LCM_DEGRADED (a JSON
-# array: what changed since the latest conclusive record), LCM_EVIDENCE
-# (the current evidence as JSON, or null when the harness is not
-# installed) and LCM_RECORD; the resolver's LR_* stay set.
+# array: what changed since the latest conclusive record), LCM_TESTED_ON
+# (the older harness version a supported target passed on, or empty),
+# LCM_EVIDENCE (the current evidence as JSON, or null when the harness is
+# not installed) and LCM_RECORD; the resolver's LR_* stay set.
 # Returns 0; 1 when the target does not resolve or its evidence cannot be
 # computed (LCM_ERR says why); 2 when
 # the rule table or the record is unusable (LCM_ERR names it; the state is
 # still computed, without the record).
 lcm_state() {
-    local h="$1" conclusive outcome at changed failed missing c min
-    LCM_STATE="" LCM_REASON="" LCM_DEGRADED="[]" LCM_EVIDENCE="null" LCM_RECORD="" LCM_ERR="" LCM_EXE=""
+    local h="$1" conclusive outcome at changed failed missing c min tested
+    LCM_STATE="" LCM_REASON="" LCM_DEGRADED="[]" LCM_TESTED_ON="" LCM_EVIDENCE="null" LCM_RECORD="" LCM_ERR="" LCM_EXE=""
     lcm_load_rules || return 2
     # A target the caller has just resolved is not resolved again, so its
     # digests stay computed: a launch computes them once (S4). LR_BINDING
@@ -313,8 +323,9 @@ lcm_state() {
         LCM_STATE="unverified"
         outcome=$(jq -r '.latest_attempt.outcome // empty' <<< "${LCM_RECORD:-null}")
         at=$(jq -r '.latest_attempt.at // empty' <<< "${LCM_RECORD:-null}")
+        failed=$(jq -r '.latest_attempt.detail // empty' <<< "${LCM_RECORD:-null}")
         if [[ -n "$outcome" ]]; then
-            LCM_REASON="never tested conclusively: the last test, $at, was $outcome"
+            LCM_REASON="never tested conclusively: the last test, $at, was $outcome${failed:+ ($failed)}"
         else
             LCM_REASON="never tested"
         fi
@@ -323,11 +334,21 @@ lcm_state() {
     outcome=$(jq -r '.outcome' <<< "$conclusive")
     at=$(jq -r '.at' <<< "$conclusive")
     if [[ "$(jq -r '.evidence.digest' <<< "$conclusive")" != "$(jq -r '.digest' <<< "$LCM_EVIDENCE")" ]]; then
-        LCM_STATE="unverified"
         LCM_DEGRADED=$(_lcm_changed "$(jq -c '.evidence' <<< "$conclusive")" "$LCM_EVIDENCE")
         changed=$(_lcm_changed_text "$(jq -c '.evidence' <<< "$conclusive")" "$LCM_EVIDENCE")
-        LCM_REASON="the test of $at ($outcome) no longer applies: ${changed:-its evidence differs}"
-        return 0
+        tested=$(jq -r '.evidence.harness_version' <<< "$conclusive")
+        # The owner's ruling of 2026-11-26 (FR-13's amendment): a pass whose
+        # evidence differs only in a newer harness still stands, and a launch
+        # says so. Any other difference, a failed record, an older harness or
+        # a version that cannot be compared leaves it unverified.
+        if [[ "$outcome" == "pass" && "$LCM_DEGRADED" == '["harness_version"]' \
+              && "$tested" != "unknown" && "$LCM_HV" != "unknown" ]] && _lcm_version_lt "$tested" "$LCM_HV"; then
+            LCM_TESTED_ON="$tested"
+        else
+            LCM_STATE="unverified"
+            LCM_REASON="the test of $at ($outcome) no longer applies: ${changed:-its evidence differs}"
+            return 0
+        fi
     fi
     if [[ "$outcome" == "fail" ]]; then
         failed=$(jq -r '[.matrix | to_entries[] | select(.value == "fail") | .key] | join(", ")' <<< "$conclusive")
@@ -349,6 +370,10 @@ lcm_state() {
         return 0
     fi
     LCM_STATE="supported"
-    LCM_REASON="passed its test of $at"
+    if [[ -n "$LCM_TESTED_ON" ]]; then
+        LCM_REASON="passed its test of $at on $LCM_EXE $LCM_TESTED_ON; $LCM_EXE is now $LCM_HV, which has not been tested"
+    else
+        LCM_REASON="passed its test of $at"
+    fi
     return 0
 }

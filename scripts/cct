@@ -103,6 +103,9 @@ COMMANDS
                     cct llm sessions [--harness <h>] [--project <dir>]
                                                  the --llm sessions: target, model,
                                                  state, project, whether each resumes
+                    cct llm test <target>        run the harness on the target once and
+                                                 record what each capability did; a
+                                                 --llm launch needs a passing test
                   Each takes --json.
   harness         What a harness launch would do, before it runs:
                     cct harness explain <harness> --llm <target> [--project <dir>] [--json]
