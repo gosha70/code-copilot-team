@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .. import constants as C
-from ..config import NoiseConfig
+from ..config import NoiseConfig, load_config
 from ..feedback import current_feedback, fold_by_target
 from ..relational.db import Database
 from ..session_filter import keep_clause, noise_clause
@@ -60,6 +60,24 @@ _COST_COVERAGE_COLS = (
 )
 _SESSION_SELECT_COLS = f"{_SESSION_COLS}, {_COST_ROLLUP_SQL}, {_TAG_SELECT_COLS}, {_COST_COVERAGE_COLS}"
 
+
+def _idle_cutoff() -> int:
+    return int(load_config().idle_cutoff_seconds)
+
+
+def _active_value(column: str, cutoff: int) -> str:
+    return (
+        f"(SELECT a.{column} FROM {C.TBL_SESSION_ACTIVITY} a "
+        f"WHERE a.session_id = copilot_session.id AND a.idle_cutoff_seconds = {int(cutoff)})"
+    )
+
+
+def _session_select_cols(cutoff: int) -> str:
+    return (
+        f"{_SESSION_SELECT_COLS}, {_active_value('active_seconds', cutoff)} AS active_seconds, "
+        f"{_active_value('idle_cutoff_seconds', cutoff)} AS active_cutoff_seconds"
+    )
+
 #: Columns the sessions list can be ordered by — the CLOSED map from the
 #: API's `sort` value to SQL, so a caller never names a column directly.
 #: `cost_usd` is the rollup alias, so it sorts what the page shows.
@@ -77,6 +95,7 @@ SESSION_SORT_COLUMNS: dict[str, str] = {
     "error_count": "error_count",
     "cost_usd": _COST_ROLLUP_SQL.split(" AS ")[0],
     "duration_seconds": "duration_seconds",
+    "active_seconds": "active_seconds",
     "favorite": _FAVORITE_EXPR,
     "todo": _TODO_EXPR,
     "analyzed": _ANALYZED_EXPR,
@@ -101,12 +120,18 @@ class UnknownTagError(ValueError):
 
 
 def _session_dict(row, *, has_cost: bool = True) -> dict[str, Any]:
-    """``has_cost`` = the row came from _SESSION_SELECT_COLS (cost rollup
-    + the three tags); False = the bare _SESSION_COLS."""
+    """``has_cost`` = the row came from _session_select_cols (cost rollup,
+    the three tags, active time at the configured cutoff); False = the bare
+    _SESSION_COLS."""
     keys = [c.strip() for c in _SESSION_COLS.split(",")]
     if has_cost:
-        keys = keys + ["cost_usd", "favorite", "todo", "analyzed_kinds", "priced_turns", "priceable_turns"]
+        keys = keys + [
+            "cost_usd", "favorite", "todo", "analyzed_kinds", "priced_turns", "priceable_turns",
+            "active_seconds", "active_cutoff_seconds",
+        ]
     d = dict(zip(keys, row))
+    if d.get("active_seconds") is not None:
+        d["active_seconds"] = float(d["active_seconds"])
     if d.get("cost_usd") is not None:
         d["cost_usd"] = float(d["cost_usd"])
     # SQLite hands a BOOLEAN back as 0/1; NULL stays None (unstamped).
@@ -211,6 +236,9 @@ def search_sessions(
         raise UnknownSortError(
             f"cannot sort sessions by {sort!r}; one of: {', '.join(SESSION_SORT_COLUMNS)}"
         )
+    cutoff = _idle_cutoff()
+    if sort == "active_seconds":
+        column = _active_value("active_seconds", cutoff)
     where, params = _session_filters(
         query, copilot, date_from, date_to,
         tag=tag, developer=developer, model=model, tool=tool,
@@ -225,7 +253,7 @@ def search_sessions(
     # started_at breaks ties so the order is stable between polls.
     direction = "DESC" if descending else "ASC"
     rows = db.query(
-        f"SELECT {_SESSION_SELECT_COLS} FROM copilot_session{where_sql} "
+        f"SELECT {_session_select_cols(cutoff)} FROM copilot_session{where_sql} "
         f"ORDER BY ({column} IS NULL), {column} {direction}, started_at DESC, id DESC "
         f"LIMIT {int(limit)} OFFSET {max(0, int(offset))}",
         tuple(params),
@@ -552,12 +580,20 @@ def archived_modes(db: Database, session_id: int) -> dict[int, Optional[str]]:
 
 def get_session_details(db: Database, session_id: int) -> dict[str, Any]:
     """Full turn/tool/error breakdown for one session."""
+    cutoff = _idle_cutoff()
     srow = db.query_one(
-        f"SELECT {_SESSION_SELECT_COLS} FROM copilot_session WHERE id = ?", (session_id,)
+        f"SELECT {_session_select_cols(cutoff)} FROM copilot_session WHERE id = ?", (session_id,)
     )
     if srow is None:
         return {"error": f"session {session_id} not found"}
     session = _session_dict(srow)
+    activity = db.query_one(
+        f"SELECT gaps_measured, gaps_unstamped FROM {C.TBL_SESSION_ACTIVITY} "
+        "WHERE session_id = ? AND idle_cutoff_seconds = ?",
+        (session_id, cutoff),
+    )
+    session["active_gaps_measured"] = int(activity[0]) if activity else None
+    session["active_gaps_unstamped"] = int(activity[1]) if activity else None
 
     turns = db.query(
         f"""

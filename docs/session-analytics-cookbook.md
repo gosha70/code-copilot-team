@@ -279,6 +279,19 @@ default 900, i.e. 15 minutes); rows are kept per cutoff, so changing it
 fills the new cutoff on the next open, again without a re-ingest.
 `duration_seconds` keeps its meaning, and the noise rule still reads it.
 
+The figure is read at the configured cutoff, never recomputed, and shown
+beside wall clock, never in place of it. The session header has an Active
+time tile that says which cutoff it used and how many gaps it measured and
+skipped for a missing timestamp; the Sessions list has a sortable Active
+column next to Duration; the Overview has Avg active time, averaged over
+the sessions that have a figure. In the API, a session carries
+`active_seconds` and `active_cutoff_seconds` (the session page adds
+`active_gaps_measured` and `active_gaps_unstamped`), and the Overview
+totals carry `avg_active_seconds` and `active_cutoff_seconds`. The judge's
+session facts name both figures. A session with no row at the configured
+cutoff, because the cutoff changed since the store was last opened, reads
+`null` and shows as unknown, never as 0.
+
 To see where a cutoff falls on your own store:
 
 ```bash

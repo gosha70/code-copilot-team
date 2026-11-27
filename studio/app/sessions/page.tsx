@@ -7,7 +7,8 @@ import { SessionFilters, SessionSort, SessionTagsInfo, api } from "@/lib/api";
 import { filtersFromParams, paramsFromFilters } from "@/lib/filterView";
 import SessionFiltersBar from "@/components/SessionFilters";
 import SessionTagIcons, { HandTag, TAG_LABEL, TagHeaderIcon } from "@/components/SessionTags";
-import { Card, ErrorNote, Loading, Pager, formatCost, useApi } from "@/components/ui";
+import { Card, ErrorNote, Loading, Pager, formatCost, formatDuration, useApi } from "@/components/ui";
+import { DURATION_BASIS, activeBasis, activeValue } from "@/components/SessionHeader";
 
 const REFRESH_MS = 15000;
 
@@ -50,6 +51,7 @@ function Sessions() {
     [listKey, offset],
     REFRESH_MS
   );
+  const activeCutoff = data?.sessions.find((s) => s.active_cutoff_seconds != null)?.active_cutoff_seconds ?? null;
   // The list can shrink under the reader (a refresh, a re-ingest); a
   // page past the end goes back to the last one that has rows.
   useEffect(() => {
@@ -167,6 +169,8 @@ function Sessions() {
                 <Th column="tool_call_count" className="text-right pr-3">Tools</Th>
                 <Th column="error_count" className="text-right pr-3">Errors</Th>
                 <Th column="cost_usd" className="text-right pr-3" label="priced cost">Priced cost</Th>
+                <Th column="duration_seconds" className="text-right pr-3" label={`duration (${DURATION_BASIS})`}>Duration</Th>
+                <Th column="active_seconds" className="text-right pr-3" label={`active time (${activeBasis(activeCutoff)})`}>Active</Th>
                 <Th column="started_at" className="pl-3">Started</Th>
               </tr>
             </thead>
@@ -201,12 +205,14 @@ function Sessions() {
                   <td className="text-right tabular-nums pr-3">{s.tool_call_count}</td>
                   <td className="text-right tabular-nums pr-3">{s.error_count}</td>
                   <td className="text-right tabular-nums pr-3">{formatCost(s.cost_usd)}</td>
+                  <td className="text-right tabular-nums pr-3">{formatDuration(s.duration_seconds)}</td>
+                  <td className="text-right tabular-nums pr-3">{activeValue(s.active_seconds)}</td>
                   <td className="text-slate-500 pl-3">{(s.started_at || "").slice(0, 19)}</td>
                 </tr>
               ))}
               {data.sessions.length === 0 && (
                 <tr>
-                  <td colSpan={12} className="py-6 text-center text-slate-500">
+                  <td colSpan={14} className="py-6 text-center text-slate-500">
                     {data.excluded_noise > 0
                       ? `No sessions worth showing — ${data.excluded_noise.toLocaleString()} excluded as noise (toggle above).`
                       : "No sessions. Run the Analysis page's Load sessions step."}

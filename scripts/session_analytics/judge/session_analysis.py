@@ -451,25 +451,29 @@ def render_project(ctx: ProjectContext) -> str:
 
 def session_facts(db: Database, session_id: int, transcript: Transcript) -> str:
     """The numbers the judge should not have to infer from the text."""
+    cutoff = int(load_config().idle_cutoff_seconds)
     row = db.query_one(
         "SELECT copilot, model, project_path, turn_count, tool_call_count, "
         "error_count, duration_seconds, cli_version, cct_version, cct_sha, "
         "instructions_digest, providers_digest, harness_mixed, "
-        "(SELECT SUM(cost_usd) FROM copilot_turn WHERE session_id = copilot_session.id) "
+        "(SELECT SUM(cost_usd) FROM copilot_turn WHERE session_id = copilot_session.id), "
+        f"(SELECT a.active_seconds FROM {C.TBL_SESSION_ACTIVITY} a "
+        "WHERE a.session_id = copilot_session.id AND a.idle_cutoff_seconds = ?) "
         "FROM copilot_session WHERE id = ?",
-        (session_id,),
+        (cutoff, session_id),
     )
     if row is None:
         return ""
     (
         copilot, model, project, turns, tools, errors, duration,
         cli_version, cct_version, cct_sha, instructions_digest,
-        providers_digest, harness_mixed, cost,
+        providers_digest, harness_mixed, cost, active,
     ) = row
     lines = [
         f"copilot: {copilot}; model: {model or 'unknown'}; project: {project}",
         f"turns: {turns}; tool calls: {tools}; errors: {errors}; "
-        f"duration (wall clock, first entry to last): {_fmt_duration(duration)}; cost: "
+        f"duration (wall clock, first entry to last): {_fmt_duration(duration)}; "
+        f"active time (each gap capped at {_fmt_cutoff(cutoff)}): {_fmt_duration(active)}; cost: "
         + (f"${float(cost):.2f}" if cost is not None else "not priced"),
     ]
     # The harness the session ran under (#371 A4): stamped by the copilot
@@ -513,6 +517,10 @@ def session_facts(db: Database, session_id: int, transcript: Transcript) -> str:
         + ("; TRUNCATED to fit" if transcript.truncated else "")
     )
     return "\n".join(lines)
+
+
+def _fmt_cutoff(seconds: int) -> str:
+    return f"{seconds // 60} min" if seconds % 60 == 0 else f"{seconds}s"
 
 
 def _fmt_duration(seconds: Any) -> str:

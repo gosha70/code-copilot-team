@@ -141,6 +141,10 @@ export interface DashboardKpis {
     tool_calls: number;
     errors: number;
     avg_duration_seconds: number;
+    /** Averaged over the sessions with a figure at the configured idle
+     *  cutoff; null when none has one. */
+    avg_active_seconds?: number | null;
+    active_cutoff_seconds?: number;
     total_cost_usd: number;
     cost_per_session: number;
     priced_sessions: number;
@@ -183,6 +187,7 @@ export type SessionSort =
   | "error_count"
   | "cost_usd"
   | "duration_seconds"
+  | "active_seconds"
   | "favorite"
   | "todo"
   | "analyzed";
@@ -576,6 +581,10 @@ export interface SessionRow {
   started_at: string | null;
   ended_at?: string | null;
   duration_seconds?: number | null;
+  /** Each gap between turns capped at the idle cutoff, summed; null when
+   *  no figure is stored at the configured cutoff (never 0 for unknown). */
+  active_seconds?: number | null;
+  active_cutoff_seconds?: number | null;
   cost_usd: number | null;
   /** The harness stamp (#371 A4): captured at SessionStart, joined at
    *  ingest. All five null = unstamped; `harness_mixed` null when
@@ -679,6 +688,10 @@ export interface SessionLatency {
 }
 
 export interface SessionDetail extends SessionRow {
+  /** What the active-time figure rests on: gaps measured, and gaps skipped
+   *  because a turn had no timestamp. Null with no stored figure. */
+  active_gaps_measured?: number | null;
+  active_gaps_unstamped?: number | null;
   turns: TurnRow[];
   /** Current session-level feedback (#371 A3). */
   feedback: FeedbackRow[];

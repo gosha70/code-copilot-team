@@ -1576,7 +1576,9 @@ Schema 12 is additive: four new tables and an index on
 A session's duration is wall clock. Its active time sums the gaps between
 consecutive turns, each capped at an idle cutoff
 (`sessions.idle_cutoff_seconds`, default 900), and is stored per session in
-`session_activity`. `gaps` shows where a cutoff falls on your own store; the
+`session_activity`. Harness Studio shows it beside wall clock on the session
+page, the Sessions list and the Overview, and the judge's session facts name
+both. `gaps` shows where a cutoff falls on your own store; the
 [cookbook](../../docs/session-analytics-cookbook.md), §5.4, has the detail.
 
 Schema 13 is additive: one new table, `session_activity`. It is created in

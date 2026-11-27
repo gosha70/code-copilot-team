@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from .. import constants as C
-from ..config import NoiseConfig
+from ..config import NoiseConfig, load_config
 from ..relational.db import Database
 from ..session_filter import keep_clause, noise_clause
 
@@ -35,6 +35,13 @@ def kpis(db: Database, noise: Optional[NoiseConfig] = None) -> dict[str, Any]:
         """,
         keep_params,
     ) or (0, 0, 0, 0, 0)
+    cutoff = int(load_config().idle_cutoff_seconds)
+    active = db.query_one(
+        f"SELECT AVG(a.active_seconds) FROM copilot_session s "
+        f"JOIN {C.TBL_SESSION_ACTIVITY} a ON a.session_id = s.id AND a.idle_cutoff_seconds = ? "
+        f"WHERE {keep_sql}",
+        (cutoff, *keep_params),
+    ) or (None,)
     excluded = db.query_one(
         f"SELECT COUNT(*) FROM copilot_session s WHERE {noise_sql}", noise_params
     ) or (0,)
@@ -118,6 +125,8 @@ def kpis(db: Database, noise: Optional[NoiseConfig] = None) -> dict[str, Any]:
             "tool_calls": int(totals[2]),
             "errors": int(totals[3]),
             "avg_duration_seconds": float(totals[4] or 0),
+            "avg_active_seconds": float(active[0]) if active[0] is not None else None,
+            "active_cutoff_seconds": cutoff,
             "total_cost_usd": total_cost_usd,
             "cost_per_session": cost_per_session,
             "priced_sessions": priced_sessions,

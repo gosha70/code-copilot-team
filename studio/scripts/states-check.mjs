@@ -789,6 +789,24 @@ try {
   const bare = render(sh.default, { data: { ...detail, project_path: null, model: null, started_at: null, duration_seconds: null }, baseline: null });
   if (!/no project path/.test(bare) || !/too few sessions of this project/.test(bare) || /×/.test(bare)) fail("header without a project/baseline still claims a comparison");
   else console.log("  ok  no project path / no baseline: nothing compared, nothing invented");
+  // ── active time beside wall clock (#422) ───────────────────────────
+  const withActive = render(sh.default, { data: { ...detail, active_seconds: 3840, active_cutoff_seconds: 900, active_gaps_measured: 120, active_gaps_unstamped: 2 }, baseline: null });
+  const noActive = render(sh.default, { data: { ...detail, active_seconds: null, active_cutoff_seconds: null, active_gaps_measured: null, active_gaps_unstamped: null }, baseline: null });
+  const zeroActive = render(sh.default, { data: { ...detail, active_seconds: 0, active_cutoff_seconds: 900, active_gaps_measured: 0, active_gaps_unstamped: 0 }, baseline: null });
+  const activeTile = (html) => html.slice(html.indexOf("Active time") - 200, html.indexOf("Active time") + 200);
+  if (!withActive.includes("Active time") || !withActive.includes("1h 4m")) fail("the header does not show the active-time figure");
+  else if (!withActive.includes("gaps over 15 min capped at 15 min") || !withActive.includes("120 gaps measured, 2 skipped (no timestamp)")) fail("the active-time tile does not say what it rests on");
+  else if (!withActive.includes("wall clock, first entry to last")) fail("the wall-clock note went missing beside active time");
+  else if (!activeTile(noActive).includes(">unknown<") || !activeTile(noActive).includes("not stored at the configured idle cutoff") || noActive.includes("gaps measured")) fail("a session without a figure must say unknown and claim nothing about its gaps");
+  else if (!activeTile(zeroActive).includes(">0s<") || activeTile(zeroActive).includes("unknown")) fail("a zero figure must read 0s, not unknown");
+  else if (sh.cutoffLabel(900) !== "15 min" || sh.cutoffLabel(90) !== "90s" || sh.activeNote(900, 1, 0) !== "gaps over 15 min capped at 15 min · 1 gap measured, 0 skipped (no timestamp)") fail("cutoff wording");
+  else if (sh.activeValue(null) !== "unknown" || sh.activeValue(undefined) !== "unknown" || sh.activeValue(0) !== "0s" || sh.activeValue(3840) !== "1h 4m") fail("activeValue");
+  else console.log("  ok  active time: a figure with its cutoff and gap counts, a missing figure said unknown, a zero figure kept");
+  const listSrc = readFileSync(join(STUDIO, "app/sessions/page.tsx"), "utf8");
+  if (!/label="Avg active time"[\s\S]{0,300}activeBasis\(/.test(overviewSrc)) fail("source: the Overview's Avg active time note is not built from activeBasis (#422)");
+  else if (!/<Th column="active_seconds"[^>]*label=\{`active time \(\$\{activeBasis\(activeCutoff\)\}\)`\}>Active<\/Th>/.test(listSrc)) fail("source: the Sessions list has no sortable Active column with the cutoff in its tooltip (#422)");
+  else if (!/<Th column="duration_seconds"[^>]*DURATION_BASIS/.test(listSrc)) fail("source: the Sessions list Duration column does not state what it measures (#414)");
+  else console.log("  ok  source: the Overview and the Sessions list carry the active-time figure and its cutoff");
   // ── the harness stamp on the header (#371 A4a) ─────────────────────
   const a4hv = await import(pathToFileURL(join(out, "lib/harnessView.js")));
   const a4full = { cli_version: "2.1.0", cct_version: "1.1.0", cct_sha: "a".repeat(40), instructions_digest: "1".repeat(64), providers_digest: null, harness_mixed: false };

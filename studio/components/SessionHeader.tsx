@@ -22,9 +22,42 @@ import { MIXED_NOTE, UNSTAMPED_NOTE, harnessFacts, harnessState } from "@/lib/ha
 /** How a session figure compares with its project. Pure. */
 /** What duration_seconds measures (#414): ended_at − started_at with no
  *  idle cutoff, so a session resumed after a night counts the night. A
- *  reader of the figure must be told that; an active-time figure with a
- *  stated idle cutoff is the 2.1 follow-up. */
+ *  reader of the figure must be told that; active time (#422) is shown
+ *  beside it with its cutoff stated. */
 export const DURATION_BASIS = "wall clock, first entry to last";
+
+export function cutoffLabel(seconds: number): string {
+  return seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds}s`;
+}
+
+/** What an active-time figure counts: every gap between turns, capped at
+ *  the idle cutoff. Says so when the figure is not stored at the cutoff. */
+export function activeBasis(cutoffSeconds: number | null | undefined): string {
+  if (cutoffSeconds == null) return "not stored at the configured idle cutoff";
+  const cutoff = cutoffLabel(cutoffSeconds);
+  return `gaps over ${cutoff} capped at ${cutoff}`;
+}
+
+/** An unknown figure is said, never shown as zero. */
+export function activeValue(seconds: number | null | undefined): string {
+  if (seconds == null) return "unknown";
+  return seconds <= 0 ? "0s" : formatDuration(seconds);
+}
+
+/** The basis plus what the figure rests on, when the page knows it. */
+export function activeNote(
+  cutoffSeconds: number | null | undefined,
+  measured: number | null | undefined,
+  unstamped: number | null | undefined,
+): string {
+  const parts = [activeBasis(cutoffSeconds)];
+  if (cutoffSeconds != null && measured != null && unstamped != null) {
+    parts.push(
+      `${measured.toLocaleString()} ${measured === 1 ? "gap" : "gaps"} measured, ${unstamped.toLocaleString()} skipped (no timestamp)`,
+    );
+  }
+  return parts.join(" · ");
+}
 
 export function versusProject(
   value: number | null | undefined,
@@ -211,7 +244,7 @@ export default function SessionHeader({
           {data.project_path || ""}
         </p>
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         <Stat
           label="Turns"
           value={data.turn_count.toLocaleString()}
@@ -239,6 +272,15 @@ export default function SessionHeader({
           value={formatDuration(data.duration_seconds)}
           note={[DURATION_BASIS, duration.note].filter(Boolean).join(" · ")}
           tone={duration.tone}
+        />
+        <Stat
+          label="Active time"
+          value={activeValue(data.active_seconds)}
+          note={activeNote(
+            data.active_cutoff_seconds,
+            data.active_gaps_measured,
+            data.active_gaps_unstamped,
+          )}
         />
         <Stat
           label="Cost"
