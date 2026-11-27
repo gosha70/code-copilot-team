@@ -8,6 +8,7 @@ The time-out run's watchdog bound is 15s; the others' is 90s. The model-1m run a
 and the gateway's log below shows the model Claude Code sent for it. The allow-bash, hooks-off and safe-mode runs use the
 extra-command switch, and image-allow-bash the image-command switch, with a user settings file in the throwaway home:
 `{"permissions":{"allow":["Bash"]}}` (allow-bash, image-allow-bash), `{"permissions":{"allow":["Bash"]},"disableAllHooks":true}` (hooks-off), `{"permissions":{"allow":["Bash"]},"env":{"CLAUDE_CODE_SAFE_MODE":"1"}}` (safe-mode).
+Hooks are off in the last two, which refuses the test unless `--without-guard` is given, as it is there.
 
 ## The runs
 

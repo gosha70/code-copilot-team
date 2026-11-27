@@ -65,8 +65,9 @@ LP_ALLOWED_TOOLS="Bash($LP_CANARY_COMMAND)"
 # Bash would let more through. So both runs also get a PreToolUse hook,
 # passed with --settings, which Claude Code runs before every tool call
 # whatever those rules allow: it lets the canary's command through and
-# blocks everything else. Whatever turns hooks off turns it off too, and
-# cct llm test warns first of what lp_hooks_off can see.
+# blocks everything else. Whatever turns hooks off turns it off too: a
+# caller refuses on what lp_hooks_off can see, as cct llm test does unless
+# --without-guard asks for an unguarded run.
 LP_GUARD_MESSAGE="cct llm test runs only: $LP_CANARY_COMMAND"
 # Variables that turn Claude Code's hooks off, from a settings file's env
 # block or the environment, as the real binary was seen to.

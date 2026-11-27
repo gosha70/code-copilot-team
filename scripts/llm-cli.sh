@@ -18,10 +18,12 @@
 #                                      written when they started: target,
 #                                      model, state, project, and whether
 #                                      each can be resumed now (#400 S4)
-#   cct llm test <target> [--harness <h>] [--json]
+#   cct llm test <target> [--harness <h>] [--without-guard] [--json]
 #                                      run the harness on the target once,
 #                                      on a canary, and record what each
-#                                      capability did (#400 FR-15, S3)
+#                                      capability did (#400 FR-15, S3);
+#                                      refused when the harness's hooks
+#                                      are off, unless --without-guard
 #   cct harness explain <harness> --llm <target> [--project <dir>] [--json]
 #                                      the launch plan: what a launch from
 #                                      that project (default: here) would
@@ -90,10 +92,13 @@ USAGE
                                     the --llm sessions, stamped when they
                                     started: target, model, state, project,
                                     and whether each can be resumed now
-  cct llm test <target> [--harness <h>] [--json]
+  cct llm test <target> [--harness <h>] [--without-guard] [--json]
                                     run the harness on the target once, on a
                                     canary, and record what each capability
-                                    did; a --llm launch needs a passing test
+                                    did; a --llm launch needs a passing test.
+                                    Refused when the harness's hooks are off,
+                                    since the test's guard is one; then
+                                    --without-guard runs it unguarded
   cct harness explain <harness> --llm <target> [--project <dir>] [--json]
                                     what a launch from that project (default:
                                     here) would set and remove, by name, and
@@ -580,12 +585,27 @@ cmd_sessions() {  # <json> <harness> <project, physical, or empty for all>
 # would refuse (unsupported, unavailable) is refused the same way, and
 # nothing runs. Interrupted, the harness's process group is reaped and the
 # probe's private directory removed.
-cmd_test() {  # <target> <harness> <json>
-    local target="$1" h="$2" json="$3" rc=0 c
+cmd_test() {  # <target> <harness> <json> <without-guard>
+    local target="$1" h="$2" json="$3" without_guard="${4:-0}" rc=0 c
     load_catalog test "$json" || return $?
     if ! lcm_load_rules; then
         if [[ "$json" == 1 ]]; then json_error test "$LCM_ERR"; else echo "cct llm: $LCM_ERR" >&2; fi
         return 2
+    fi
+    # The guard is a Claude Code hook: with hooks off, the endpoint under test
+    # could run whatever the user's permission rules allow, as the real binary
+    # was seen to. That refuses the test, naming the cause, before anything
+    # runs, unless --without-guard asks for an unguarded run.
+    lp_hooks_off
+    if [[ -n "$LP_HOOKS_OFF" && "$without_guard" != 1 ]]; then
+        c="hooks are off for this test ($LP_HOOKS_OFF), and with them the guard that stops the endpoint under test from running anything but this test's command"
+        if [[ "$json" == 1 ]]; then
+            json_error test "refused: $c; turn hooks back on, or pass --without-guard to run it unguarded"
+        else
+            echo "cct llm test: refused: $c." >&2
+            echo "  Turn hooks back on, or pass --without-guard to run the test unguarded." >&2
+        fi
+        return "$EXIT_REFUSED"
     fi
     CA_OWNER_ID="$$"
     if ! CA_ACTIVE_GROUP_FILE=$(mktemp "${TMPDIR:-/tmp}/cct-llm-test-group.XXXXXX"); then
@@ -602,9 +622,8 @@ cmd_test() {  # <target> <harness> <json>
     if [[ -n "${CCT_LLM_PROBE_CMD:-}" ]]; then
         echo "cct llm test: note: CCT_LLM_PROBE_CMD is set, so it runs in place of $LLM_CC_EXECUTABLE, and the run is recorded as unverifiable: it decides nothing." >&2
     fi
-    lp_hooks_off
     if [[ -n "$LP_HOOKS_OFF" ]]; then
-        echo "cct llm test: warning: hooks are off for this test ($LP_HOOKS_OFF), and with them the guard that stops the endpoint under test from running anything but this test's command: your permission rules alone decide what it may run. The test still fails if it asks for more." >&2
+        echo "cct llm test: warning: --without-guard: hooks are off for this test ($LP_HOOKS_OFF), and with them the guard that stops the endpoint under test from running anything but this test's command: your permission rules alone decide what it may run. The test still fails if it asks for more." >&2
     fi
     lp_probe "$h" "$target" || rc=$?
     if [[ "$rc" -ne 0 ]]; then
@@ -711,20 +730,21 @@ case "$cmd" in
         cmd_sessions "$JSON" "$h" "$p"
         ;;
     test)
-        t="" h="$LLM_CC_HARNESS"
+        t="" h="$LLM_CC_HARNESS" wg=0
         while [[ $# -gt 0 ]]; do
             case "$1" in
                 --harness)   h="${2:-}"; [[ -n "$h" ]] || usage_error test "cct llm test: --harness needs a harness"; shift 2 ;;
                 --harness=*) h="${1#*=}"; [[ -n "$h" ]] || usage_error test "cct llm test: --harness needs a harness"; shift ;;
+                --without-guard) wg=1; shift ;;
                 -*)          usage_error test "cct llm test: unknown option '$1'" ;;
                 *)           if [[ -z "$t" ]]; then t="$1"; shift; else usage_error test "cct llm test: one target"; fi ;;
             esac
         done
-        [[ -n "$t" ]] || usage_error test "usage: cct llm test <target> [--harness <h>] [--json]"
+        [[ -n "$t" ]] || usage_error test "usage: cct llm test <target> [--harness <h>] [--without-guard] [--json]"
         if [[ " $LC_HARNESSES " != *" $h "* ]]; then
             usage_error test "cct llm test: unknown harness '$h' (one of: ${LC_HARNESSES// /, })"
         fi
-        cmd_test "$t" "$h" "$JSON"
+        cmd_test "$t" "$h" "$JSON" "$wg"
         ;;
     harness)
         # `cct harness explain <harness> --llm <target>`, dispatched here by scripts/cct.

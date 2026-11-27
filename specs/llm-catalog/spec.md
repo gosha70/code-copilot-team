@@ -643,8 +643,10 @@ catalog.sh` and `tests/test-llm-launch.sh`.
     It held against `allow: ["Bash"]`, `defaultMode: bypassPermissions`
     and an approving user hook. `disableAllHooks` in the user's settings
     file, and `CLAUDE_CODE_SIMPLE` or `CLAUDE_CODE_SAFE_MODE` in its env
-    block or the environment, turn it off, and `cct llm test` warns of
-    them before the run; managed settings are not read. The hook is an
+    block or the environment, turn it off, and `cct llm test` then
+    refuses before anything runs, naming the cause; `--without-guard`
+    runs it unguarded, with a warning (the owner's ruling of 2026-11-27).
+    Managed settings are not read. The hook is an
     inline command, since one that cannot run lets the call through. Every built-in tool is still offered, so the request
     is a launch's: the owner chose that over `--tools Bash` on 2026-11-27
     (`origin/2026-11-26-s3-rulings.md`). A settings

@@ -70,10 +70,11 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   is kept. The endpoint under test answers as the model, so Claude Code
   may run only the test's own script: a hook blocks any other tool call,
   whatever your permission rules allow, and the test fails if the endpoint
-  asks for one. The test warns first when your settings turn hooks off
-  (`disableAllHooks`), or `CLAUDE_CODE_SIMPLE` or `CLAUDE_CODE_SAFE_MODE`
-  is set. A Claude Code launch with `--llm`, or a resume that restores a
-  session's target, now goes ahead only on a target whose test passed.
+  asks for one. The test refuses, naming the cause, when your settings
+  turn hooks off (`disableAllHooks`), or `CLAUDE_CODE_SIMPLE` or
+  `CLAUDE_CODE_SAFE_MODE` is set; `--without-guard` runs it anyway,
+  unguarded. A Claude Code launch with `--llm`, or a resume that restores
+  a session's target, now goes ahead only on a target whose test passed.
   `--allow-unverified` launches an untested target, with a notice that the
   session's stamp records, and never an incompatible one, whose latest
   test failed with nothing changed since. A test that passed on an older

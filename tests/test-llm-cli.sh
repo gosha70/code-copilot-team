@@ -647,20 +647,28 @@ ptest "$GI_HOME" CLAUDE_CONFIG_DIR="$TMP/guard-allow" -- llm test pm --json
 gateway_stop
 assert_eq "test: ...in the image run too: a command the endpoint asks for there never runs, and fails tool_call" "1|fail|fail|pass|absent|1" \
     "$RC|$(jq -r .outcome <<< "$OUT")|$(jq -r .matrix.tool_call <<< "$OUT")|$(jq -r .matrix.image_input <<< "$OUT")|$([[ -e "$TMP/extra-ran-image.txt" ]] && echo present || echo absent)|$(jq -r .detail <<< "$OUT" | grep -c "asked for more than the canary's command, and claude refused it")"
+gateway "$TMP/gw-guard-refused.jsonl" --switch extra-command --extra-file "$TMP/extra-ran-refused.txt"
+GR_HOME=$(probe_home probe-guard-refused "$GW_PORT")
+ptest "$GR_HOME" CLAUDE_CONFIG_DIR="$TMP/guard-off" -- llm test pm
+GR_TEXT="$OUT" GR_RC="$RC"
+ptest "$GR_HOME" CLAUDE_CONFIG_DIR="$TMP/guard-off" -- llm test pm --json
+gateway_stop
+assert_eq "test: settings that turn hooks off refuse the test, naming the cause and --without-guard, with nothing run or recorded" "3|1|1|3|test|1|0|absent|absent" \
+    "$GR_RC|$(grep -c "refused: hooks are off for this test (.*sets disableAllHooks)" <<< "$GR_TEXT")|$(grep -c 'pass --without-guard to run the test unguarded' <<< "$GR_TEXT")|$RC|$(jq -r .command <<< "$OUT")|$(jq -r .error <<< "$OUT" | grep -c 'pass --without-guard')|$(cat "$TMP/gw-guard-refused.jsonl" 2>/dev/null | wc -l | tr -d ' ')|$([[ -e "$TMP/extra-ran-refused.txt" ]] && echo present || echo absent)|$([[ -e "$GR_HOME/llm-compat/claude-code/pm@pt.json" ]] && echo present || echo absent)"
 gateway "$TMP/gw-guard-off.jsonl" --switch extra-command --extra-file "$TMP/extra-ran-off.txt"
 GO_HOME=$(probe_home probe-guard-off "$GW_PORT")
-ptest "$GO_HOME" CLAUDE_CONFIG_DIR="$TMP/guard-off" -- llm test pm
+ptest "$GO_HOME" CLAUDE_CONFIG_DIR="$TMP/guard-off" -- llm test pm --without-guard
 gateway_stop
-assert_eq "test: settings that turn hooks off are warned of before the run; the appended command then runs, as on the real binary, and the run still fails" "1|before|present|1|1" \
-    "$RC|$(awk '/warning: hooks are off for this test \(.*sets disableAllHooks/ { w = NR } /^Outcome:/ { o = NR } END { print (w && o && w < o) ? "before" : "not before" }' <<< "$OUT")|$([[ -e "$TMP/extra-ran-off.txt" ]] && echo present || echo absent)|$(grep -c '^Outcome: fail: failed: tool_call' <<< "$OUT")|$(grep -c "asked for more than the canary's command, and claude ran it: hooks were off for this test" <<< "$OUT")"
+assert_eq "test: ...--without-guard runs it, warned of before the run; the appended command then runs, as on the real binary, and the run still fails" "1|before|present|1|1" \
+    "$RC|$(awk '/warning: --without-guard: hooks are off for this test \(.*sets disableAllHooks/ { w = NR } /^Outcome:/ { o = NR } END { print (w && o && w < o) ? "before" : "not before" }' <<< "$OUT")|$([[ -e "$TMP/extra-ran-off.txt" ]] && echo present || echo absent)|$(grep -c '^Outcome: fail: failed: tool_call' <<< "$OUT")|$(grep -c "asked for more than the canary's command, and claude ran it: hooks were off for this test" <<< "$OUT")"
 gateway "$TMP/gw-guard-modes.jsonl"
 GM_HOME=$(probe_home probe-guard-modes "$GW_PORT")
 ptest "$GM_HOME" CLAUDE_CONFIG_DIR="$TMP/guard-safe" -- llm test pm
-GM_SAFE="$OUT"
+GM_SAFE="$OUT" GM_SAFE_RC="$RC"
 ptest "$GM_HOME" CLAUDE_CODE_SIMPLE=1 -- llm test pm
 gateway_stop
-assert_eq "test: ...as are CLAUDE_CODE_SAFE_MODE in a settings file's env block and CLAUDE_CODE_SIMPLE in the environment, which turn hooks off too" "1|1" \
-    "$(grep -c 'warning: hooks are off for this test (.*sets CLAUDE_CODE_SAFE_MODE in its env block' <<< "$GM_SAFE")|$(grep -c 'warning: hooks are off for this test (CLAUDE_CODE_SIMPLE is set in this environment)' <<< "$OUT")"
+assert_eq "test: ...as do CLAUDE_CODE_SAFE_MODE in a settings file's env block and CLAUDE_CODE_SIMPLE in the environment, which turn hooks off too, each named" "3|1|3|1" \
+    "$GM_SAFE_RC|$(grep -c 'refused: hooks are off for this test (.*sets CLAUDE_CODE_SAFE_MODE in its env block)' <<< "$GM_SAFE")|$RC|$(grep -c 'refused: hooks are off for this test (CLAUDE_CODE_SIMPLE is set in this environment)' <<< "$OUT")"
 # CCT_LLM_PROBE_CMD replaces the harness: said, recorded, never conclusive.
 gateway "$TMP/gw-seam.jsonl"
 SE_HOME=$(probe_home probe-seam "$GW_PORT")
@@ -747,7 +755,7 @@ ptest "$P_HOME" TEST_LLM_KEY= -- llm test pm
 assert_eq "test: an unavailable target (its credential unset) is refused too" "3|1" \
     "$RC|$(grep -c 'refused: unavailable: credential variable TEST_LLM_KEY is not set' <<< "$OUT")"
 ptest "$P_HOME" -- llm test --json; ERR_TEST_USAGE="$OUT"
-assert_eq "test: no target is a usage error" "2|test|usage: cct llm test <target> [--harness <h>] [--json]" \
+assert_eq "test: no target is a usage error" "2|test|usage: cct llm test <target> [--harness <h>] [--without-guard] [--json]" \
     "$RC|$(jq -r .command <<< "$OUT")|$(jq -r .error <<< "$OUT")"
 ptest "$P_HOME" -- llm test pm --bogus
 assert_eq "test: an unknown option is a usage error" "2|cct llm test: unknown option '--bogus'" "$RC|$OUT"

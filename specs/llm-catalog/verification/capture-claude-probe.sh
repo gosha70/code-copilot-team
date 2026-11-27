@@ -53,8 +53,9 @@ ln -s "$CLAUDE" "$W/bin/claude"
 VERSION="$("$W/bin/claude" --version 2>/dev/null | head -1)"
 BASE_PATH="$W/bin:$(dirname "$(command -v jq)"):/usr/bin:/bin:/usr/sbin:/sbin"
 
-run_case() {  # <name> [<switch>] [<model>] [<user settings>]: one run; prints the case's record line
-  local name="$1" sw="${2:-}" model="${3:-probe-model}" settings="${4:-}" h="$W/$1" args=() limit="$LIMIT"
+run_case() {  # <name> [<switch>] [<model>] [<user settings>] [<cct llm test option>]: one run; prints the case's record line
+  local name="$1" sw="${2:-}" model="${3:-probe-model}" settings="${4:-}" opt="${5:-}" h="$W/$1" args=() opts=() limit="$LIMIT"
+  [[ -n "$opt" ]] && opts=("$opt")
   mkdir -p "$h/home/.cct" "$h/tmp"
   if [[ -n "$settings" ]]; then mkdir -p "$h/home/.claude"; printf '%s\n' "$settings" > "$h/home/.claude/settings.json"; fi
   [[ -n "$sw" ]] && args=(--switch "$sw")
@@ -91,14 +92,14 @@ max_output_tokens = 1000
 EOF
   (cd "$h" && env -i HOME="$h/home" PATH="$BASE_PATH" TERM=dumb LANG=en_US.UTF-8 TMPDIR="$h/tmp" \
       TEST_LLM_KEY=probe-planted-credential DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
-      CCT_LLM_PROBE_TIMEOUT_SEC="$limit" bash "$CCT" llm test pm --json > "$h/out.json" 2> "$h/err.txt")
+      CCT_LLM_PROBE_TIMEOUT_SEC="$limit" bash "$CCT" llm test pm --json ${opts[@]+"${opts[@]}"} > "$h/out.json" 2> "$h/err.txt")
   echo "$?" > "$h/rc"
   kill "$GW_PID" 2>/dev/null; wait "$GW_PID" 2>/dev/null; GW_PID=""
   local extra=""
   if [[ "$sw" == extra-command || "$sw" == image-command ]]; then
     if [[ -e "$h/extra-ran.txt" ]]; then extra="; the endpoint's own command RAN"; else extra="; the endpoint's own command did not run"; fi
   fi
-  if grep -q 'warning: hooks are off for this test' "$h/err.txt" 2>/dev/null; then extra="$extra; warned before the run that hooks are off"; fi
+  if grep -q 'warning: --without-guard: hooks are off for this test' "$h/err.txt" 2>/dev/null; then extra="$extra; warned before the run that hooks are off"; fi
   jq -r --arg n "$name" --arg sw "${sw:-none}" --arg rc "$(cat "$h/rc")" --arg extra "$extra" '
     "| \($n) | \($sw) | \($rc) | \(.outcome // "-") | \(.state // "-") | \([.matrix // {} | to_entries[] | select(.value != "pass") | "\(.key): \(.value)"] | join(", ") | if . == "" then "every capability passed" else . end)\($extra) |"' "$h/out.json" 2>/dev/null \
     || echo "| $name | ${sw:-none} | $(cat "$h/rc") | - | - | no JSON: $(head -c 200 "$h/err.txt" | tr '\n' ' ') |"
@@ -133,8 +134,8 @@ for c in $CASES; do
     model-1m)   LINES="$LINES$(run_case model-1m "" "probe-model[1m]")"$'\n' ;;
     allow-bash) LINES="$LINES$(run_case allow-bash extra-command "" "$ALLOW_ALL_BASH")"$'\n' ;;
     image-allow-bash) LINES="$LINES$(run_case image-allow-bash image-command "" "$ALLOW_ALL_BASH")"$'\n' ;;
-    hooks-off)  LINES="$LINES$(run_case hooks-off extra-command "" "$HOOKS_OFF")"$'\n' ;;
-    safe-mode)  LINES="$LINES$(run_case safe-mode extra-command "" "$SAFE_MODE")"$'\n' ;;
+    hooks-off)  LINES="$LINES$(run_case hooks-off extra-command "" "$HOOKS_OFF" --without-guard)"$'\n' ;;
+    safe-mode)  LINES="$LINES$(run_case safe-mode extra-command "" "$SAFE_MODE" --without-guard)"$'\n' ;;
     *)          LINES="$LINES$(run_case "$c" "$c")"$'\n' ;;
   esac
 done
@@ -150,6 +151,7 @@ done
   echo "and the gateway's log below shows the model Claude Code sent for it. The allow-bash, hooks-off and safe-mode runs use the"
   echo "extra-command switch, and image-allow-bash the image-command switch, with a user settings file in the throwaway home:"
   echo "\`$ALLOW_ALL_BASH\` (allow-bash, image-allow-bash), \`$HOOKS_OFF\` (hooks-off), \`$SAFE_MODE\` (safe-mode)."
+  echo "Hooks are off in the last two, which refuses the test unless \`--without-guard\` is given, as it is there."
   echo ""
   echo "## The runs"
   echo ""
