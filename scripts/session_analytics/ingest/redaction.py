@@ -175,7 +175,9 @@ def _path_form(path: Any) -> str:
 def _root_pattern(root: Any) -> "re.Pattern[str]":
     form = _path_form(root)
     body = form.rstrip(os.path.sep) or form
-    return re.compile(r"(?<![\w.-])" + re.escape(body) + r"(?![\w-])")
+    if body == os.path.sep:
+        return re.compile(r"(?<![\w.-])" + re.escape(os.path.sep))
+    return re.compile(r"(?<![\w.-])" + re.escape(body) + r"(?![\w-]|\.\w)")
 
 
 class OutboundPolicy:

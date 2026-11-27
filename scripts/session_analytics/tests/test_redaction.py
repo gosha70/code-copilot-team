@@ -313,6 +313,31 @@ class OutboundProjectPaths(unittest.TestCase):
                 ):
                     self.assertEqual(policy.names_project("/users/ME/repo/a.py"), named)
 
+    def test_a_sibling_whose_name_starts_with_the_project_and_a_dot_is_not_named(self):
+        policy = self.policy("/work/repo")
+        with mock.patch.object(redaction.os, "path", posixpath):
+            for value in ("/work/repo.bak/a.py", "/work/repo.git", "see /work/repo.old/a.py"):
+                with self.subTest(value=value):
+                    self.assertFalse(policy.names_project(value))
+            for value in ("see /work/repo.", "see /work/repo, then", "/work/repo/.git/config"):
+                with self.subTest(value=value):
+                    self.assertTrue(policy.names_project(value))
+
+    def test_a_project_at_the_filesystem_root_names_every_absolute_path(self):
+        policy = self.policy("/")
+        with mock.patch.object(redaction.os, "path", posixpath):
+            for value in ("/etc/passwd", "/", "see /etc/passwd"):
+                with self.subTest(value=value):
+                    self.assertTrue(policy.names_project(value))
+            self.assertFalse(policy.names_project("etc"))
+
+    @WINDOWS_RULES
+    def test_a_project_at_a_drive_root_names_that_drive_only(self):
+        policy = self.policy("C:\\")
+        self.assertTrue(policy.names_project("C:\\Users\\me\\a.py"))
+        self.assertTrue(policy.names_project("C:/Users/me/a.py"))
+        self.assertFalse(policy.names_project("D:\\Users\\me\\a.py"))
+
     def test_nothing_is_named_when_nothing_is_opted_out_or_the_value_is_empty(self):
         self.assertFalse(self.policy().names_project("/work/repo/app.py"))
         self.assertFalse(self.policy("/work/repo").names_project(""))
