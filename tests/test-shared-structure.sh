@@ -2327,6 +2327,56 @@ for name in coding-standards copilot-conventions copyright-headers safety; do
   assert_ok "claude_code/.claude/rules/$name.md matches its shared skill body" "$rc"
 done
 
+# ══════════════════════════════════════════════════════════════
+# No test code sends a crash signal (#547)
+# ══════════════════════════════════════════════════════════════
+# A process ended by a core-dumping signal (SEGV, BUS, ILL, ABRT, FPE, TRAP,
+# QUIT, SYS, EMT) makes macOS write a crash report and show a "quit
+# unexpectedly" dialog, one per process, so a fixture that simulates a crash
+# that way fills the screen on every run, as #547's mock harness did.
+# Simulate one with the status a shell reports for it instead (exit 128 + N).
+# The scan reads every tracked file under tests/, scripts/ and adapters/ but
+# prose and this file, which spells the forms out. It knows these forms:
+# kill by name or number, Python's os.kill, signal.raise_signal and os.abort,
+# faulthandler's crash helpers, and Node's process.kill and process.abort.
+
+echo ""
+echo "=== No test code sends a crash signal (#547) ==="
+CRASH_SIGS='(SEGV|BUS|ILL|ABRT|FPE|TRAP|QUIT|SYS|EMT)'
+CRASH_SEND="(^|[^[:alnum:]_])kill[[:space:]]+(-s[[:space:]]+)?-?(SIG)?${CRASH_SIGS}([^[:alnum:]_]|$)|(^|[^[:alnum:]_])kill[[:space:]]+-(3|4|5|6|7|8|10|11|12|31)([^[:alnum:]_]|$)|os\\.kill\\(.*SIG${CRASH_SIGS}|raise_signal\\(.*SIG${CRASH_SIGS}|os\\.abort\\(|faulthandler\\._|process\\.kill\\(.*SIG${CRASH_SIGS}|process\\.abort\\("
+CRASH_PATHSPEC=(tests scripts adapters ':!*.md' ':!tests/test-shared-structure.sh')
+crash_senders() {  # [<repo dir>] → "<file>:<line>:<text>" for each tracked line that sends a crash signal
+  (cd "${1:-$REPO_DIR}" && git grep -n -E "$CRASH_SEND" -- "${CRASH_PATHSPEC[@]}" 2>/dev/null)
+}
+rc=0; [[ $(cd "$REPO_DIR" && git ls-files -- "${CRASH_PATHSPEC[@]}" | grep -c .) -ge 100 ]] || rc=1
+assert_ok "the crash-signal scan covers the tracked test and script files (it is not a silent no-op)" "$rc"
+CRASH_FOUND=$(crash_senders)
+rc=0; [[ -z "$CRASH_FOUND" ]] || rc=1
+assert_ok "no tracked test or script code sends a crash signal${CRASH_FOUND:+ (found: $(cut -d: -f1,2 <<<"$CRASH_FOUND" | tr '\n' ' '))}" "$rc"
+# The guard bites, through the same git grep, on files planted in a
+# throwaway repository; the status a shell reports is not a signal.
+crash_flags_planted() {  # <path> <line> → 0 if the guard flags the planted line
+  local repo out
+  repo=$(mktemp -d)
+  mkdir -p "$repo/$(dirname "$1")"
+  printf '%s\n' "$2" > "$repo/$1"
+  (cd "$repo" && git init -q . && git add -A) >/dev/null 2>&1
+  out=$(crash_senders "$repo")
+  rm -rf "$repo"
+  [[ -n "$out" ]]
+}
+while IFS='|' read -r ppath pline; do
+  [[ -n "$ppath" ]] || continue
+  rc=0; crash_flags_planted "$ppath" "$pline" || rc=1
+  assert_ok "the crash-signal guard flags $ppath: $pline" "$rc"
+done <<'PLANTED'
+tests/fixtures/x.py|        os.kill(os.getpid(), signal.SIGSEGV)
+tests/x.sh|kill -SEGV $$
+scripts/x.py|os.abort()
+PLANTED
+rc=0; ! crash_flags_planted tests/fixtures/x.py "        os._exit(128 + signal.SIGSEGV)" || rc=1
+assert_ok "...and lets a fixture exit with the status a shell reports for one (128 + N)" "$rc"
+
 if [[ "$PASS" -ne "$TEST_SHARED_STRUCTURE_EXPECTED_PASS" ]]; then
   echo "  FAIL: assertion-count drift (expected $TEST_SHARED_STRUCTURE_EXPECTED_PASS, got $PASS)"
   FAIL=$((FAIL + 1))

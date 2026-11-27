@@ -698,6 +698,13 @@ ptest "$CI_HOME" CCT_PROBE_MOCK_CRASH=image -- llm test pm --json
 gateway_stop
 assert_eq "test: ...so does one that crashes in the image run alone, after a correct answer" "1|unverifiable|fail|unverifiable|null" \
     "$RC|$(jq -r .outcome <<< "$OUT")|$(jq -r .matrix.clean_exit <<< "$OUT")|$(jq -r .matrix.image_input <<< "$OUT")|$(jq -c .latest_conclusive "$CI_HOME/llm-compat/claude-code/pm@pt.json")"
+# The crash is its exit status, never a real signal: on macOS a process a
+# SIGSEGV ends writes a crash report and shows a dialog, every run (#547).
+# Python reports an exit as 139 and that death as -11.
+CRASH_RC=$(env -i PATH="$PATH" HOME="$TMP" CCT_PROBE_MOCK_CRASH=1 python3 -c \
+    'import subprocess, sys; print(subprocess.run([sys.executable, sys.argv[1], "-p"], input="", capture_output=True, text=True).returncode)' \
+    "$MOCK_HARNESS" 2>&1)
+assert_eq "test: ...both by the status a shell reports for a SIGSEGV death, 139, with no signal raised" "139" "$CRASH_RC"
 gateway "$TMP/gw-garbage.jsonl"
 GB_HOME=$(probe_home probe-garbage "$GW_PORT")
 ptest "$GB_HOME" CCT_PROBE_MOCK_GARBAGE=1 -- llm test pm --json
