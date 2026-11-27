@@ -155,6 +155,17 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   the same and left no temporary file. The content now reaches the file
   through `cat`, which reports its own failure, as the owner-file write
   does since #541. The files written are byte for byte the same (#542).
+- **A project setting filed under a Windows path now applies.** A `projects`
+  entry keyed by the repository path was matched to git's
+  `rev-parse --show-toplevel` by exact string. On Windows git prints
+  `C:/Users/me/repo`, so an entry written with backslashes never matched: an
+  `ingest: "off"` opt-out was ignored and the session was stored, and a
+  redaction mode or trace-archive setting fell back to the global one. Keys
+  that are paths are now compared after `os.path.normcase(os.path.realpath(...))`,
+  so either slash style, a trailing separator, a symlink, an 8.3 short name and
+  (on Windows) letter case name the same repository. Ids are still compared
+  as written. Two spellings of one repository in `projects` hold the stricter
+  setting. Closes #538.
 - **Two writers waiting on one dead writer's routing-state lock no longer
   both take it.** `rs_lock` judged the lock stale and removed it, so a
   second waiter that had judged it too then removed the first one's new
