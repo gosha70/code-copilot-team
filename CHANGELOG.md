@@ -162,9 +162,10 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   written with backslashes as Windows stores it, was not recognised and went to
   the Ask model. `OutboundPolicy.names_project` now decides it by whole path
   components after `os.path.normcase(os.path.normpath(...))`, so either slash
-  style, a trailing separator and (on Windows) letter case name the same
-  project. Export's check for a benchmark run directory uses it too, in place
-  of its own copy. Closes #548.
+  style, a trailing separator and (on Windows and macOS) letter case name the
+  same project, and a path inside a longer value (`Edited C:/Users/me/repo/a.py`,
+  a `file:///` URL, a long-path prefix) is named too. Export's check for a
+  benchmark run directory uses it too, in place of its own copy. Closes #548.
 - **A lock that cannot be taken no longer removes another writer's.** The
   six shell locks of #530 removed their lock directory after the last of
   their failed attempts to create an owner file. By then the directory

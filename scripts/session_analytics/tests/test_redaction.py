@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ntpath
 import os
+import posixpath
 import unittest
 from unittest import mock
 
@@ -261,6 +262,56 @@ class OutboundProjectPaths(unittest.TestCase):
         self.assertTrue(policy.names_project(root + os.sep))
         self.assertFalse(policy.names_project(root + "-other"))
         self.assertFalse(policy.names_project(os.path.dirname(root)))
+
+    @WINDOWS_RULES
+    def test_a_path_inside_a_longer_value_is_named(self):
+        policy = self.policy("C:\\Users\\me\\repo")
+        for value in (
+            "Edited C:\\Users\\me\\repo\\a.py",
+            "Edited C:\\Users\\me\\repo",
+            "opened (C:\\Users\\me\\repo) and saved",
+            "see C:/Users/me/repo/a.py.",
+            "file:///C:/Users/me/repo/a.py",
+            "\\\\?\\C:\\Users\\me\\repo\\a.py",
+        ):
+            with self.subTest(value=value):
+                self.assertTrue(policy.names_project(value))
+
+    @WINDOWS_RULES
+    def test_a_file_url_is_decoded_before_it_is_compared(self):
+        policy = self.policy("C:\\Users\\me\\My Repo")
+        self.assertTrue(policy.names_project("file:///C:/Users/me/My%20Repo/a.py"))
+
+    @WINDOWS_RULES
+    def test_a_longer_value_that_only_looks_alike_is_not_named(self):
+        policy = self.policy("C:\\Users\\me\\repo")
+        for value in (
+            "Edited C:\\Users\\me\\repo-other\\a.py",
+            "Edited C:\\Users\\me\\repo2",
+            "Edited D:\\Users\\me\\repo\\a.py",
+            "Edited C:\\Users\\me",
+            "Edited xC:\\Users\\me\\repo\\a.py",
+        ):
+            with self.subTest(value=value):
+                self.assertFalse(policy.names_project(value))
+
+    def test_a_path_inside_a_longer_value_is_named_on_this_platform(self):
+        policy = self.policy("/work/repo")
+        with mock.patch.object(redaction.os, "path", posixpath):
+            self.assertTrue(policy.names_project("see /work/repo/secret.env"))
+            self.assertTrue(policy.names_project("see /work/repo"))
+            self.assertTrue(policy.names_project("file:///work/repo/a.py"))
+            self.assertFalse(policy.names_project("see /work/repo-other/a.py"))
+            self.assertFalse(policy.names_project("see /home/me/work/repo/a.py"))
+
+    def test_letter_case_is_ignored_on_macos(self):
+        for platform, named in (("darwin", True), ("linux", False)):
+            with self.subTest(platform=platform):
+                policy = self.policy("/Users/me/Repo")
+                with mock.patch.object(redaction.os, "path", posixpath), mock.patch.object(
+                    redaction.sys, "platform", platform
+                ):
+                    self.assertEqual(policy.names_project("/users/ME/repo/a.py"), named)
 
     def test_nothing_is_named_when_nothing_is_opted_out_or_the_value_is_empty(self):
         self.assertFalse(self.policy().names_project("/work/repo/app.py"))
