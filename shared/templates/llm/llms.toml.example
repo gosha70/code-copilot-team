@@ -98,10 +98,44 @@ harness = "claude-code"
 llm = "qwen"
 endpoint = "ollama"
 
-# ── A model behind a local gateway (vLLM, OpenAI, anything else) ──────
+# ── A model served by vLLM, reached directly ──────────────────────────
+# A vLLM build that serves the Anthropic Messages API (/v1/messages)
+# needs no gateway: the endpoint is the vLLM server itself, at the
+# address your machine reaches it by. Run the trailing-system test in
+# docs/dgx-spark/setup-cookbook.md against your build first: one that
+# fails it answers 200 with the tool call as text, and belongs behind
+# the gateway below. The quirk is there because vLLM 0.28.1rc1 answers
+# 400 "Unexpected item type in content." to the tool_reference block
+# that tool search adds. max_output_tokens keeps a request inside the
+# model's context window.
+
+[providers.spark]
+display_name = "DGX Spark (vLLM)"
+kind = "api"
+credential_mode = "none"
+
+[endpoints.spark]
+provider = "spark"
+protocol = "anthropic-messages"
+base_url = "http://dgx-spark.local:8001"
+auth_header = "none"
+quirks = ["rejects-dynamic-tools"]
+
+[llms.spark-qwen]
+provider = "spark"
+model = "qwen38-27b"
+
+[bindings.spark-qwen-claude]
+harness = "claude-code"
+llm = "spark-qwen"
+endpoint = "spark"
+max_output_tokens = 32000
+
+# ── A model behind a local gateway (OpenAI, anything else) ────────────
 # Claude Code speaks only the Anthropic Messages protocol. A server that
-# speaks another one (vLLM and OpenAI speak OpenAI's) needs a gateway in
-# front that translates, such as the LiteLLM proxy in
+# speaks only another one (OpenAI's, or a vLLM build without
+# /v1/messages or one that fails that test) needs a gateway in front
+# that translates, such as the LiteLLM proxy in
 # docs/dgx-spark/setup-cookbook.md; the endpoint below is that gateway.
 # The model id is the name the gateway serves. max_output_tokens keeps a
 # request inside a small context window.
@@ -117,12 +151,12 @@ protocol = "anthropic-messages"
 base_url = "http://127.0.0.1:8787"
 auth_header = "none"
 
-[llms.spark-qwen]
+[llms.gateway-qwen]
 provider = "local-gateway"
 model = "qwen38-27b"
 
-[bindings.spark-qwen-claude]
+[bindings.gateway-qwen-claude]
 harness = "claude-code"
-llm = "spark-qwen"
+llm = "gateway-qwen"
 endpoint = "local-gateway"
 max_output_tokens = 32000
