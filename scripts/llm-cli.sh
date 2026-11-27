@@ -197,6 +197,28 @@ cmd_validate() {
     return "$rc"
 }
 
+# compat_prime <harness>: reads the rule table and the harness version once,
+# in this shell, so that each compat_text subshell finds them already read.
+compat_prime() { lcm_load_rules >/dev/null 2>&1 || true; lcm_harness_version "$1" >/dev/null 2>&1 || true; }
+
+# The state a launch of the target gets, as text: the tested state the gate
+# reads (S3), with its reason (`short`: the reason only for a refusal the
+# catalog decides, unavailable or unsupported). The static state, with a
+# note, when the tested one cannot be read. A subshell keeps the caller's
+# LR_* and LCM_* as they were.
+compat_text() (  # <harness> <target> <static-state> <static-reason> [short]
+    rc=0
+    lcm_state "$1" "$2" 2>/dev/null || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+        printf '%s' "$3${4:+: $4}"
+        [[ "$rc" -eq 2 ]] && printf ' (its tested state cannot be read: %s)' "$LCM_ERR"
+    elif [[ "${5:-}" == short && "$LCM_STATE" != unavailable && "$LCM_STATE" != unsupported ]]; then
+        printf '%s' "$LCM_STATE"
+    else
+        printf '%s' "$LCM_STATE${LCM_REASON:+: $LCM_REASON}"
+    fi
+)
+
 # What a binding's credential is, without its value: text and JSON.
 credential_of() {  # <binding-id>: sets CRED_TEXT and CRED_JSON
     local e ep mode cred lp
@@ -236,7 +258,7 @@ _row() {  # target harness model endpoint credential state
 }
 
 cmd_list() {
-    local json="$1" l b bl h model target endpoint state n rc=0 jrows='[]'
+    local json="$1" l b bl h model target endpoint state n rc=0 jrows='[]' origin sstate sreason
     load_catalog list "$json" || return $?
 
     ROWS=""
@@ -257,12 +279,20 @@ cmd_list() {
                 endpoint="${LR_ORIGIN:-endpoint $LR_ENDPOINT_ID}"
             fi
             credential_of "$b"
-            state="$LR_STATE"
-            if [[ -n "$LR_REASON" ]]; then state="$state: $LR_REASON"; fi
+            origin="$LR_ORIGIN" sstate="$LR_STATE" sreason="$LR_REASON"
+            state="$sstate${sreason:+: $sreason}"
+            # The text column shows what a launch gets: the tested state the
+            # gate reads (S3), with the reason for a refusal the catalog
+            # decides; `cct llm compatibility` gives every reason. The JSON
+            # keeps the static state its schema names.
+            if [[ "$json" != 1 ]]; then
+                compat_prime "$h"
+                state=$(compat_text "$h" "$target" "$sstate" "$sreason" short)
+            fi
             _row "$target" "$h" "$model" "$endpoint" "$CRED_TEXT" "$state"
             jrows=$(jq -c --arg t "$target" --arg l "$l" --arg b "$b" --arg h "$h" --arg m "$model" \
-                --argjson e "$(null_if_empty "$LR_ORIGIN")" --argjson c "$CRED_JSON" \
-                --arg s "$LR_STATE" --argjson r "$(null_if_empty "$LR_REASON")" \
+                --argjson e "$(null_if_empty "$origin")" --argjson c "$CRED_JSON" \
+                --arg s "$sstate" --argjson r "$(null_if_empty "$sreason")" \
                 '. + [{target: $t, llm: $l, binding: $b, harness: $h, model: $m, endpoint: $e,
                        credential: $c, state: $s, reason: $r}]' <<< "$jrows")
         done <<< "$(lc_ids bindings)"
@@ -284,7 +314,7 @@ cmd_list() {
     fi
     _print_rows
     echo ""
-    echo "unverified: launchable; no compatibility probe exists yet, so nothing has checked the model against the harness."
+    echo "STATE is what a launch gets: supported launches; unverified needs a passing \`cct llm test <target>\` first, or --allow-unverified; the rest are refused. \`cct llm compatibility\` says why."
     echo "Start a session on one:  cct start --llm <target> [path]"
     return 0
 }
@@ -341,6 +371,10 @@ cmd_show() {
         credential_of "$b"
         state="$LR_STATE"
         if [[ -n "$LR_REASON" ]]; then state="$state: $LR_REASON"; fi
+        if [[ "$json" != 1 ]]; then   # the text shows the tested state a launch gets (S3)
+            compat_prime "$h"
+            state=$(compat_text "$h" "$target" "$LR_STATE" "$LR_REASON" short)
+        fi
         text="${text}    $target  $h  ${LR_ORIGIN:--}${LR_PROTOCOL:+, $LR_PROTOCOL}  $CRED_TEXT  $state"$'\n'
         jb=$(jq -c --arg b "$b" --arg t "$target" --arg h "$h" \
             --argjson e "$(null_if_empty "$LR_ORIGIN")" --argjson p "$(null_if_empty "$LR_PROTOCOL")" \
@@ -389,11 +423,8 @@ cmd_explain() {  # <harness> <target> <json> <project-dir>
             echo "  endpoint  none: Claude Code's own login"
         fi
         echo "  model     $LR_MODEL"
-        if [[ "$LR_STATE" == "unverified" ]]; then
-            echo "  state     unverified: launchable; nothing has probed this model on $h yet"
-        else
-            echo "  state     $LR_STATE: $LR_REASON"
-        fi
+        compat_prime "$h"
+        echo "  state     $(compat_text "$h" "$t" "$LR_STATE" "$LR_REASON")"
         echo "  sets      (names only; a value is read by the launch alone)"
         while IFS= read -r rec; do
             [[ -z "$rec" ]] && continue

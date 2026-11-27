@@ -56,7 +56,8 @@ LCM_ATTEMPT_JQ='
        and (.digest | hex64) and (.launch_identity | hex64) and (.options | hex64)
        and (.harness_version | type == "string") and (.rule_version | type == "number"))
   and ((.detail // "") | type == "string")
-  and ((.redacted // "") | type == "string")'
+  and ((.redacted // "") | type == "string")
+  and ((.reported_models // []) | type == "array" and all(.[]; type == "string"))'
 
 lcm_load_rules() {  # -> LCM_RULES; 2 with LCM_ERR when the table is unusable
     [[ -n "$LCM_RULES" ]] && return 0

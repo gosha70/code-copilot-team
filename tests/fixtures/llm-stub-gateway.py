@@ -46,6 +46,7 @@ SWITCHES = {
     "reject-model",          # 400 for a model it does not know: no verdict on the harness
     "reject-billing",        # 400 for an exhausted balance: no verdict on the harness
     "resolve-model",         # reports a dated id that contains the requested name
+    "resolve-model-moved",   # ...a later one, as when the alias moves to a newer model
     "reject-auth",           # auth: 401, the credential refused
     "exceed-limits",         # limit_controls: reports more output than max_tokens
     "time-out",              # clean_exit: never answers
@@ -284,6 +285,8 @@ class Handler(BaseHTTPRequestHandler):
         model = OTHER_MODEL if "other-model" in self.switches else (body.get("model") or "stub-model")
         if "resolve-model" in self.switches:
             model = f"{model}-20251101"
+        elif "resolve-model-moved" in self.switches:
+            model = f"{model}-20260215"
         out = 5
         if "exceed-limits" in self.switches:
             out = int(body.get("max_tokens") or 0) + 1000
