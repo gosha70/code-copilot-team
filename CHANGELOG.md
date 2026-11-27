@@ -12,6 +12,18 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Added
 
+- **Active time is shown beside wall clock, and the judge is told both.**
+  The session page has an Active time tile that names the idle cutoff and
+  how many gaps it measured and skipped for a missing timestamp. The
+  Sessions list gains Duration and Active columns, both sortable, and the
+  Overview gains Avg active time, averaged over the sessions that have a
+  figure. The API carries `active_seconds` and `active_cutoff_seconds` on a
+  session (the session page adds `active_gaps_measured` and
+  `active_gaps_unstamped`) and `avg_active_seconds` on the Overview totals.
+  `session_facts` names wall clock and active time. Everything reads
+  `session_activity` at the configured cutoff; a session with no row there
+  shows as unknown, never as 0. `duration_seconds`, the noise rule and the
+  schema are unchanged. Closes #422.
 - **See a `--llm` launch before it runs.** `cct harness explain claude-code
   --llm <target>` prints the launch plan from the resolver the launcher
   itself uses: every variable the launch sets (a credential by the variable
