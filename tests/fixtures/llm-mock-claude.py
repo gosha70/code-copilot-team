@@ -31,7 +31,8 @@ goes out as "model".
 With CCT_PROBE_MOCK_ENV_LOG set, it writes the names of the variables it
 received to that file, and the names of any whose value is a probe test's
 planted sentinel. Three switches make it misbehave as a harness can:
-CCT_PROBE_MOCK_CRASH=1 kills it with SIGSEGV after its answer (=image: only
+CCT_PROBE_MOCK_CRASH=1 exits it with status 139, a SIGSEGV death as a shell
+reports it, after its answer (=image: only
 on a run whose prompt comes as stream-json, the probe's image run),
 CCT_PROBE_MOCK_GARBAGE=1 prints a line that is not JSON instead of its
 records, and CCT_PROBE_MOCK_IGNORE_TERM=1 ignores TERM, so that only the
@@ -86,7 +87,11 @@ def finish(text: str, is_error: bool, turns: int, output_tokens: int) -> int:
     emit({"type": "result", "subtype": "success", "is_error": is_error, "result": text,
           "num_turns": turns, "usage": {"output_tokens": output_tokens}, "permission_denials": DENIALS})
     if CRASH_AFTER_ANSWER:
-        os.kill(os.getpid(), signal.SIGSEGV)
+        # Exit with the status a shell reports for a SIGSEGV death (128 + 11) instead of
+        # raising the signal: a real SIGSEGV makes macOS write a crash report and show a
+        # "Python quit unexpectedly" dialog on every suite run. The probe only reads the status.
+        sys.stdout.flush()
+        os._exit(128 + signal.SIGSEGV)
     return 1 if is_error else 0
 
 
