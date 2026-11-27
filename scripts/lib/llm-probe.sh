@@ -10,7 +10,9 @@
 #     can read, and for one reply line: the canary's marker, the token the
 #     appended system prompt gives, and what the command printed;
 #   - when the llm declares image input, a second run puts a small image
-#     in the prompt and asks for its colour.
+#     in the prompt and asks for its colour;
+#   - in both runs a guard hook blocks every tool call but the canary's
+#     command, and any other call the endpoint asks for fails tool_call.
 # Each capability is pass, fail, unverifiable or not_applicable (FR-15).
 # The run's outcome is pass, fail (behavioral evidence: a required
 # capability that ran and did not do what was asked, or a request shape
@@ -59,6 +61,16 @@ LP_EXCERPT_CHARS=300
 LP_CANARY_SCRIPT="canary.sh"
 LP_CANARY_COMMAND="sh $LP_CANARY_SCRIPT"
 LP_ALLOWED_TOOLS="Bash($LP_CANARY_COMMAND)"
+# The user's own permission rules still apply, and one that allows all of
+# Bash would let more through. So both runs also get a PreToolUse hook,
+# passed with --settings, which Claude Code runs before every tool call
+# whatever those rules allow: it lets the canary's command through and
+# blocks everything else. Whatever turns hooks off turns it off too, and
+# cct llm test warns first of what lp_hooks_off can see.
+LP_GUARD_MESSAGE="cct llm test runs only: $LP_CANARY_COMMAND"
+# Variables that turn Claude Code's hooks off, from a settings file's env
+# block or the environment, as the real binary was seen to.
+LP_HOOKS_OFF_VARS="CLAUDE_CODE_SIMPLE CLAUDE_CODE_SAFE_MODE"
 # A 400 or 422 is a rejected request shape only when its message says so: an
 # exhausted balance or an unknown model is a 400 too, and says nothing about
 # whether the harness can speak to the endpoint (FR-13).
@@ -108,6 +120,41 @@ _lp_credential_var() {
     return 0
 }
 
+# lp_hooks_off: LP_HOOKS_OFF says what turns Claude Code's hooks off for
+# this test, and the guard with them: the user's settings file setting
+# disableAllHooks, or one of LP_HOOKS_OFF_VARS in its env block or in this
+# environment. Empty when none does. Managed settings are not read. The
+# probe's directory holds no project settings, so the user's file is the
+# one, as for the env-block check.
+lp_hooks_off() {
+    local f="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" v val
+    LP_HOOKS_OFF=""
+    if [[ -f "$f" ]]; then
+        if [[ "$(jq -r '.disableAllHooks // false' "$f" 2>/dev/null)" == "true" ]]; then
+            LP_HOOKS_OFF="$f sets disableAllHooks"
+        fi
+        for v in $LP_HOOKS_OFF_VARS; do
+            val=$(jq -r --arg v "$v" '.env[$v]? // empty | tostring' "$f" 2>/dev/null)
+            if _lp_truthy "$val"; then LP_HOOKS_OFF="${LP_HOOKS_OFF:+$LP_HOOKS_OFF; }$f sets $v in its env block"; fi
+        done
+    fi
+    for v in $LP_HOOKS_OFF_VARS; do
+        if _lp_truthy "${!v:-}"; then LP_HOOKS_OFF="${LP_HOOKS_OFF:+$LP_HOOKS_OFF; }$v is set in this environment"; fi
+    done
+    return 0
+}
+
+_lp_truthy() {  # <value>: set, and none of 0, false, no or off
+    local l
+    l=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+    [[ -n "$l" && "$l" != "0" && "$l" != "false" && "$l" != "no" && "$l" != "off" ]]
+}
+
+_lp_shq() {  # <text>, quoted for sh
+    local q="'" e="'\\''"   # through variables: bash 3.2 keeps backslashes in a literal replacement
+    printf "'%s'" "${1//$q/$e}"
+}
+
 # One bounded run of the harness: <stdin-file> <stdout-file> <stderr-file>
 # <harness arguments...>. In a subshell, so that the plan's environment
 # reaches the harness alone, waited for in the background, so that a signal
@@ -137,12 +184,20 @@ _lp_run() {
     return "$rc"
 }
 
-# What a run's machine-readable output says, as one JSON object.
+# What a run's machine-readable output says, as one JSON object. foreign
+# counts the tool calls the endpoint asked for beyond the canary's command;
+# foreign_refused those the result lists as refused, and foreign_ran those
+# not refused that came back without an error.
 _lp_summary() {  # <stdout-file>
-    cn_json_records "$1" | jq -cs '
+    cn_json_records "$1" | jq -cs --arg canary "$LP_CANARY_COMMAND" '
       map(if type == "array" then .[] else . end) | map(select(type == "object")) as $r
       | ([ $r[] | select(.type == "result") ] | last) as $res
       | ($res.result? // "" | tostring) as $text
+      | [ $r[] | select(.type == "assistant") | .message.content[]? | select(.type? == "tool_use")
+          | select(.name? != "Bash" or .input.command? != $canary) | .id ] as $foreign
+      | [ ($res.permission_denials? // [])[] | .tool_use_id? ] as $refused
+      | [ $r[] | select(.type == "user") | .message.content[]? | select(.type? == "tool_result" and .is_error? != true)
+          | .tool_use_id? ] as $ok
       | { parsed: ($res != null),
           is_error: ($res.is_error? == true),
           status: ([ $text | capture("API Error: (?<s>[0-9]{3})")? | .s | tonumber ] | first // null),
@@ -154,7 +209,10 @@ _lp_summary() {  # <stdout-file>
                                   and (.error_status? == 401 or .error_status? == 403
                                        or .error? == "authentication_failed"))
                                or (.type == "assistant" and .error? == "authentication_failed")),
-          denied: ($res.permission_denials? // [] | length),
+          foreign: ($foreign | length),
+          foreign_refused: ([ $foreign[] | . as $i | select(any($refused[]; . == $i)) ] | length),
+          foreign_ran: ([ $foreign[] | . as $i | select((any($refused[]; . == $i) | not) and any($ok[]; . == $i)) ]
+                        | length),
           streamed: any($r[]; .type == "stream_event" and .event.type? == "content_block_delta"),
           out_tokens: [ $r[] | select(.type == "stream_event" and .event.type? == "message_delta")
                         | .event.usage.output_tokens? | numbers ] }' 2>/dev/null
@@ -175,7 +233,8 @@ _lp_redact() {  # <text>: the credential, the endpoint's path, the probe directo
 lp_probe() {
     local h="$1" target="$2" rc=0 seed n1 n2 n3 n4 sys reply img_reply img_s cred
     local auth model streaming system tool_call tool_result parsing clean limits reasoning image
-    local required c v failed="" open="" max="" tmp_out want p img_rc img_err
+    local required c v failed="" open="" max="" tmp_out want p img_rc img_err img_sum guard jq_bin
+    local foreign foreign_refused foreign_ran foreign_note=""
     LP_OUTCOME="" LP_MATRIX="null" LP_DETAIL="" LP_REDACTED="" LP_ERR="" LP_REFUSED=0 LP_NOTES=""
     LP_SECRET="" LP_SECRET_NAME="" LP_URL_PATH=""
 
@@ -231,15 +290,26 @@ lp_probe() {
     printf '%s\n' "printf %s $CN_TOOL_MARKER > tool-canary.txt" "cat result.txt" > "$LP_WD/$LP_CANARY_SCRIPT"
     cn_prompt 1 "exactly one line: $CN_MARKER:$n1, then a space and the canary token your system instructions give, then a space and the text the command printed" \
         "$LP_CANARY_COMMAND" > "$LP_WD/prompt.txt"
+    # The guard reads the call Claude Code is about to make with jq, by an
+    # absolute path, since the hook runs in the probe's directory. Only an
+    # exit of 2 blocks a call, and a hook that fails any other way lets it
+    # through: so the command is inline, with no file to go missing, and
+    # every way but a match exits 2.
+    jq_bin=$(command -v jq) || jq_bin=""
+    case "$jq_bin" in ""|/*) ;; *) jq_bin="$PWD/$jq_bin" ;; esac
+    guard=$(jq -nc --arg c "if $(_lp_shq "$jq_bin") -e --arg c $(_lp_shq "$LP_CANARY_COMMAND") $(_lp_shq '.tool_name == "Bash" and .tool_input.command == $c') >/dev/null 2>&1; then exit 0; fi; echo $(_lp_shq "$LP_GUARD_MESSAGE") >&2; exit 2" \
+        '{hooks: {PreToolUse: [{matcher: "*", hooks: [{type: "command", command: $c}]}]}}')
+    lp_hooks_off
 
     rc=0
     _lp_run "$LP_WD/prompt.txt" "$LP_WD/stdout.jsonl" "$LP_WD/stderr.txt" \
         -p --output-format stream-json --verbose --include-partial-messages --no-session-persistence \
-        --append-system-prompt "$sys" --allowedTools "$LP_ALLOWED_TOOLS" || rc=$?
+        --append-system-prompt "$sys" --allowedTools "$LP_ALLOWED_TOOLS" --settings "$guard" || rc=$?
     cn_scrub "$LP_WD/stdout.jsonl" "$LP_SECRET" "$LP_SECRET_NAME"
     cn_scrub "$LP_WD/stderr.txt" "$LP_SECRET" "$LP_SECRET_NAME"
     LP_S=$(_lp_summary "$LP_WD/stdout.jsonl")
-    [[ -n "$LP_S" ]] || LP_S='{"parsed":false,"is_error":false,"status":null,"models":[],"thinking":false,"auth_refused":false,"denied":0,"streamed":false,"out_tokens":[]}'
+    [[ -n "$LP_S" ]] || LP_S='{"parsed":false,"is_error":false,"status":null,"models":[],"thinking":false,"auth_refused":false,"foreign":0,"foreign_refused":0,"foreign_ran":0,"streamed":false,"out_tokens":[]}'
+    foreign=$(_lp_sv '.foreign'); foreign_refused=$(_lp_sv '.foreign_refused'); foreign_ran=$(_lp_sv '.foreign_ran')
     reply=$(cn_result_text "$LP_WD/stdout.jsonl")
 
     local replied=0 marker_ok=0 tool_ok=0 timed_out=0 crashed=0 auth_refused=0 shape=0 is_error parsed status
@@ -306,9 +376,15 @@ lp_probe() {
             tmp_out="$LP_WD/image-stdout.jsonl"
             img_rc=0
             _lp_run "$LP_WD/image.jsonl" "$tmp_out" "$LP_WD/image-stderr.txt" \
-                -p --input-format stream-json --output-format stream-json --verbose --no-session-persistence || img_rc=$?
+                -p --input-format stream-json --output-format stream-json --verbose --no-session-persistence \
+                --settings "$guard" || img_rc=$?
             cn_scrub "$tmp_out" "$LP_SECRET" "$LP_SECRET_NAME"
-            img_err=$(_lp_summary "$tmp_out" | jq -r '.is_error' 2>/dev/null) || img_err=false
+            img_sum=$(_lp_summary "$tmp_out")
+            [[ -n "$img_sum" ]] || img_sum='{"is_error":false,"foreign":0,"foreign_refused":0,"foreign_ran":0}'
+            img_err=$(jq -r '.is_error' <<< "$img_sum")
+            foreign=$((foreign + $(jq -r '.foreign' <<< "$img_sum")))
+            foreign_refused=$((foreign_refused + $(jq -r '.foreign_refused' <<< "$img_sum")))
+            foreign_ran=$((foreign_ran + $(jq -r '.foreign_ran' <<< "$img_sum")))
             # The image run is judged as the first: cut off, or a crash, and
             # nothing it printed counts (FR-13).
             if [[ "$img_rc" -eq 124 || "$img_rc" -eq 125 || "$img_rc" -eq 137 ]]; then
@@ -322,6 +398,20 @@ lp_probe() {
                     if [[ " ${img_s//[^a-z0-9]/ } " == *" $LP_IMAGE_COLOUR "* ]]; then image=pass; else image=fail; fi
                 fi
             fi
+        fi
+    fi
+
+    # Any other tool call the endpoint asked for, in either run, refused or
+    # not, fails tool_call: the canary asks for one command and nothing else.
+    # The detail says what the output shows of it, and no more.
+    if [[ "$foreign" -gt 0 ]]; then
+        tool_call=fail
+        foreign_note="the endpoint asked for more than the canary's command"
+        if [[ "$foreign_ran" -gt 0 ]]; then
+            foreign_note="$foreign_note, and $LLM_CC_EXECUTABLE ran it"
+            if [[ -n "$LP_HOOKS_OFF" ]]; then foreign_note="$foreign_note: hooks were off for this test, and its guard with them"; fi
+        elif [[ "$foreign_refused" -eq "$foreign" ]]; then
+            foreign_note="$foreign_note, and $LLM_CC_EXECUTABLE refused it"
         fi
     fi
 
@@ -364,9 +454,6 @@ lp_probe() {
     elif [[ -n "$failed" ]]; then
         LP_OUTCOME="fail"
         LP_DETAIL="failed: $failed"
-        if [[ "$(_lp_sv '.denied')" -gt 0 ]]; then
-            LP_DETAIL="$LP_DETAIL (the endpoint asked to run more than the canary's command, and $LLM_CC_EXECUTABLE refused it)"
-        fi
     elif [[ -n "$open" ]]; then
         LP_OUTCOME="unverifiable"
         LP_DETAIL="could not tell: $open"
@@ -374,6 +461,9 @@ lp_probe() {
         LP_OUTCOME="pass"
         LP_DETAIL="passed every capability this binding needs"
     fi
+    # Said whatever the outcome: a run cut off after such a call decides
+    # nothing, but what the endpoint asked for is worth knowing.
+    if [[ -n "$foreign_note" ]]; then LP_DETAIL="$LP_DETAIL ($foreign_note)"; fi
     # The test seam replaces the harness, so its run is reported and recorded
     # and never decides the gate.
     if [[ -n "${CCT_LLM_PROBE_CMD:-}" ]]; then

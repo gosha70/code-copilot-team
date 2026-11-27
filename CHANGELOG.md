@@ -66,17 +66,22 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   reports, streaming, the system prompt, a tool call and its result, the
   output, a clean exit, the binding's `max_output_tokens`, and reasoning
   and image input where the llm declares them. Each run is cut off after
-  120 seconds (`CCT_LLM_PROBE_TIMEOUT_SEC`), and nothing of the
-  credential is kept. A Claude Code launch with `--llm`, or a resume that
-  restores a session's target, now goes ahead only on a target whose test
-  passed. `--allow-unverified` launches an untested target, with a notice
-  that the session's stamp records, and never an incompatible one, whose
-  latest test failed with nothing changed since. A
-  test that passed on an older Claude Code still counts, with a notice;
-  any other change since, a tuning option or the rule table included,
-  needs a new test. **Upgrade note:** no target has a test yet, so the
-  first `--llm` launch after upgrading is refused, naming `cct llm test`
-  and `--allow-unverified`. Part of #400.
+  120 seconds (`CCT_LLM_PROBE_TIMEOUT_SEC`), and nothing of the credential
+  is kept. The endpoint under test answers as the model, so Claude Code
+  may run only the test's own script: a hook blocks any other tool call,
+  whatever your permission rules allow, and the test fails if the endpoint
+  asks for one. The test warns first when your settings turn hooks off
+  (`disableAllHooks`), or `CLAUDE_CODE_SIMPLE` or `CLAUDE_CODE_SAFE_MODE`
+  is set. A Claude Code launch with `--llm`, or a resume that restores a
+  session's target, now goes ahead only on a target whose test passed.
+  `--allow-unverified` launches an untested target, with a notice that the
+  session's stamp records, and never an incompatible one, whose latest
+  test failed with nothing changed since. A test that passed on an older
+  Claude Code still counts, with a notice; any other change since, a
+  tuning option or the rule table included, needs a new test. **Upgrade
+  note:** no target has a test yet, so the first `--llm` launch after
+  upgrading is refused, naming `cct llm test` and `--allow-unverified`.
+  Part of #400.
 
 ### Security
 

@@ -1,7 +1,6 @@
 """A stand-in for `claude -p` in the LLM catalog's probe tests (#400 FR-15,
-slice S3). CCT_LLM_PROBE_CMD runs it in place of Claude Code, behind the
-stub gateway (llm-stub-gateway.py), as the real binary runs in the S3
-capture.
+slice S3). The suite puts it first on PATH as `claude`, behind the stub
+gateway (llm-stub-gateway.py), as the real binary runs in the S3 capture.
 
 It speaks to ANTHROPIC_BASE_URL as Claude Code 2.1.332 was seen to:
 - it streams from POST <base>/v1/messages?beta=true, with the system
@@ -10,10 +9,18 @@ It speaks to ANTHROPIC_BASE_URL as Claude Code 2.1.332 was seen to:
 - with --output-format stream-json it prints one assistant record per
   content block, the stream's events under --include-partial-messages, a
   user record for each tool result, and a result record;
-- it runs the Bash tool calls --allowedTools allows (Bash: any command;
-  Bash(<command>): exactly that one), in its working directory, and sends
-  their output back; any other call is refused, as a headless run cannot
-  ask, and listed in the result's permission_denials;
+- before each call of a tool it offers it runs the PreToolUse hooks of
+  --settings (a JSON string or a file) whose matcher fits the tool, with
+  the call as JSON on stdin, and an exit of 2 blocks the call; hooks are
+  off when the user's settings file (CLAUDE_CONFIG_DIR, else ~/.claude)
+  sets disableAllHooks, or CLAUDE_CODE_SIMPLE or CLAUDE_CODE_SAFE_MODE is
+  set in its env block or in the environment;
+- it runs the Bash tool calls an allow rule admits, from --allowedTools or
+  the user's settings file (Bash: any command; Bash(<command>): exactly
+  that one), in its working directory, and sends their output back; any
+  other call is refused, as a headless run cannot ask; a refused or
+  blocked call is listed in the result's permission_denials, and a call of
+  a tool it does not offer gets an error;
 - a refused credential (401, 403) gets an api_retry record per retry, up
   to CLAUDE_CODE_MAX_RETRIES, then an error result; a rejected request
   (400, 422) gets "API Error: <status> <message>" at once, from the model
@@ -63,7 +70,11 @@ CRASH_AFTER_ANSWER = False
 RULE_RE = re.compile(r"([A-Za-z]+)(?:\(([^)]*)\))?")
 DENIALS: list = []
 VALUED = {"--output-format", "--input-format", "--append-system-prompt", "--allowedTools",
-          "--permission-mode"}
+          "--permission-mode", "--settings"}
+HOOK_TIMEOUT_SEC = 60
+HOOK_BLOCK_EXIT = 2
+HOOKS_OFF_VARS = ("CLAUDE_CODE_SIMPLE", "CLAUDE_CODE_SAFE_MODE")
+FALSY = {"", "0", "false", "no", "off"}
 
 
 def emit(record: dict) -> None:
@@ -151,25 +162,76 @@ def read_sse(resp, partial: bool) -> dict:
     return message
 
 
-def bash_allowed(command: str, allowed: str) -> bool:
-    """As Claude Code reads --allowedTools: Bash allows any command,
+def load_settings(value: str) -> dict:
+    """--settings takes a JSON string or the path of a JSON file."""
+    if not value:
+        return {}
+    try:
+        return json.loads(value)
+    except ValueError:
+        with open(value, encoding="utf-8") as fp:
+            return json.load(fp)
+
+
+def user_settings() -> dict:
+    home = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    try:
+        with open(os.path.join(home, "settings.json"), encoding="utf-8") as fp:
+            return json.load(fp)
+    except (OSError, ValueError):
+        return {}
+
+
+def bash_allowed(command: str, rules: list) -> bool:
+    """As Claude Code reads an allow rule: Bash allows any command,
     Bash(<command>) exactly that one; a command with anything more needs
     approval, which a headless run cannot give."""
-    for tool, exact in RULE_RE.findall(allowed):
-        if tool == "Bash" and (exact == "" or exact.strip() == command.strip()):
-            return True
+    for rule in rules:
+        for tool, exact in RULE_RE.findall(rule):
+            if tool == "Bash" and (exact == "" or exact.strip() == command.strip()):
+                return True
     return False
 
 
-def run_tool(block: dict, allowed: str):
+def hook_blocks(block: dict, hooks: list):
+    """What Claude Code reports for the first PreToolUse hook that blocks
+    the call, or None."""
+    name = block.get("name", "")
+    payload = json.dumps({"hook_event_name": "PreToolUse", "tool_name": name,
+                          "tool_input": block.get("input", {}), "cwd": os.getcwd()})
+    for group in hooks:
+        matcher = group.get("matcher") or "*"
+        if matcher != "*" and not re.fullmatch(matcher, name):
+            continue
+        for hook in group.get("hooks", []):
+            if hook.get("type") != "command":
+                continue
+            done = subprocess.run(hook["command"], shell=True, input=payload, capture_output=True,
+                                  text=True, timeout=HOOK_TIMEOUT_SEC)
+            if done.returncode == HOOK_BLOCK_EXIT:
+                return f"PreToolUse:{name} hook error: [{hook['command']}]: {done.stderr}"
+    return None
+
+
+def hooks_off(user: dict) -> bool:
+    """Whether the user's settings, or the environment, turn hooks off."""
+    env = user.get("env") if isinstance(user.get("env"), dict) else {}
+    return user.get("disableAllHooks") is True or any(
+        str(env.get(v, os.environ.get(v, ""))).lower() not in FALSY for v in HOOKS_OFF_VARS)
+
+
+def run_tool(block: dict, rules: list, hooks: list):
     """The tool's output, and whether it was refused."""
     command = block.get("input", {}).get("command", "")
-    if block.get("name") != "Bash" or not bash_allowed(command, allowed):
-        DENIALS.append({"tool_name": block.get("name"), "tool_use_id": block.get("id"),
-                        "tool_input": block.get("input", {})})
-        return f"{command} needs approval", True
-    done = subprocess.run(["bash", "-c", command], capture_output=True, text=True, timeout=TOOL_TIMEOUT_SEC)
-    return (done.stdout + done.stderr).strip(), False
+    if block.get("name") not in {t["name"] for t in TOOLS}:
+        return f"Error: No such tool available: {block.get('name')}", True
+    blocked = hook_blocks(block, hooks)
+    if blocked is None and block.get("name") == "Bash" and bash_allowed(command, rules):
+        done = subprocess.run(["bash", "-c", command], capture_output=True, text=True, timeout=TOOL_TIMEOUT_SEC)
+        return (done.stdout + done.stderr).strip(), False
+    DENIALS.append({"tool_name": block.get("name"), "tool_use_id": block.get("id"),
+                    "tool_input": block.get("input", {})})
+    return blocked or f"{command} needs approval", True
 
 
 def main() -> int:
@@ -202,6 +264,11 @@ def main() -> int:
     base = os.environ.get("ANTHROPIC_BASE_URL", "").rstrip("/")
     max_tokens = int(os.environ.get("CLAUDE_CODE_MAX_OUTPUT_TOKENS") or DEFAULT_MAX_TOKENS)
     max_retries = int(os.environ.get("CLAUDE_CODE_MAX_RETRIES") or DEFAULT_MAX_RETRIES)
+    user = user_settings()
+    rules = [opts.get("--allowedTools", "")] + [r for r in (user.get("permissions") or {}).get("allow") or []
+                                                if isinstance(r, str)]
+    hooks = [] if hooks_off(user) else \
+        (load_settings(opts.get("--settings", "")).get("hooks") or {}).get("PreToolUse") or []
     emit({"type": "system", "subtype": "init", "model": model, "tools": [t["name"] for t in TOOLS]})
     if not base:
         synthetic(NOT_LOGGED_IN, "authentication_failed")
@@ -259,7 +326,7 @@ def main() -> int:
         results = []
         for b in message.get("content", []):
             if b.get("type") == "tool_use":
-                text, refused = run_tool(b, opts.get("--allowedTools", ""))
+                text, refused = run_tool(b, rules, hooks)
                 results.append({"type": "tool_result", "tool_use_id": b["id"], "content": text, "is_error": refused})
         emit({"type": "user", "message": {"role": "user", "content": results}})
         messages = messages + [{"role": "assistant", "content": message.get("content", [])},

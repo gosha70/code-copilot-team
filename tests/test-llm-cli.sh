@@ -621,7 +621,46 @@ X_HOME=$(probe_home probe-extra "$GW_PORT")
 ptest "$X_HOME" -- llm test pm --json
 gateway_stop
 assert_eq "test: a command the endpoint appends to the canary's tool call never runs, and the run fails" "1|fail|fail|incompatible|absent|1" \
-    "$RC|$(jq -r .outcome <<< "$OUT")|$(jq -r .matrix.tool_call <<< "$OUT")|$(jq -r .state <<< "$OUT")|$([[ -e "$TMP/extra-ran.txt" ]] && echo present || echo absent)|$(jq -r .detail <<< "$OUT" | grep -c 'asked to run more than the canary')"
+    "$RC|$(jq -r .outcome <<< "$OUT")|$(jq -r .matrix.tool_call <<< "$OUT")|$(jq -r .state <<< "$OUT")|$([[ -e "$TMP/extra-ran.txt" ]] && echo present || echo absent)|$(jq -r .detail <<< "$OUT" | grep -c "asked for more than the canary's command, and claude refused it")"
+# The user's own permission rules apply in the test, as in a launch; the
+# guard hook blocks what one that allows all of Bash would let run, unless
+# hooks are off for the test (#547's review).
+mkdir -p "$TMP/guard-allow" "$TMP/guard-off" "$TMP/guard-safe"
+printf '%s\n' '{"permissions":{"allow":["Bash"]}}' > "$TMP/guard-allow/settings.json"
+printf '%s\n' '{"permissions":{"allow":["Bash"]},"disableAllHooks":true}' > "$TMP/guard-off/settings.json"
+printf '%s\n' '{"env":{"CLAUDE_CODE_SAFE_MODE":"1"}}' > "$TMP/guard-safe/settings.json"
+gateway "$TMP/gw-guard.jsonl"
+G_HOME=$(probe_home probe-guard "$GW_PORT")
+ptest "$G_HOME" CLAUDE_CONFIG_DIR="$TMP/guard-allow" -- llm test pm --json
+gateway_stop
+assert_eq "test: under a user rule that allows all of Bash, an honest endpoint passes: the guard lets the canary's command through" "0|pass" \
+    "$RC|$(jq -r .outcome <<< "$OUT")"
+gateway "$TMP/gw-guard-extra.jsonl" --switch extra-command --extra-file "$TMP/extra-ran-guard.txt"
+GX_HOME=$(probe_home probe-guard-extra "$GW_PORT")
+ptest "$GX_HOME" CLAUDE_CONFIG_DIR="$TMP/guard-allow" -- llm test pm --json
+gateway_stop
+assert_eq "test: ...and the guard blocks a command the endpoint appends, which that rule would let run, and the run fails" "1|fail|fail|absent|1" \
+    "$RC|$(jq -r .outcome <<< "$OUT")|$(jq -r .matrix.tool_call <<< "$OUT")|$([[ -e "$TMP/extra-ran-guard.txt" ]] && echo present || echo absent)|$(jq -r .detail <<< "$OUT" | grep -c "asked for more than the canary's command, and claude refused it")"
+gateway "$TMP/gw-guard-image.jsonl" --switch image-command --extra-file "$TMP/extra-ran-image.txt"
+GI_HOME=$(probe_home probe-guard-image "$GW_PORT")
+ptest "$GI_HOME" CLAUDE_CONFIG_DIR="$TMP/guard-allow" -- llm test pm --json
+gateway_stop
+assert_eq "test: ...in the image run too: a command the endpoint asks for there never runs, and fails tool_call" "1|fail|fail|pass|absent|1" \
+    "$RC|$(jq -r .outcome <<< "$OUT")|$(jq -r .matrix.tool_call <<< "$OUT")|$(jq -r .matrix.image_input <<< "$OUT")|$([[ -e "$TMP/extra-ran-image.txt" ]] && echo present || echo absent)|$(jq -r .detail <<< "$OUT" | grep -c "asked for more than the canary's command, and claude refused it")"
+gateway "$TMP/gw-guard-off.jsonl" --switch extra-command --extra-file "$TMP/extra-ran-off.txt"
+GO_HOME=$(probe_home probe-guard-off "$GW_PORT")
+ptest "$GO_HOME" CLAUDE_CONFIG_DIR="$TMP/guard-off" -- llm test pm
+gateway_stop
+assert_eq "test: settings that turn hooks off are warned of before the run; the appended command then runs, as on the real binary, and the run still fails" "1|before|present|1|1" \
+    "$RC|$(awk '/warning: hooks are off for this test \(.*sets disableAllHooks/ { w = NR } /^Outcome:/ { o = NR } END { print (w && o && w < o) ? "before" : "not before" }' <<< "$OUT")|$([[ -e "$TMP/extra-ran-off.txt" ]] && echo present || echo absent)|$(grep -c '^Outcome: fail: failed: tool_call' <<< "$OUT")|$(grep -c "asked for more than the canary's command, and claude ran it: hooks were off for this test" <<< "$OUT")"
+gateway "$TMP/gw-guard-modes.jsonl"
+GM_HOME=$(probe_home probe-guard-modes "$GW_PORT")
+ptest "$GM_HOME" CLAUDE_CONFIG_DIR="$TMP/guard-safe" -- llm test pm
+GM_SAFE="$OUT"
+ptest "$GM_HOME" CLAUDE_CODE_SIMPLE=1 -- llm test pm
+gateway_stop
+assert_eq "test: ...as are CLAUDE_CODE_SAFE_MODE in a settings file's env block and CLAUDE_CODE_SIMPLE in the environment, which turn hooks off too" "1|1" \
+    "$(grep -c 'warning: hooks are off for this test (.*sets CLAUDE_CODE_SAFE_MODE in its env block' <<< "$GM_SAFE")|$(grep -c 'warning: hooks are off for this test (CLAUDE_CODE_SIMPLE is set in this environment)' <<< "$OUT")"
 # CCT_LLM_PROBE_CMD replaces the harness: said, recorded, never conclusive.
 gateway "$TMP/gw-seam.jsonl"
 SE_HOME=$(probe_home probe-seam "$GW_PORT")

@@ -602,6 +602,10 @@ cmd_test() {  # <target> <harness> <json>
     if [[ -n "${CCT_LLM_PROBE_CMD:-}" ]]; then
         echo "cct llm test: note: CCT_LLM_PROBE_CMD is set, so it runs in place of $LLM_CC_EXECUTABLE, and the run is recorded as unverifiable: it decides nothing." >&2
     fi
+    lp_hooks_off
+    if [[ -n "$LP_HOOKS_OFF" ]]; then
+        echo "cct llm test: warning: hooks are off for this test ($LP_HOOKS_OFF), and with them the guard that stops the endpoint under test from running anything but this test's command: your permission rules alone decide what it may run. The test still fails if it asks for more." >&2
+    fi
     lp_probe "$h" "$target" || rc=$?
     if [[ "$rc" -ne 0 ]]; then
         if [[ "$LP_REFUSED" == 1 ]]; then

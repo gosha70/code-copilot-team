@@ -635,7 +635,19 @@ catalog.sh` and `tests/test-llm-launch.sh`.
     accepts edits: the endpoint is the model, and a command of its own in
     the same tool call is refused, the whole call with it, which the
     real binary does whether the extra command acts inside the directory
-    or outside it (#547's review). A settings
+    or outside it (#547's review). The user's own permission rules still
+    apply, as in a launch, and one that allows all of Bash let that
+    command run; so both runs also get a `PreToolUse` hook through
+    `--settings`, which Claude Code runs before every tool call whatever
+    those rules allow, and which lets only the canary's command through.
+    It held against `allow: ["Bash"]`, `defaultMode: bypassPermissions`
+    and an approving user hook. `disableAllHooks` in the user's settings
+    file, and `CLAUDE_CODE_SIMPLE` or `CLAUDE_CODE_SAFE_MODE` in its env
+    block or the environment, turn it off, and `cct llm test` warns of
+    them before the run; managed settings are not read. The hook is an
+    inline command, since one that cannot run lets the call through. Every built-in tool is still offered, so the request
+    is a launch's: the owner chose that over `--tools Bash` on 2026-11-27
+    (`origin/2026-11-26-s3-rulings.md`). A settings
     file's `env` block that sets a variable the plan controls refuses the
     test as it refuses a launch, since the run would measure another
     endpoint, credential or model; a tuning key is said. When the llm declares image input, a second run puts a
@@ -657,7 +669,10 @@ catalog.sh` and `tests/test-llm-launch.sh`.
     parameter, field, header or tool; a validation error): then
     `output_parsing` fails and the outcome is a behavioral `fail`. An
     exhausted balance or an unknown model is a 400 too, and decides
-    nothing. A run through `CCT_LLM_PROBE_CMD` is said, and recorded as
+    nothing. Any tool call the endpoint asks for other than the canary's
+    command, in either run, fails `tool_call`, refused or not, and the
+    detail says whether Claude Code refused it or ran it, where its
+    output shows which. A run through `CCT_LLM_PROBE_CMD` is said, and recorded as
     `unverifiable`: the seam never decides the gate. A run the watchdog ends, and a crash
     (an exit other than 0, or 1 with an error result), fail `clean_exit`
     and are `unverifiable`, whatever was printed before. Any other error,
@@ -677,7 +692,12 @@ catalog.sh` and `tests/test-llm-launch.sh`.
     request path, which shows the path kept out of the record; a 400 for
     an unknown model, and one for an exhausted balance; a dated model id
     that contains the requested name. One appends a command of its own
-    to the canary's tool call, which must not run. The
+    to the canary's tool call, which must not run, and another asks for
+    one in the image run. The capture runs them again under a user rule
+    that allows all of Bash, which the hook blocks, and the first with
+    hooks turned off as well, when the command runs and the test still
+    fails. The mock harness runs `--settings` hooks, and reads the user's
+    allow rules and what turns hooks off, as the real binary was seen to. The
     mock harness can crash after its answer, print output that does not
     parse, and ignore `TERM`, so that the watchdog's `KILL` ends it.
   - *Departures.* The stub gateway speaks Anthropic Messages only: Claude

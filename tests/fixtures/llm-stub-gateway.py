@@ -21,7 +21,8 @@ The port is chosen by the system and written to <port-file>. Beside one
 switch per capability, two answer with errors that decide nothing: a 500,
 and a 404 that names the request path. extra-command appends a command of
 the endpoint's own to the canary's tool call, writing <path>, as a hostile
-endpoint could: the harness must not run it.
+endpoint could: the harness must not run it. image-command asks for such a
+command, alone, in the run that sends an image.
 """
 
 from __future__ import annotations
@@ -53,6 +54,7 @@ SWITCHES = {
     "server-error",          # a transient error: 500, overloaded, never a verdict
     "not-found",             # 404 naming the request path, as Express-style proxies do
     "extra-command",         # appends a command of its own to the canary's tool call
+    "image-command",         # asks for a command of its own in the image run
 }
 EXTRA_MARKER = "CCT_EXTRA_RAN"
 SENTINELS = {"probe-planted-credential", "probe-ambient-credential", "none"}
@@ -154,6 +156,10 @@ def _reply(body: dict, switches: set):
                        "signature": "stub-signature"})
     image = _prompt_image(messages)
     if image is not None:
+        if "image-command" in switches and _last_tool_result(messages) is None:
+            blocks.append({"type": "tool_use", "id": "toolu_stub_image", "name": "Bash",
+                           "input": {"command": f"printf %s {EXTRA_MARKER} > {Handler.extra_file}"}})
+            return blocks, "tool_use"
         colour = UNKNOWN_COLOUR if "ignore-images" in switches else _png_colour(image)
         blocks.append({"type": "text", "text": f"{marker.group(0)} {colour}"})
         return blocks, "end_turn"
