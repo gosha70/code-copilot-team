@@ -296,7 +296,10 @@ lcm_state() {
         LCM_REASON="$LR_REASON"
     fi
     if lcm_harness_version "$h"; then
-        lcm_evidence "$LCM_HV" || return 1
+        # A caller that wants the state alone sets LCM_LAZY_EVIDENCE: the
+        # digests then wait until a conclusive record needs comparing, and
+        # most targets have none (`cct llm list` reads every target).
+        if [[ -z "${LCM_LAZY_EVIDENCE:-}" ]]; then lcm_evidence "$LCM_HV" || return 1; fi
         min=$(jq -r --arg h "$h" '.harnesses[$h].min_version // empty' <<< "$LCM_RULES")
         if [[ -z "$LCM_STATE" && -n "$min" && "$LCM_HV" != "unknown" ]] && _lcm_version_lt "$LCM_HV" "$min"; then
             LCM_STATE="unavailable"
@@ -332,6 +335,7 @@ lcm_state() {
         fi
         return 0
     fi
+    if [[ "$LCM_EVIDENCE" == "null" ]]; then lcm_evidence "$LCM_HV" || return 1; fi   # deferred above
     outcome=$(jq -r '.outcome' <<< "$conclusive")
     at=$(jq -r '.at' <<< "$conclusive")
     if [[ "$(jq -r '.evidence.digest' <<< "$conclusive")" != "$(jq -r '.digest' <<< "$LCM_EVIDENCE")" ]]; then

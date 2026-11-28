@@ -79,6 +79,11 @@ LP_HOOKS_OFF_VARS="CLAUDE_CODE_SIMPLE CLAUDE_CODE_SAFE_MODE"
 # whether the harness can speak to the endpoint (FR-13).
 LP_SHAPE_RE='(unsupported|unrecognized|unknown|unexpected|invalid|not supported|not permitted|not allowed)[^.]{0,40}(parameter|argument|field|property|input|content block|block type|tool|header|beta)|extra (inputs|fields) (are|is) not permitted|validation error|should be a valid|does not match any of the expected|tool_reference|input_schema'
 LP_NOT_SHAPE_RE='credit|balance|billing|quota|payment|insufficient|no such model|(unknown|invalid|unsupported) model|model[^.]{0,40}(not found|does not exist|not available|unknown|invalid|unsupported)'
+# A model name's parts, and whether one list of parts runs whole and in
+# order inside another: model_identity's test for an alias (FR-15).
+LP_NAME_PARTS_JQ='def parts: ascii_downcase | [splits("[^a-z0-9]+") | select(length > 0)];
+  def within($long): . as $s | ($s | length) as $k
+    | $k > 0 and any(range(0; ($long | length) - $k + 1); $long[.:(. + $k)] == $s);'
 # A 32x32 red PNG, and its colour, for the image_input check.
 LP_IMAGE_PNG_B64="iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAJ0lEQVR42u3NsQkAAAjAsP7/tF7hIASyp6lTCQQCgUAgEAgEgi/BAjLD/C5w/SM9AAAAAElFTkSuQmCC"
 LP_IMAGE_COLOUR="red"
@@ -167,11 +172,12 @@ _lp_shq() {  # <text>, quoted for sh
 # its watchdog and removes its directory before the subshell ends. A TERM
 # that comes before the runner starts stops the run from starting. The
 # harness keeps the default TERM, since a caught signal is not inherited
-# across exec. The subshell's own stderr goes nowhere: the bounded runner
-# turns job control on, and bash may then print a notice of the watchdog it
-# killed outside the runner's redirections, which reached `cct llm test
-# --json`'s caller once. The harness's stdout and stderr have files of their
-# own, and the run reports through its status. Returns ca_run_bounded's status.
+# across exec. The subshell's own stderr goes to a file in the probe's
+# directory, there while the run is: the bounded runner turns job control
+# on, and bash may then print a notice of the watchdog it killed outside the
+# runner's redirections, which reached `cct llm test --json`'s caller once.
+# The harness's stdout and stderr have files of their own, and the run
+# reports through its status. Returns ca_run_bounded's status.
 _lp_run() {
     local in="$1" out="$2" err="$3" cmd a child rc=0
     shift 3
@@ -184,7 +190,7 @@ _lp_run() {
       llm_cc_apply
       export CLAUDE_CODE_MAX_RETRIES="$LP_MAX_RETRIES"
       [[ -z "$lp_stop" ]] || exit 143
-      ca_run_bounded "$LP_TIMEOUT" "$child" "$out" "$LP_KILL_GRACE_SEC" ) 2>/dev/null &
+      ca_run_bounded "$LP_TIMEOUT" "$child" "$out" "$LP_KILL_GRACE_SEC" ) 2>> "$LP_WD/runner-stderr.txt" &
     LP_RUN_PID=$!
     wait "$LP_RUN_PID" || rc=$?
     LP_RUN_PID=""
@@ -336,17 +342,24 @@ lp_probe() {
     if [[ "$auth_refused" -eq 1 ]]; then auth=fail; elif [[ "$replied" -eq 1 ]]; then auth=pass; else auth=unverifiable; fi
     # Claude Code sends a model without its context suffix ("model[1m]" goes
     # out as "model"), and the endpoint reports what it was sent, or the
-    # name an alias resolved to: one that contains the requested name, or is
-    # contained in it, as `opus` comes back as a dated id. That passes, and
-    # the record keeps the names the endpoint reported; a later test that
-    # reports others passes too, and says the alias moved (the owner's
-    # ruling of 2026-11-27). Any other name fails.
+    # name an alias resolved to: one whose name parts (split at anything
+    # not a letter or digit) hold the requested name's parts, in order and
+    # whole, as `opus` comes back as `claude-opus-4-8-20261001`, or the
+    # other way round. That passes, and the record keeps the names the
+    # endpoint reported; a later test that reports others passes too, and
+    # says the alias moved (the owner's ruling of 2026-11-27). A name with
+    # no parts at all, an empty one, says nothing: unverifiable. Any other
+    # name, `octopus-7` for `opus` included, fails.
     want="$LR_MODEL"
     if [[ "$want" =~ ^(.+)\[[0-9A-Za-z]+\]$ ]]; then want="${BASH_REMATCH[1]}"; fi
     if [[ "$replied" -eq 0 ]]; then model=unverifiable
     elif [[ "$(jq -r --arg m "$want" 'all(.models[]; . == $m)' <<< "$LP_S")" == "true" ]]; then model=pass
-    elif [[ "$(jq -r --arg m "$want" '($m | ascii_downcase) as $w
-            | all(.models[]; ascii_downcase as $r | ($r | contains($w)) or ($w | contains($r)))' <<< "$LP_S")" == "true" ]]; then
+    elif [[ "$(jq -r "$LP_NAME_PARTS_JQ"' any(.models[]; parts | length == 0)' <<< "$LP_S")" == "true" ]]; then
+        model=unverifiable
+        alias_note="the endpoint reported an empty model name"
+    elif [[ "$(jq -r --arg m "$want" "$LP_NAME_PARTS_JQ"' ($m | parts) as $w
+            | all(.models[]; parts as $r
+                  | if ($r | length) >= ($w | length) then $w | within($r) else $r | within($w) end)' <<< "$LP_S")" == "true" ]]; then
         model=pass
         LP_REPORTED=$(jq -c '.models' <<< "$LP_S")
         alias_note="the endpoint reports $want as $(jq -r 'join(", ")' <<< "$LP_REPORTED")"

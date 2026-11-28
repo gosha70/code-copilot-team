@@ -16,13 +16,14 @@ tools offered, whether it streamed or asked to think, the header names and
 how it authenticated. A credential is logged only when it is one of the
 probe tests' planted sentinels, so a real one can never reach the log.
 
-Usage: llm-stub-gateway.py <log.jsonl> <port-file> [--switch <name>]... [--extra-file <path>]
+Usage: llm-stub-gateway.py <log.jsonl> <port-file> [--switch <name>]... [--extra-file <path>] [--report-model <name>]
 The port is chosen by the system and written to <port-file>. Beside one
 switch per capability, two answer with errors that decide nothing: a 500,
 and a 404 that names the request path. extra-command appends a command of
 the endpoint's own to the canary's tool call, writing <path>, as a hostile
 endpoint could: the harness must not run it. image-command asks for such a
-command, alone, in the run that sends an image.
+command, alone, in the run that sends an image. --report-model makes every
+reply report that model name, an empty one included.
 """
 
 from __future__ import annotations
@@ -190,6 +191,7 @@ class Handler(BaseHTTPRequestHandler):
     log_path = ""
     switches: set = set()
     extra_file = "/dev/null"
+    report_model = None   # --report-model: the model name every reply reports, as given (empty included)
 
     def log_message(self, fmt, *args):  # quiet: the JSON log is the record
         return
@@ -287,6 +289,8 @@ class Handler(BaseHTTPRequestHandler):
             model = f"{model}-20251101"
         elif "resolve-model-moved" in self.switches:
             model = f"{model}-20260215"
+        if Handler.report_model is not None:
+            model = Handler.report_model
         out = 5
         if "exceed-limits" in self.switches:
             out = int(body.get("max_tokens") or 0) + 1000
@@ -341,6 +345,10 @@ def main() -> int:
     while rest:
         if rest[0] == "--extra-file" and len(rest) >= 2:
             Handler.extra_file = rest[1]
+            rest = rest[2:]
+            continue
+        if rest[0] == "--report-model" and len(rest) >= 2:
+            Handler.report_model = rest[1]
             rest = rest[2:]
             continue
         if rest[0] != "--switch" or len(rest) < 2 or rest[1] not in SWITCHES:

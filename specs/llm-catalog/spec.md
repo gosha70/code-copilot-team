@@ -659,15 +659,20 @@ catalog.sh` and `tests/test-llm-launch.sh`.
     `limit_controls` from each response's streamed `message_delta`,
     against the binding's `max_output_tokens`. `model_identity` compares
     with the model as Claude Code sends it: without a context suffix
-    such as `[1m]`, which it strips. A reported name that contains the
-    requested one, or is contained in it (an alias Claude Code resolved,
-    a dated id), passes, and the attempt keeps the reported names as
-    `reported_models`; a later test that reports others passes too, and
-    its detail says the alias moved. The owner ruled so on 2026-11-27,
-    after `cct llm test opus` came back `unverifiable` on Claude Code's
-    own login (`origin/2026-11-26-s3-rulings.md`). `cct llm list` and
-    `cct llm show`, and `cct harness explain`'s text, give the tested
-    state a launch gets; their JSON keeps the static state.
+    such as `[1m]`, which it strips. A reported name whose parts (split
+    at anything not a letter or digit) hold the requested name's parts,
+    whole and in order, or the other way round (an alias Claude Code
+    resolved, a dated id), passes, and the attempt keeps the reported
+    names as `reported_models`; a later test that reports others passes
+    too, and its detail says the alias moved. The owner ruled so on
+    2026-11-27, after `cct llm test opus` came back `unverifiable` on
+    Claude Code's own login (`origin/2026-11-26-s3-rulings.md`); #555's
+    review asked for whole parts, so that `octopus-7` or `o` for `opus`
+    fails, and an empty name is `unverifiable`. `cct llm list`, `cct llm
+    show` and `cct harness explain` give the tested state a launch gets:
+    in their text, and in their JSON as `launch_state` and
+    `launch_reason`, beside the static `state` (`compatibility` in
+    explain's).
   - *The verdict.* A refused credential, which Claude Code reports in
     its `api_retry` records, is an attempt of its own, `unavailable`;
     the probe sets `CLAUDE_CODE_MAX_RETRIES=1`, so that it is reported

@@ -52,7 +52,7 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["target", "llm", "binding", "harness", "model", "endpoint", "credential", "state", "reason"],
+            "required": ["target", "llm", "binding", "harness", "model", "endpoint", "credential", "state", "reason", "launch_state", "launch_reason"],
             "additionalProperties": false,
             "properties": {
               "target": {"type": "string"},
@@ -63,7 +63,9 @@
               "endpoint": {"$ref": "#/$defs/origin"},
               "credential": {"oneOf": [{"$ref": "#/$defs/credential"}, {"type": "null"}]},
               "state": {"oneOf": [{"$ref": "#/$defs/state"}, {"type": "null"}]},
-              "reason": {"type": ["string", "null"]}
+              "reason": {"type": ["string", "null"]},
+              "launch_state": {"oneOf": [{"$ref": "#/$defs/compat_state"}, {"type": "null"}]},
+              "launch_reason": {"type": ["string", "null"]}
             }
           }
         }
@@ -96,7 +98,7 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["id", "target", "harness", "endpoint", "protocol", "credential", "state", "reason", "digests"],
+            "required": ["id", "target", "harness", "endpoint", "protocol", "credential", "state", "reason", "launch_state", "launch_reason", "digests"],
             "additionalProperties": false,
             "properties": {
               "id": {"$ref": "#/$defs/id"},
@@ -107,6 +109,8 @@
               "credential": {"$ref": "#/$defs/credential"},
               "state": {"$ref": "#/$defs/state"},
               "reason": {"type": ["string", "null"]},
+              "launch_state": {"oneOf": [{"$ref": "#/$defs/compat_state"}, {"type": "null"}]},
+              "launch_reason": {"type": ["string", "null"]},
               "digests": {"$ref": "#/$defs/digests"}
             }
           }
@@ -141,7 +145,7 @@
     "explain": {
       "description": "The LaunchPlan (FR-9) of one target on one harness. A target that does not resolve has a null binding and a refusal.",
       "type": "object",
-      "required": ["schema_version", "command", "harness", "target", "llm", "binding", "refusal"],
+      "required": ["schema_version", "command", "harness", "target", "llm", "binding", "refusal", "launch_state", "launch_reason"],
       "properties": {
         "schema_version": {"const": 1},
         "command": {"const": "explain"},
@@ -190,6 +194,8 @@
             "reason": {"type": ["string", "null"]}
           }
         },
+        "launch_state": {"oneOf": [{"$ref": "#/$defs/compat_state"}, {"type": "null"}]},
+        "launch_reason": {"type": ["string", "null"]},
         "digests": {"$ref": "#/$defs/digests"},
         "refusal": {
           "oneOf": [
