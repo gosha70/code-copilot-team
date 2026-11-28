@@ -613,7 +613,52 @@ probe_switch ignore-system-prompt system_prompt fail incompatible
 probe_switch reject-shape output_parsing fail incompatible
 probe_switch reject-model output_parsing unverifiable unverified
 probe_switch reject-billing output_parsing unverifiable unverified
-probe_switch resolve-model model_identity unverifiable unverified
+# An alias the endpoint resolves passes, and the record keeps the name it
+# reported; a later test that reports another passes too, and says the alias
+# moved (the owner's ruling of 2026-11-27).
+gateway "$TMP/gw-resolve.jsonl" --switch resolve-model
+RM_HOME=$(probe_home probe-resolve "$GW_PORT")
+ptest "$RM_HOME" -- llm test pm --json
+gateway_stop
+RM_REC="$RM_HOME/llm-compat/claude-code/pm@pt.json"
+assert_eq "test: a dated id that contains the requested name passes model_identity, and the record keeps it" '0|pass|supported|["probe-model-20251101"]|1' \
+    "$RC|$(jq -r .matrix.model_identity <<< "$OUT")|$(jq -r .state <<< "$OUT")|$(jq -c .latest_conclusive.reported_models "$RM_REC")|$(jq -r .detail <<< "$OUT" | grep -c '(the endpoint reports probe-model as probe-model-20251101)$')"
+RM_FIRST_AT=$(jq -r .latest_conclusive.at "$RM_REC")
+gateway "$TMP/gw-resolve-moved.jsonl" --switch resolve-model-moved
+RM_HOME=$(probe_home probe-resolve "$GW_PORT")
+ptest "$RM_HOME" -- llm test pm --json
+gateway_stop
+assert_eq "test: ...a later test that reports another passes too, records it, and says the alias moved" '0|pass|supported|["probe-model-20260215"]|1' \
+    "$RC|$(jq -r .matrix.model_identity <<< "$OUT")|$(jq -r .state <<< "$OUT")|$(jq -c .latest_conclusive.reported_models "$RM_REC")|$(jq -r .detail <<< "$OUT" | grep -c "the endpoint reports probe-model as probe-model-20260215, where the test of $RM_FIRST_AT recorded probe-model-20251101: the alias moved")"
+ptest "$RM_HOME" -- llm list; RM_LIST="$OUT"
+ptest "$RM_HOME" -- llm show pm; RM_SHOW="$OUT"
+ptest "$RM_HOME" -- harness explain claude-code --llm pm; RM_EXPLAIN="$OUT"
+assert_eq "list, show and explain give the tested state a launch gets, not the static one (S3)" "1|1|1|1" \
+    "$(grep -cE '^pm +claude-code .* supported *$' <<< "$RM_LIST")|$(grep -c 'STATE is what a launch gets' <<< "$RM_LIST")|$(grep -cE '^ +pm +claude-code .* supported$' <<< "$RM_SHOW")|$(grep -c '^  state     supported: passed its test of ' <<< "$RM_EXPLAIN")"
+ptest "$RM_HOME" -- llm list --json; RM_LIST_J="$OUT"
+ptest "$RM_HOME" -- llm show pm --json; RM_SHOW_J="$OUT"
+ptest "$RM_HOME" -- harness explain claude-code --llm pm --json; RM_EXPLAIN_J="$OUT"
+assert_eq "...and their --json gives it as launch_state, beside the static state" "unverified|supported|supported|supported" \
+    "$(jq -r '.targets[] | select(.target == "pm") | .state' <<< "$RM_LIST_J")|$(jq -r '.targets[] | select(.target == "pm") | .launch_state' <<< "$RM_LIST_J")|$(jq -r '.bindings[0].launch_state' <<< "$RM_SHOW_J")|$(jq -r .launch_state <<< "$RM_EXPLAIN_J")"
+# The alias rule matches whole name parts: a requested name inside a longer
+# word, or a single letter of it, is another model; an empty name says
+# nothing (#555's review).
+alias_case() {  # <reported name> <tag>: cct llm test of an `opus` target behind a gateway reporting that name
+    gateway "$TMP/gw-alias-$2.jsonl" --report-model "$1"
+    local h; h=$(probe_home "probe-alias-$2" "$GW_PORT")
+    sed 's/^model = "probe-model"$/model = "opus"/' "$h/llms.toml" > "$h/llms.toml.new" && mv "$h/llms.toml.new" "$h/llms.toml"
+    ptest "$h" -- llm test pm --json
+    gateway_stop
+}
+alias_case "octopus-7" octopus
+assert_eq "test: a name holding the requested one only inside a longer word fails model_identity (octopus-7 for opus)" "1|fail|incompatible" \
+    "$RC|$(jq -r .matrix.model_identity <<< "$OUT")|$(jq -r .state <<< "$OUT")"
+alias_case "o" letter
+assert_eq "test: ...as does a one-letter name (o for opus)" "1|fail|incompatible" \
+    "$RC|$(jq -r .matrix.model_identity <<< "$OUT")|$(jq -r .state <<< "$OUT")"
+alias_case "" empty
+assert_eq "test: an empty model name says nothing: model_identity is unverifiable, and the detail says why" "1|unverifiable|unverified|1" \
+    "$RC|$(jq -r .matrix.model_identity <<< "$OUT")|$(jq -r .state <<< "$OUT")|$(jq -r .detail <<< "$OUT" | grep -c 'the endpoint reported an empty model name')"
 # The endpoint is the model: a command of its own, appended to the canary's
 # tool call, is refused, and the run fails (#547's review).
 gateway "$TMP/gw-extra.jsonl" --switch extra-command --extra-file "$TMP/extra-ran.txt"

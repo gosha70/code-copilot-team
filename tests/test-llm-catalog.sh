@@ -271,7 +271,7 @@ assert_contains "list: an endpoint is shown by its origin" "$OUTPUT" "https://ll
 assert_not_contains "list: ...never with its path" "$OUTPUT" "llm.example/v1"
 assert_contains "list: an llm with several bindings lists <llm>@<binding>" "$OUTPUT" "m@b2"
 assert_contains "list: a managed provider signs in itself" "$OUTPUT" "its own login"
-assert_contains "list: a launchable target is unverified, and the word is explained" "$OUTPUT" "unverified: launchable; no compatibility probe exists yet"
+assert_contains "list: an untested target is unverified, and the word is explained" "$OUTPUT" "STATE is what a launch gets: supported launches; unverified needs a passing \`cct llm test <target>\` first"
 list
 assert_contains "list: an unset credential makes the target unavailable" "$OUTPUT" "unavailable: credential variable TEST_LLM_KEY is not set"
 assert_contains "list: ...and says so in the credential column" "$OUTPUT" "TEST_LLM_KEY (not set)"

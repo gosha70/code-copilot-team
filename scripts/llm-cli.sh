@@ -197,6 +197,49 @@ cmd_validate() {
     return "$rc"
 }
 
+# launch_prime <harness>: reads the rule table and the harness version once,
+# in this shell, so that each launch_state subshell finds them already read.
+launch_prime() { lcm_load_rules >/dev/null 2>&1 || true; lcm_harness_version "$1" >/dev/null 2>&1 || true; }
+
+# launch_state <harness> <target>: LAUNCH_STATE and LAUNCH_REASON, the tested
+# state a launch of the target gets, as the gate reads it (S3). Both are
+# empty when the resolver refuses the target; LAUNCH_STATE alone is when its
+# record cannot be read, and LAUNCH_REASON then says so. lcm_state runs in a
+# subshell, so the caller's LR_* and LCM_* stay as they were, and computes
+# the evidence digests only for a target with a test record to compare.
+_launch_state_sub() (
+    rc=0
+    LCM_LAZY_EVIDENCE=1
+    lcm_state "$1" "$2" 2>/dev/null || rc=$?
+    case "$rc" in
+        0) printf '%s%s%s' "$LCM_STATE" "$CT_US" "$LCM_REASON" ;;
+        2) printf '%s%s%s' "" "$CT_US" "its tested state cannot be read: $LCM_ERR" ;;
+        *) printf '%s' "$CT_US" ;;
+    esac
+)
+launch_state() {
+    local out
+    launch_prime "$1"
+    out=$(_launch_state_sub "$1" "$2")
+    LAUNCH_STATE="${out%%"$CT_US"*}" LAUNCH_REASON="${out#*"$CT_US"}"
+}
+
+# launch_text <static-state> <static-reason> [short]: launch_state's result
+# as text, with its reason (`short`: the reason only for a refusal the
+# catalog decides, unavailable or unsupported); the static state, with a
+# note, when the tested one is not known.
+launch_text() {
+    if [[ -z "$LAUNCH_STATE" ]]; then
+        printf '%s' "$1${2:+: $2}"
+        [[ -n "$LAUNCH_REASON" ]] && printf ' (%s)' "$LAUNCH_REASON"
+    elif [[ "${3:-}" == short && "$LAUNCH_STATE" != unavailable && "$LAUNCH_STATE" != unsupported ]]; then
+        printf '%s' "$LAUNCH_STATE"
+    else
+        printf '%s' "$LAUNCH_STATE${LAUNCH_REASON:+: $LAUNCH_REASON}"
+    fi
+    return 0
+}
+
 # What a binding's credential is, without its value: text and JSON.
 credential_of() {  # <binding-id>: sets CRED_TEXT and CRED_JSON
     local e ep mode cred lp
@@ -236,7 +279,7 @@ _row() {  # target harness model endpoint credential state
 }
 
 cmd_list() {
-    local json="$1" l b bl h model target endpoint state n rc=0 jrows='[]'
+    local json="$1" l b bl h model target endpoint state n rc=0 jrows='[]' origin sstate sreason
     load_catalog list "$json" || return $?
 
     ROWS=""
@@ -257,20 +300,28 @@ cmd_list() {
                 endpoint="${LR_ORIGIN:-endpoint $LR_ENDPOINT_ID}"
             fi
             credential_of "$b"
-            state="$LR_STATE"
-            if [[ -n "$LR_REASON" ]]; then state="$state: $LR_REASON"; fi
+            origin="$LR_ORIGIN" sstate="$LR_STATE" sreason="$LR_REASON"
+            # The text column shows what a launch gets: the tested state the
+            # gate reads (S3), with the reason for a refusal the catalog
+            # decides; `cct llm compatibility` gives every reason. The JSON
+            # keeps the static state as `state`, and gives this one as
+            # `launch_state`.
+            launch_state "$h" "$LR_LLM@$LR_BINDING"
+            state=$(launch_text "$sstate" "$sreason" short)
             _row "$target" "$h" "$model" "$endpoint" "$CRED_TEXT" "$state"
             jrows=$(jq -c --arg t "$target" --arg l "$l" --arg b "$b" --arg h "$h" --arg m "$model" \
-                --argjson e "$(null_if_empty "$LR_ORIGIN")" --argjson c "$CRED_JSON" \
-                --arg s "$LR_STATE" --argjson r "$(null_if_empty "$LR_REASON")" \
+                --argjson e "$(null_if_empty "$origin")" --argjson c "$CRED_JSON" \
+                --arg s "$sstate" --argjson r "$(null_if_empty "$sreason")" \
+                --argjson ls "$(null_if_empty "$LAUNCH_STATE")" --argjson lr "$(null_if_empty "$LAUNCH_REASON")" \
                 '. + [{target: $t, llm: $l, binding: $b, harness: $h, model: $m, endpoint: $e,
-                       credential: $c, state: $s, reason: $r}]' <<< "$jrows")
+                       credential: $c, state: $s, reason: $r, launch_state: $ls, launch_reason: $lr}]' <<< "$jrows")
         done <<< "$(lc_ids bindings)"
         if [[ $n -eq 0 ]]; then
             _row "$l" "-" "$model" "-" "-" "no binding: add a [bindings.<id>] table for it"
             jrows=$(jq -c --arg l "$l" --arg m "$model" \
                 '. + [{target: $l, llm: $l, binding: null, harness: null, model: $m, endpoint: null,
-                       credential: null, state: null, reason: "no binding: add a [bindings.<id>] table for it"}]' <<< "$jrows")
+                       credential: null, state: null, reason: "no binding: add a [bindings.<id>] table for it",
+                       launch_state: null, launch_reason: null}]' <<< "$jrows")
         fi
     done <<< "$(lc_ids llms)"
 
@@ -284,7 +335,7 @@ cmd_list() {
     fi
     _print_rows
     echo ""
-    echo "unverified: launchable; no compatibility probe exists yet, so nothing has checked the model against the harness."
+    echo "STATE is what a launch gets: supported launches; unverified needs a passing \`cct llm test <target>\` first, or --allow-unverified; the rest are refused. \`cct llm compatibility\` says why."
     echo "Start a session on one:  cct start --llm <target> [path]"
     return 0
 }
@@ -339,15 +390,19 @@ cmd_show() {
         lr_resolve "$h" "$target" || true
         if [[ "$json" == 1 ]]; then lr_digests || true; fi  # only the JSON form shows them
         credential_of "$b"
-        state="$LR_STATE"
-        if [[ -n "$LR_REASON" ]]; then state="$state: $LR_REASON"; fi
+        # The text gives the tested state a launch gets (S3); the JSON keeps
+        # the static state as `state`, and gives this one as `launch_state`.
+        launch_state "$h" "$LR_LLM@$LR_BINDING"
+        state=$(launch_text "$LR_STATE" "$LR_REASON" short)
         text="${text}    $target  $h  ${LR_ORIGIN:--}${LR_PROTOCOL:+, $LR_PROTOCOL}  $CRED_TEXT  $state"$'\n'
         jb=$(jq -c --arg b "$b" --arg t "$target" --arg h "$h" \
             --argjson e "$(null_if_empty "$LR_ORIGIN")" --argjson p "$(null_if_empty "$LR_PROTOCOL")" \
             --argjson c "$CRED_JSON" --arg s "$LR_STATE" --argjson r "$(null_if_empty "$LR_REASON")" \
+            --argjson ls "$(null_if_empty "$LAUNCH_STATE")" --argjson lr "$(null_if_empty "$LAUNCH_REASON")" \
             --arg dc "$LR_DIGEST_CATALOG" --arg dl "$LR_DIGEST_LAUNCH" --arg dopt "$LR_DIGEST_OPTIONS" \
             '. + [{id: $b, target: $t, harness: $h, endpoint: $e, protocol: $p, credential: $c,
-                   state: $s, reason: $r, digests: {catalog: $dc, launch_identity: $dl, options: $dopt}}]' <<< "$jb")
+                   state: $s, reason: $r, launch_state: $ls, launch_reason: $lr,
+                   digests: {catalog: $dc, launch_identity: $dl, options: $dopt}}]' <<< "$jb")
     done <<< "$(lc_ids bindings)"
 
     if [[ "$json" == 1 ]]; then
@@ -375,8 +430,13 @@ cmd_explain() {  # <harness> <target> <json> <project-dir>
     local h="$1" t="$2" json="$3" project="$4" rc=0 rec name kind payload line
     load_catalog explain "$json" || return $?
     lr_resolve "$h" "$t" "$project" || rc=1
+    # The tested state a launch gets (S3): the text's state line, and the
+    # JSON's launch_state beside the static `compatibility`.
+    LAUNCH_STATE="" LAUNCH_REASON=""
+    if [[ $rc -eq 0 ]]; then launch_state "$h" "$LR_LLM@$LR_BINDING"; fi
     if [[ "$json" == 1 ]]; then
-        envelope explain "$(lr_plan_json)"
+        envelope explain "$(lr_plan_json | jq -c --argjson ls "$(null_if_empty "$LAUNCH_STATE")" \
+            --argjson lr "$(null_if_empty "$LAUNCH_REASON")" '. + {launch_state: $ls, launch_reason: $lr}')"
     elif [[ $rc -ne 0 ]]; then
         echo "--llm $t on $h would be refused: $LR_REFUSAL"
     else
@@ -389,11 +449,7 @@ cmd_explain() {  # <harness> <target> <json> <project-dir>
             echo "  endpoint  none: Claude Code's own login"
         fi
         echo "  model     $LR_MODEL"
-        if [[ "$LR_STATE" == "unverified" ]]; then
-            echo "  state     unverified: launchable; nothing has probed this model on $h yet"
-        else
-            echo "  state     $LR_STATE: $LR_REASON"
-        fi
+        echo "  state     $(launch_text "$LR_STATE" "$LR_REASON")"
         echo "  sets      (names only; a value is read by the launch alone)"
         while IFS= read -r rec; do
             [[ -z "$rec" ]] && continue

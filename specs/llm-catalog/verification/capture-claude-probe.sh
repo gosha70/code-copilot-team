@@ -22,7 +22,7 @@ GATEWAY="$REPO/tests/fixtures/llm-stub-gateway.py"
 CCT="$REPO/scripts/cct"
 LIMIT="${CAPTURE_TIMEOUT_SEC:-90}"
 HANG_LIMIT=15   # the time-out switch: the watchdog ends the run
-SWITCHES="drop-tool-calls ignore-tool-results no-stream other-model resolve-model ignore-system-prompt reject-shape reject-model reject-billing reject-auth exceed-limits time-out drop-reasoning ignore-images server-error not-found extra-command image-command"
+SWITCHES="drop-tool-calls ignore-tool-results no-stream other-model resolve-model resolve-model-moved ignore-system-prompt reject-shape reject-model reject-billing reject-auth exceed-limits time-out drop-reasoning ignore-images server-error not-found extra-command image-command"
 
 real_claude() {  # the first claude on PATH that is not a script
   local dir f

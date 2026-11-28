@@ -88,7 +88,7 @@ code-copilot-team/
 │   ├── test-cct-home.sh               146 home resolver + `cct home` tests (#411)
 │   ├── test-llm-catalog.sh            151 LLM catalog, project policy + `cct llm` tests (#479, #400)
 │   ├── test-llm-launch.sh             296 `claude-code --llm` launch, stamp, resume and gate tests (#479, #400)
-│   ├── test-llm-cli.sh                205 `cct llm show`, `cct llm sessions`, `cct llm test`, `cct harness explain` and `--json` tests (#400)
+│   ├── test-llm-cli.sh                211 `cct llm show`, `cct llm sessions`, `cct llm test`, `cct harness explain` and `--json` tests (#400)
 │   ├── test-cct-statefile.sh          64 state-file tests: modes, locks, killed and concurrent writers (#400)
 │   ├── test-llm-compat.sh             84 compatibility state, record, `cct llm compatibility` and doctor tests (#400)
 │   ├── test-wiki-setup.sh             54 managed wiki-studio install tests (#384)

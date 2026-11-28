@@ -20,9 +20,11 @@
 # unverifiable (a timeout, a crash, unparseable output, a transient
 # error). Only pass and fail are conclusive (FR-13, FR-16).
 #
-# Sets LP_OUTCOME, LP_MATRIX (JSON), LP_DETAIL and LP_REDACTED (the reply
-# or error, with the credential's value, the probe directory and the home
-# directory taken out), and leaves lcm_state's LCM_* and the resolver's
+# Sets LP_OUTCOME, LP_MATRIX (JSON), LP_DETAIL, LP_REDACTED (the reply or
+# error, with the credential's value, the probe directory and the home
+# directory taken out) and LP_REPORTED (JSON: the model names the endpoint
+# reported, when an alias resolved to them; else null, and the record
+# keeps them as reported_models), and leaves lcm_state's LCM_* and the resolver's
 # LR_* set. Returns 0 when the run was recorded; 1 when it could not run
 # (LP_ERR says why; LP_REFUSED=1 when the target's state refuses it, as a
 # launch would); 2 when its record could not be written.
@@ -77,6 +79,11 @@ LP_HOOKS_OFF_VARS="CLAUDE_CODE_SIMPLE CLAUDE_CODE_SAFE_MODE"
 # whether the harness can speak to the endpoint (FR-13).
 LP_SHAPE_RE='(unsupported|unrecognized|unknown|unexpected|invalid|not supported|not permitted|not allowed)[^.]{0,40}(parameter|argument|field|property|input|content block|block type|tool|header|beta)|extra (inputs|fields) (are|is) not permitted|validation error|should be a valid|does not match any of the expected|tool_reference|input_schema'
 LP_NOT_SHAPE_RE='credit|balance|billing|quota|payment|insufficient|no such model|(unknown|invalid|unsupported) model|model[^.]{0,40}(not found|does not exist|not available|unknown|invalid|unsupported)'
+# A model name's parts, and whether one list of parts runs whole and in
+# order inside another: model_identity's test for an alias (FR-15).
+LP_NAME_PARTS_JQ='def parts: ascii_downcase | [splits("[^a-z0-9]+") | select(length > 0)];
+  def within($long): . as $s | ($s | length) as $k
+    | $k > 0 and any(range(0; ($long | length) - $k + 1); $long[.:(. + $k)] == $s);'
 # A 32x32 red PNG, and its colour, for the image_input check.
 LP_IMAGE_PNG_B64="iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAJ0lEQVR42u3NsQkAAAjAsP7/tF7hIASyp6lTCQQCgUAgEAgEgi/BAjLD/C5w/SM9AAAAAElFTkSuQmCC"
 LP_IMAGE_COLOUR="red"
@@ -165,7 +172,12 @@ _lp_shq() {  # <text>, quoted for sh
 # its watchdog and removes its directory before the subshell ends. A TERM
 # that comes before the runner starts stops the run from starting. The
 # harness keeps the default TERM, since a caught signal is not inherited
-# across exec. Returns ca_run_bounded's status.
+# across exec. The subshell's own stderr goes to a file in the probe's
+# directory, there while the run is: the bounded runner turns job control
+# on, and bash may then print a notice of the watchdog it killed outside the
+# runner's redirections, which reached `cct llm test --json`'s caller once.
+# The harness's stdout and stderr have files of their own, and the run
+# reports through its status. Returns ca_run_bounded's status.
 _lp_run() {
     local in="$1" out="$2" err="$3" cmd a child rc=0
     shift 3
@@ -178,7 +190,7 @@ _lp_run() {
       llm_cc_apply
       export CLAUDE_CODE_MAX_RETRIES="$LP_MAX_RETRIES"
       [[ -z "$lp_stop" ]] || exit 143
-      ca_run_bounded "$LP_TIMEOUT" "$child" "$out" "$LP_KILL_GRACE_SEC" ) &
+      ca_run_bounded "$LP_TIMEOUT" "$child" "$out" "$LP_KILL_GRACE_SEC" ) 2>> "$LP_WD/runner-stderr.txt" &
     LP_RUN_PID=$!
     wait "$LP_RUN_PID" || rc=$?
     LP_RUN_PID=""
@@ -235,8 +247,8 @@ lp_probe() {
     local h="$1" target="$2" rc=0 seed n1 n2 n3 n4 sys reply img_reply img_s cred
     local auth model streaming system tool_call tool_result parsing clean limits reasoning image
     local required c v failed="" open="" max="" tmp_out want p img_rc img_err img_sum guard jq_bin
-    local foreign foreign_refused foreign_ran foreign_note=""
-    LP_OUTCOME="" LP_MATRIX="null" LP_DETAIL="" LP_REDACTED="" LP_ERR="" LP_REFUSED=0 LP_NOTES=""
+    local foreign foreign_refused foreign_ran foreign_note="" alias_note="" prev_reported
+    LP_OUTCOME="" LP_MATRIX="null" LP_DETAIL="" LP_REDACTED="" LP_ERR="" LP_REFUSED=0 LP_NOTES="" LP_REPORTED="null"
     LP_SECRET="" LP_SECRET_NAME="" LP_URL_PATH=""
 
     LP_TIMEOUT="${CCT_LLM_PROBE_TIMEOUT_SEC:-$LP_TIMEOUT_DEFAULT_SEC}"
@@ -329,16 +341,32 @@ lp_probe() {
 
     if [[ "$auth_refused" -eq 1 ]]; then auth=fail; elif [[ "$replied" -eq 1 ]]; then auth=pass; else auth=unverifiable; fi
     # Claude Code sends a model without its context suffix ("model[1m]" goes
-    # out as "model"), and the endpoint reports what it was sent.
-    # A name that only contains the requested one, or is contained in it (an
-    # alias Claude Code resolved, a dated id), cannot be confirmed either
-    # way: unverifiable, never fail.
+    # out as "model"), and the endpoint reports what it was sent, or the
+    # name an alias resolved to: one whose name parts (split at anything
+    # not a letter or digit) hold the requested name's parts, in order and
+    # whole, as `opus` comes back as `claude-opus-4-8-20261001`, or the
+    # other way round. That passes, and the record keeps the names the
+    # endpoint reported; a later test that reports others passes too, and
+    # says the alias moved (the owner's ruling of 2026-11-27). A name with
+    # no parts at all, an empty one, says nothing: unverifiable. Any other
+    # name, `octopus-7` for `opus` included, fails.
     want="$LR_MODEL"
     if [[ "$want" =~ ^(.+)\[[0-9A-Za-z]+\]$ ]]; then want="${BASH_REMATCH[1]}"; fi
     if [[ "$replied" -eq 0 ]]; then model=unverifiable
     elif [[ "$(jq -r --arg m "$want" 'all(.models[]; . == $m)' <<< "$LP_S")" == "true" ]]; then model=pass
-    elif [[ "$(jq -r --arg m "$want" '($m | ascii_downcase) as $w
-            | all(.models[]; ascii_downcase as $r | ($r | contains($w)) or ($w | contains($r)))' <<< "$LP_S")" == "true" ]]; then model=unverifiable
+    elif [[ "$(jq -r "$LP_NAME_PARTS_JQ"' any(.models[]; parts | length == 0)' <<< "$LP_S")" == "true" ]]; then
+        model=unverifiable
+        alias_note="the endpoint reported an empty model name"
+    elif [[ "$(jq -r --arg m "$want" "$LP_NAME_PARTS_JQ"' ($m | parts) as $w
+            | all(.models[]; parts as $r
+                  | if ($r | length) >= ($w | length) then $w | within($r) else $r | within($w) end)' <<< "$LP_S")" == "true" ]]; then
+        model=pass
+        LP_REPORTED=$(jq -c '.models' <<< "$LP_S")
+        alias_note="the endpoint reports $want as $(jq -r 'join(", ")' <<< "$LP_REPORTED")"
+        prev_reported=$(jq -c '.latest_conclusive.reported_models // null' <<< "${LCM_RECORD:-null}" 2>/dev/null) || prev_reported=null
+        if [[ "$prev_reported" != "null" && "$prev_reported" != "$LP_REPORTED" ]]; then
+            alias_note="$alias_note, where the test of $(jq -r '.latest_conclusive.at' <<< "$LCM_RECORD") recorded $(jq -r 'join(", ")' <<< "$prev_reported"): the alias moved"
+        fi
     else model=fail; fi
     if [[ "$(_lp_sv '.streamed')" == "true" ]]; then streaming=pass
     elif [[ "$replied" -eq 1 ]]; then streaming=fail; else streaming=unverifiable; fi
@@ -465,6 +493,7 @@ lp_probe() {
     # Said whatever the outcome: a run cut off after such a call decides
     # nothing, but what the endpoint asked for is worth knowing.
     if [[ -n "$foreign_note" ]]; then LP_DETAIL="$LP_DETAIL ($foreign_note)"; fi
+    if [[ -n "$alias_note" ]]; then LP_DETAIL="$LP_DETAIL ($alias_note)"; fi
     # The test seam replaces the harness, so its run is reported and recorded
     # and never decides the gate.
     if [[ -n "${CCT_LLM_PROBE_CMD:-}" ]]; then
@@ -475,9 +504,9 @@ lp_probe() {
 
     local attempt
     attempt=$(jq -nc --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg o "$LP_OUTCOME" --argjson m "$LP_MATRIX" \
-        --argjson e "$LCM_EVIDENCE" --arg d "$LP_DETAIL" --arg r "$LP_REDACTED" \
+        --argjson e "$LCM_EVIDENCE" --arg d "$LP_DETAIL" --arg r "$LP_REDACTED" --argjson rm "$LP_REPORTED" \
         '{at: $at, outcome: $o, matrix: $m, evidence: ($e | {digest, launch_identity, options, harness_version, rule_version}),
-          detail: $d, redacted: $r}')
+          detail: $d, redacted: $r} + (if $rm then {reported_models: $rm} else {} end)')
     lp_cleanup
     if ! lcm_record_attempt "$h" "$LR_LLM" "$LR_BINDING" "$attempt"; then
         LP_ERR="$LCM_ERR"
