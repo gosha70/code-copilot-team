@@ -9,8 +9,11 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+import sys
 from typing import Any, Mapping, Optional
+from urllib.parse import unquote
 
 from .. import constants as C
 
@@ -161,6 +164,22 @@ def current_mode(cfg: Any, override: Any) -> tuple[str, bool]:
     return cfg.redaction_mode, ingest_off
 
 
+def _path_form(path: Any) -> str:
+    text = str(path)
+    if "file:" in text.lower():
+        text = unquote(text)
+    form = os.path.normcase(os.path.normpath(text))
+    return form.casefold() if sys.platform == "darwin" else form
+
+
+def _root_pattern(root: Any) -> "re.Pattern[str]":
+    form = _path_form(root)
+    body = form.rstrip(os.path.sep) or form
+    if body == os.path.sep:
+        return re.compile(r"(?<![\w.-])" + re.escape(os.path.sep))
+    return re.compile(r"(?<![\w.-])" + re.escape(body) + r"(?![\w-]|\.\w)")
+
+
 class OutboundPolicy:
     """The floor for every session in a store, computed once per call.
 
@@ -191,6 +210,7 @@ class OutboundPolicy:
         self.skip_ids = skip_ids
         self.skip_keys = skip_keys
         self.excluded_projects = excluded_projects
+        self._project_roots: Optional[tuple["re.Pattern[str]", ...]] = None
         self._floored = dict(floored or {})
         self._current = dict(current or {})
         self._recorded = dict(recorded or {})
@@ -250,9 +270,18 @@ class OutboundPolicy:
         """``keeps`` for a ``copilot:native_id`` session key."""
         return str(session_key) not in self.skip_keys
 
-    def keeps_project(self, project_path: Any) -> bool:
-        """Whether a project path may be named or broken down by."""
-        return project_path not in self.excluded_projects
+    def names_project(self, path: Any) -> bool:
+        """Whether ``path`` is, or contains, an opted-out project's path or a
+        path inside one: ``see /work/repo/a.py`` and ``file:///work/repo/a.py``
+        name ``/work/repo``, ``/work/repo-other`` does not. Separators may be
+        written either way, and letter case is ignored on Windows and
+        macOS."""
+        if not path or not self.excluded_projects:
+            return False
+        if self._project_roots is None:
+            self._project_roots = tuple(_root_pattern(root) for root in self.excluded_projects)
+        value = _path_form(path)
+        return any(pattern.search(value) for pattern in self._project_roots)
 
     @property
     def any_floored(self) -> bool:

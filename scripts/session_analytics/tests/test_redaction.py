@@ -7,7 +7,11 @@
 
 from __future__ import annotations
 
+import ntpath
+import os
+import posixpath
 import unittest
+from unittest import mock
 
 from session_analytics import constants as C
 from session_analytics.contracts import RawSession, RawToolCall, RawTurn
@@ -215,6 +219,129 @@ class OutboundFloor(unittest.TestCase):
         self.assertTrue(policy.archived_text(3, "sk-secret", C.REDACT_NONE).startswith("[redacted"))
         self.assertEqual(policy.archived_text(4, "kept", C.REDACT_NONE), "kept")
         self.assertEqual((policy.archive_floors(3, C.REDACT_NONE), policy.archive_floors(4, C.REDACT_NONE)), (True, False))
+
+
+WINDOWS_RULES = mock.patch.object(redaction.os, "path", ntpath)
+
+
+class OutboundProjectPaths(unittest.TestCase):
+    """#548: a path inside an opted-out project is recognised however it is
+    spelled, so the floor holds on Windows as it does elsewhere."""
+
+    def policy(self, *roots: str) -> redaction.OutboundPolicy:
+        return redaction.OutboundPolicy(excluded_projects=frozenset(roots))
+
+    @WINDOWS_RULES
+    def test_a_windows_path_inside_the_project_is_named(self):
+        policy = self.policy("C:\\Users\\me\\repo")
+        self.assertTrue(policy.names_project("C:\\Users\\me\\repo"))
+        self.assertTrue(policy.names_project("C:\\Users\\me\\repo\\src\\app.py"))
+
+    @WINDOWS_RULES
+    def test_a_forward_slash_spelling_is_named(self):
+        policy = self.policy("C:\\Users\\me\\repo")
+        self.assertTrue(policy.names_project("C:/Users/me/repo"))
+        self.assertTrue(policy.names_project("C:/Users/me/repo/src/app.py"))
+
+    @WINDOWS_RULES
+    def test_letter_case_and_a_trailing_separator_do_not_matter(self):
+        policy = self.policy("c:\\users\\ME\\repo\\")
+        self.assertTrue(policy.names_project("C:\\Users\\me\\Repo\\src\\app.py"))
+
+    @WINDOWS_RULES
+    def test_a_neighbouring_parent_or_other_drive_path_is_not_named(self):
+        policy = self.policy("C:\\Users\\me\\repo")
+        for other in ("C:\\Users\\me\\repo-other\\app.py", "C:\\Users\\me", "D:\\Users\\me\\repo\\app.py"):
+            with self.subTest(other=other):
+                self.assertFalse(policy.names_project(other))
+
+    def test_a_path_inside_the_project_is_named_on_this_platform(self):
+        root = os.path.abspath(os.path.join(os.sep, "work", "repo"))
+        policy = self.policy(root)
+        self.assertTrue(policy.names_project(os.path.join(root, "src", "app.py")))
+        self.assertTrue(policy.names_project(root + os.sep))
+        self.assertFalse(policy.names_project(root + "-other"))
+        self.assertFalse(policy.names_project(os.path.dirname(root)))
+
+    @WINDOWS_RULES
+    def test_a_path_inside_a_longer_value_is_named(self):
+        policy = self.policy("C:\\Users\\me\\repo")
+        for value in (
+            "Edited C:\\Users\\me\\repo\\a.py",
+            "Edited C:\\Users\\me\\repo",
+            "opened (C:\\Users\\me\\repo) and saved",
+            "see C:/Users/me/repo/a.py.",
+            "file:///C:/Users/me/repo/a.py",
+            "\\\\?\\C:\\Users\\me\\repo\\a.py",
+        ):
+            with self.subTest(value=value):
+                self.assertTrue(policy.names_project(value))
+
+    @WINDOWS_RULES
+    def test_a_file_url_is_decoded_before_it_is_compared(self):
+        policy = self.policy("C:\\Users\\me\\My Repo")
+        self.assertTrue(policy.names_project("file:///C:/Users/me/My%20Repo/a.py"))
+
+    @WINDOWS_RULES
+    def test_a_longer_value_that_only_looks_alike_is_not_named(self):
+        policy = self.policy("C:\\Users\\me\\repo")
+        for value in (
+            "Edited C:\\Users\\me\\repo-other\\a.py",
+            "Edited C:\\Users\\me\\repo2",
+            "Edited D:\\Users\\me\\repo\\a.py",
+            "Edited C:\\Users\\me",
+            "Edited xC:\\Users\\me\\repo\\a.py",
+        ):
+            with self.subTest(value=value):
+                self.assertFalse(policy.names_project(value))
+
+    def test_a_path_inside_a_longer_value_is_named_on_this_platform(self):
+        policy = self.policy("/work/repo")
+        with mock.patch.object(redaction.os, "path", posixpath):
+            self.assertTrue(policy.names_project("see /work/repo/secret.env"))
+            self.assertTrue(policy.names_project("see /work/repo"))
+            self.assertTrue(policy.names_project("file:///work/repo/a.py"))
+            self.assertFalse(policy.names_project("see /work/repo-other/a.py"))
+            self.assertFalse(policy.names_project("see /home/me/work/repo/a.py"))
+
+    def test_letter_case_is_ignored_on_macos(self):
+        for platform, named in (("darwin", True), ("linux", False)):
+            with self.subTest(platform=platform):
+                policy = self.policy("/Users/me/Repo")
+                with mock.patch.object(redaction.os, "path", posixpath), mock.patch.object(
+                    redaction.sys, "platform", platform
+                ):
+                    self.assertEqual(policy.names_project("/users/ME/repo/a.py"), named)
+
+    def test_a_sibling_whose_name_starts_with_the_project_and_a_dot_is_not_named(self):
+        policy = self.policy("/work/repo")
+        with mock.patch.object(redaction.os, "path", posixpath):
+            for value in ("/work/repo.bak/a.py", "/work/repo.git", "see /work/repo.old/a.py"):
+                with self.subTest(value=value):
+                    self.assertFalse(policy.names_project(value))
+            for value in ("see /work/repo.", "see /work/repo, then", "/work/repo/.git/config"):
+                with self.subTest(value=value):
+                    self.assertTrue(policy.names_project(value))
+
+    def test_a_project_at_the_filesystem_root_names_every_absolute_path(self):
+        policy = self.policy("/")
+        with mock.patch.object(redaction.os, "path", posixpath):
+            for value in ("/etc/passwd", "/", "see /etc/passwd"):
+                with self.subTest(value=value):
+                    self.assertTrue(policy.names_project(value))
+            self.assertFalse(policy.names_project("etc"))
+
+    @WINDOWS_RULES
+    def test_a_project_at_a_drive_root_names_that_drive_only(self):
+        policy = self.policy("C:\\")
+        self.assertTrue(policy.names_project("C:\\Users\\me\\a.py"))
+        self.assertTrue(policy.names_project("C:/Users/me/a.py"))
+        self.assertFalse(policy.names_project("D:\\Users\\me\\a.py"))
+
+    def test_nothing_is_named_when_nothing_is_opted_out_or_the_value_is_empty(self):
+        self.assertFalse(self.policy().names_project("/work/repo/app.py"))
+        self.assertFalse(self.policy("/work/repo").names_project(""))
+        self.assertFalse(self.policy("/work/repo").names_project(None))
 
 
 if __name__ == "__main__":

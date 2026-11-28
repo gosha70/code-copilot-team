@@ -104,9 +104,7 @@ def _names_skipped(policy: OutboundPolicy, value: Any) -> bool:
     session key, its project path, or a path inside that project."""
     if not isinstance(value, str) or not value:
         return False
-    if not policy.keeps_key(value) or not policy.keeps_project(value):
-        return True
-    return any(value.startswith(p.rstrip("/") + "/") for p in policy.excluded_projects)
+    return not policy.keeps_key(value) or policy.names_project(value)
 
 
 def _open_graph(ctx: AskContext):

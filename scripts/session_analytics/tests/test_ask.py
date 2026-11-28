@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import ntpath
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,7 +16,9 @@ from session_analytics.adapters import claude_code
 from session_analytics.ask import loop as L
 from session_analytics.ask import tools as T
 from session_analytics.config import ENV_NOISE_MIN_DURATION, NoiseConfig
+from session_analytics.ingest import redaction
 from session_analytics.ingest.pipeline import ingest
+from session_analytics.ingest.redaction import OutboundPolicy
 from session_analytics.judge.contracts import JudgeTransportError
 from session_analytics.relational.db import Database, apply_ddl
 
@@ -427,3 +430,37 @@ class TestAskGraph(_AskBase):
         self.assertEqual(T.graph_question(unbuilt, {"id": "tools-failing-most", "params": {}})["prerequisite"], "graph")
         as_dir = T.AskContext(db=self.db, kuzu_path=str(Path(empty).parent), noise=None)
         self.assertEqual(T.graph_state(as_dir), T.GRAPH_UNOPENABLE)
+
+
+class TestNamesSkipped(unittest.TestCase):
+    """#548: ``ask`` drops a value that names an opted-out project or a
+    path inside it, whichever way the path is written."""
+
+    def policy(self) -> OutboundPolicy:
+        return OutboundPolicy(
+            skip_keys=frozenset({"claude-code:abc"}),
+            excluded_projects=frozenset({"C:\\Users\\me\\repo"}),
+        )
+
+    @mock.patch.object(redaction.os, "path", ntpath)
+    def test_a_windows_path_inside_an_opted_out_project_is_skipped(self) -> None:
+        policy = self.policy()
+        for value in (
+            "C:\\Users\\me\\repo",
+            "C:\\Users\\me\\repo\\src\\app.py",
+            "C:/Users/me/repo/src/app.py",
+            "c:\\users\\me\\repo\\SRC\\app.py",
+        ):
+            with self.subTest(value=value):
+                self.assertTrue(T._names_skipped(policy, value))
+
+    @mock.patch.object(redaction.os, "path", ntpath)
+    def test_other_values_are_kept(self) -> None:
+        policy = self.policy()
+        for value in ("C:\\Users\\me\\repo-other\\app.py", "C:\\Users\\me", "Read", 42, None, ""):
+            with self.subTest(value=value):
+                self.assertFalse(T._names_skipped(policy, value))
+
+    def test_an_opted_out_session_key_is_skipped(self) -> None:
+        self.assertTrue(T._names_skipped(self.policy(), "claude-code:abc"))
+        self.assertFalse(T._names_skipped(self.policy(), "claude-code:def"))
