@@ -153,6 +153,15 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   tool search when a gateway refuses it (the version #399 relied on). The
   rule table is now version 2, and a `--llm` launch on an older Claude
   Code is refused. Part of #400.
+- **The example LLM catalog reaches vLLM directly.** A vLLM build that
+  serves the Anthropic Messages API needs no gateway in front for Claude
+  Code, so `shared/templates/llm/llms.toml.example` has a `spark-qwen`
+  target whose endpoint is the vLLM server itself, with the
+  `rejects-dynamic-tools` quirk (vLLM 0.28.1rc1 answers 400 to a
+  `tool_reference` block). The target behind a gateway stays, renamed
+  `gateway-qwen`, for a server that speaks only OpenAI's protocols or a
+  vLLM build that fails the DGX Spark cookbook's trailing-system test.
+  `docs/llm-catalog.md` and the cookbook say which to use.
 
 ### Fixed
 

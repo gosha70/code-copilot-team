@@ -89,7 +89,7 @@ An id is letters, digits, `_` and `-`. The grammar is the routing registry's: `k
 | `protocol` | `anthropic-messages`, `openai-chat` or `openai-responses`. Claude Code speaks only `anthropic-messages`; a binding to another one is refused at launch. |
 | `base_url` or `base_url_env` | Exactly one. An absolute `http(s)` URL with no user, query or fragment, or the name of a variable that holds one. |
 | `auth_header` | `bearer` or `x-api-key` for a provider with a credential; `none` for one without. |
-| `quirks` | Optional. `["rejects-dynamic-tools"]` for an endpoint that rejects Claude Code's dynamic tool blocks (DeepSeek answers 422 `unknown variant tool_definition`): tool search, experimental betas and the feedback command are turned off for sessions on it. |
+| `quirks` | Optional. `["rejects-dynamic-tools"]` for an endpoint that rejects Claude Code's dynamic tool blocks (DeepSeek answers 422 `unknown variant tool_definition`; vLLM 0.28.1rc1 answers 400 `Unexpected item type in content.` to a `tool_reference` block): tool search, experimental betas and the feedback command are turned off for sessions on it. |
 
 ### `[llms.<id>]`
 
@@ -234,7 +234,8 @@ One thing in a settings file is said and not refused: `CLAUDE_CODE_MAX_OUTPUT_TO
 - **Anthropic.** A `managed` provider: `kind = "managed"`, `credential_mode = "native"`, an llm whose `model` is an alias or a model id, and a binding with no endpoint.
 - **DeepSeek.** Its Anthropic-compatible endpoint, `auth_header = "bearer"`, and the `rejects-dynamic-tools` quirk.
 - **Ollama.** It serves the Anthropic Messages API itself: `base_url = "http://localhost:11434"`, `credential_mode = "none"`, `auth_header = "none"`.
-- **vLLM, OpenAI and anything else that speaks OpenAI's protocols.** Claude Code needs a gateway in front that translates to Anthropic Messages; the endpoint in the catalog is that gateway. [The DGX Spark cookbook](dgx-spark/setup-cookbook.md) sets one up with the LiteLLM proxy.
+- **vLLM.** A build that serves the Anthropic Messages API (`/v1/messages`) is reached directly: `base_url` is the vLLM server's own origin, `credential_mode = "none"`, `auth_header = "none"`, and the `rejects-dynamic-tools` quirk. Run [the trailing-system test](dgx-spark/setup-cookbook.md#the-test-that-decides-whether-you-can-drop-the-bridge) against your build first: one that fails it answers HTTP 200 with the tool call as text, and belongs behind a gateway.
+- **OpenAI and anything else that speaks only OpenAI's protocols.** Claude Code needs a gateway in front that translates to Anthropic Messages; the endpoint in the catalog is that gateway. [The DGX Spark cookbook](dgx-spark/setup-cookbook.md) sets one up with the LiteLLM proxy.
 
 The example file has a target for each.
 
